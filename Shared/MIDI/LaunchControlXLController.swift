@@ -167,12 +167,6 @@ final class LaunchControlXLController {
         await dispatchPendingActions()
     }
 
-    /// Each valid message goes through the stream as a complete control change; invalid ones are dropped.
-    func receive(_ messages: [MIDIControlChange]) async {
-        enqueue(configuration.mapping.actions(for: stream.feed(messages)))
-        await dispatchPendingActions()
-    }
-
     /// Eligibility is fixed here, at feed time: an action fed in Monitor is never dispatched, even if the mode
     /// changes to Control before the drain reaches it.
     private func enqueue(_ actions: [LaunchControlXLAction]) {

@@ -149,9 +149,9 @@ final class RecordingLaunchControlXLInput: LaunchControlXLInput {
         onSourcesChanged?(names)
     }
 
-    /// One batch with one complete three-byte packet per valid message, as CoreMIDI would deliver them.
-    func send(_ messages: [MIDIControlChange]) {
-        onPackets?(MIDIPacketBatch(packets: messages.compactMap(LaunchControlXLStream.bytes(of:))))
+    /// One batch of raw packets, as CoreMIDI would deliver them.
+    func send(packets: [[UInt8]]) {
+        onPackets?(MIDIPacketBatch(packets: packets))
     }
 }
 

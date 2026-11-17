@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "f696edc6e3a1ef0b02cd27611a0fe1b6c0144d9f475b5c395ca3099e9ec6ffdd",
+    "sha256": "e7a53a839173f66abb98555fe2f40e20f8714f9abb27ec373b72879397c479f9",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -422,7 +422,6 @@
         "FluxKlangTests/UMPStreamMessageTests+Text.swift",
         "FluxKlangTests/MIDIControlChangeDecodeTests.swift",
         "FluxKlangTests/MIDIControlChangeDecodeTests+Fragments.swift",
-        "FluxKlangTests/MIDIControlChangeDecodeTests+Legacy.swift",
         "FluxKlangTests/MIDIControlChangeDecodeTests+RealTime.swift",
         "FluxKlangTests/MIDICIMessageTests.swift",
         "FluxKlangTests/MIDICIMessageTests+Decode.swift",
@@ -545,6 +544,7 @@
         "FluxKlangTests/ProjectLegacyAdoptionTests+Refusals.swift",
         "FluxKlangTests/ProjectMigrationTests.swift",
         "FluxKlangTests/ProjectMigrationTests+Draft.swift",
+        "FluxKlangTests/ProjectMigrationTests+Reader.swift",
         "FluxKlangTests/PeerReconnectTests.swift",
         "FluxKlangTests/PeerReconnectTests+Epochs.swift",
         "FluxKlangTests/ParameterAutomationTests.swift",
