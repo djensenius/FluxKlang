@@ -214,6 +214,21 @@ checks run before path uniqueness, so input that is both oversized and has a
 duplicate path (a repeated extra, or an extra sharing a document's path) may
 report a size error rather than `duplicatePath`; it is refused either way.
 
+## Package inspection
+
+`ProjectPackageInspectionLoader` opens a package read-only: one reader pass
+under its reviewed admission policy (4,096 entries, depth 16, 1,024 path bytes,
+8 MiB per member, 32 MiB total, 1 MiB manifest, 64 KiB chunks), then
+`ProjectPackageDocuments` decoding. `ProjectPackageInspection` keeps those
+documents whole and adds diagnostics: the first 256 non-strict validation
+errors plus a dropped count, graphs that require review, member counts by role,
+the directory count and total bytes. Nothing is written, resolved, migrated,
+confirmed or activated, and no revision advances. Every failure becomes a
+`ProjectPackageInspectionRefusal` case with no payload, so no path, bookmark,
+identity or OS/decoder text escapes. `load(at:)` runs off the caller's actor;
+a started read always finishes, and a task cancelled meanwhile gets
+`.cancelled`, never the payload.
+
 ## Staging on a real disk
 
 `DiskStagingFileSystem` runs staged export, import and recovery on a real
