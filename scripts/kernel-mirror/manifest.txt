@@ -59,6 +59,7 @@ test FluxKlangTests/RealtimeHandoffTests+Scratch.swift
 test FluxKlangTests/RealtimeHandoffTests+ScratchStress.swift
 test FluxKlangTests/RealtimeHandoffTests+Starvation.swift
 test FluxKlangTests/RealtimeHandoffTests+SysEx.swift
+test FluxKlangTests/RealtimeHandoffTests+SysExChains.swift
 test FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
 test FluxKlangTests/RealtimeHandoffTests+Telemetry.swift
 test FluxKlangTests/RealtimeHandoffTests+UMPSysEx.swift

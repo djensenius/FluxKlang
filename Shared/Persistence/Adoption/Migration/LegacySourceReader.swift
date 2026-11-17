@@ -12,6 +12,10 @@ import Foundation
 enum LegacySourceReader {
     /// Reads `directory` through a no-follow `DiskStagingFileSystem` that is closed before returning. A missing
     /// directory makes every source `missing`; one that is a link or not a directory refuses every source.
+    /// Trust boundary: `directory` is the system-supplied app directory. Its own last component is opened
+    /// no-follow and every file beneath it is read relative to that descriptor, but its ancestors resolve
+    /// normally, as for every `ProjectPackageFileSystem` root, because system paths contain links of their
+    /// own (for example `/var` to `/private/var`).
     static func read(directory: URL, limits: ProjectPackageLimits) -> LegacySourceReport {
         var store: DiskStagingFileSystem
         do {
