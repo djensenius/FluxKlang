@@ -143,7 +143,7 @@ actor RoutingAppModelDraftStore: PendingStudioPatchPersisting {
         self.assignsBeforePause = assignsBeforePause
     }
 
-    func load() -> StudioPatchDraft? { draft }
+    func load() -> PendingStudioPatchLoadOutcome { draft.map { .loaded($0) } ?? .absent }
     func pauseNextSave() {
         guard !closed else { return }
         pauseNext = true
@@ -154,13 +154,14 @@ actor RoutingAppModelDraftStore: PendingStudioPatchPersisting {
         gates.removeFirst().resume()
     }
 
-    func save(_ draft: StudioPatchDraft?) async {
+    func save(_ draft: StudioPatchDraft?) async -> PendingStudioPatchMutationOutcome {
         if assignsBeforePause { self.draft = draft }
         if pauseNext && !closed {
             pauseNext = false
             await withCheckedContinuation { gates.append($0) }
         }
         if !assignsBeforePause { self.draft = draft }
+        return draft == nil ? .deleteCompleted : .writeCompleted
     }
 
     func finish() {

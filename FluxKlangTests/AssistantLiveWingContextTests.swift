@@ -267,8 +267,8 @@ struct AssistantLiveWingContextTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("live-draft-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
         let store = PendingStudioPatchStore(fileURL: url)
-        await store.save(draft)
-        #expect(await store.load() == draft)
+        #expect(await store.save(draft) == .writeCompleted)
+        #expect(await store.load() == .loaded(draft))
     }
 
     @Test func excludedAliasIsNotASourceAndHostileLabelRemainsData() {

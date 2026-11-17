@@ -35,7 +35,7 @@ struct AssistantModelGeneratorIsolationTests {
         let fixture = AssistantRoutingFixture()
         let prior = try fixture.prepared()
         let store = RoutingTestDraftStore()
-        await store.save(prior)
+        #expect(await store.save(prior) == .writeCompleted)
         let coordinator = AssistantCoordinator(draftStore: store)
         await coordinator.load()
         #expect(coordinator.pendingStudioDraft == prior)
@@ -58,7 +58,7 @@ struct AssistantModelGeneratorIsolationTests {
             }
             #expect(events == 0)
             #expect(coordinator.pendingStudioDraft == prior)
-            #expect(await store.load() == prior)
+            #expect(await store.load() == .loaded(prior))
             #expect(await store.saves == 1)
             expectAudit(audit, attempts: UInt64(attempt))
         }

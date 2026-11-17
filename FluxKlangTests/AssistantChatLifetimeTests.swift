@@ -96,7 +96,7 @@ struct AssistantChatLifetimeTests {
             )
             try #require(await fixture.draftGate.waitForEntries())
             let draft = try #require(fixture.coordinator.pendingStudioDraft)
-            #expect(await fixture.drafts.load() == nil)
+            #expect(await fixture.drafts.load() == .absent)
             await fixture.history.hold(at: fixture.historyGate) { record in
                 record.conversation?.messages.contains { message in
                     message.cards.contains { card in
@@ -111,7 +111,7 @@ struct AssistantChatLifetimeTests {
 
             await fixture.draftGate.releaseAll()
             try #require(await fixture.historyGate.waitForEntries())
-            #expect(await fixture.drafts.load() == draft)
+            #expect(await fixture.drafts.load() == .loaded(draft))
             #expect(!waiter.finished)
             #expect(fixture.coordinator.pendingStudioDraft == draft)
             #expect(fixture.chat.selectedConversation?.messages.last?.role == .assistant)
@@ -341,13 +341,14 @@ private actor ChatLifetimeDrafts: PendingStudioPatchPersisting {
         self.sourceID = sourceID
     }
 
-    func load() -> StudioPatchDraft? { draft }
+    func load() -> PendingStudioPatchLoadOutcome { draft.map { .loaded($0) } ?? .absent }
 
-    func save(_ draft: StudioPatchDraft?) async {
+    func save(_ draft: StudioPatchDraft?) async -> PendingStudioPatchMutationOutcome {
         if let sourceID, draft?.request.sourceInstrumentIDs.contains(sourceID) == true {
             await gate.enter()
         }
         self.draft = draft
+        return draft == nil ? .deleteCompleted : .writeCompleted
     }
 }
 

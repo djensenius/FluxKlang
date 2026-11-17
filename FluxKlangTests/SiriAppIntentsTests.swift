@@ -96,7 +96,7 @@ struct SiriAppIntentsTests {
             #expect(draft.request.sourceInstrumentIDs == [source.id])
             #expect(draft.request.effectChainIDs == [second.id, first.id])
             #expect(draft.request.destination == .space)
-            #expect(await store.load()?.id == draft.id)
+            #expect(await store.load() == .loaded(draft))
             #expect(spoken.contains("Drafted \(source.name)"))
             #expect(spoken.contains("Review"))
             #expect(model.section == .studio)
@@ -248,6 +248,9 @@ private final class SiriAppModelFixture {
 private actor MemorySiriDraftStore: PendingStudioPatchPersisting {
     private var draft: StudioPatchDraft?
 
-    func load() -> StudioPatchDraft? { draft }
-    func save(_ draft: StudioPatchDraft?) { self.draft = draft }
+    func load() -> PendingStudioPatchLoadOutcome { draft.map { .loaded($0) } ?? .absent }
+    func save(_ draft: StudioPatchDraft?) -> PendingStudioPatchMutationOutcome {
+        self.draft = draft
+        return draft == nil ? .deleteCompleted : .writeCompleted
+    }
 }
