@@ -22,8 +22,22 @@ enum LegacyDraftLaunchState: Sendable, Equatable {
     case draftGone
     /// The original name holds something other than the archived draft and it was never retired.
     case draftChanged
-    /// The retired name holds something other than the archived draft.
+    /// The retired name holds something other than the archived draft. That can be a user draft a retirement moved
+    /// there and could not rename back (`LegacyDraftRollback.originalNameOccupied` or `.restoreFailed`): the archive
+    /// does not hold it and the store does not load it, and it is left in place.
     case retiredNameOccupied
+}
+
+/// Where the file a writer put at the original name before the retirement's rename ended up after the retirement
+/// tried to rename it back. Nothing was deleted or replaced.
+enum LegacyDraftRollback: Sendable, Equatable {
+    /// It is back at the original name, the root was synced and the retired name is free.
+    case restored
+    /// A newer file took the original name first: the moved file stays at the retired name and both are kept.
+    case originalNameOccupied
+    /// The rename back (`.restorePrevious`) or the root sync after it (`.syncParent`) failed: the moved file is at one
+    /// of the two names.
+    case restoreFailed(StagingStep)
 }
 
 /// Why the draft was not retired. Carries no bytes, paths or OS text. Nothing was replaced in any case.
@@ -36,7 +50,13 @@ enum LegacyDraftRetirementRefusal: Error, Sendable, Equatable {
     case receiptMismatch
     /// The archive cannot be read as a package.
     case archiveUnreadable
-    /// A status, read, rename or sync failed, or the retired file did not read back as the draft.
+    /// The caller broke the precondition that draft writers are excluded for the whole call: the retired name read
+    /// back as another file (bytes, identity or volume) than the draft re-read just before the rename, so a writer
+    /// replaced the draft in between and the rename moved the writer's file. The payload says where the rename back
+    /// left it; the rename back is a recovery, not a guarantee. The archived draft's bytes stay in the archive.
+    case draftReplacedDuringRetirement(LegacyDraftRollback)
+    /// A status, read, rename or sync failed, or the retired name did not read back as a usable file. After a failed
+    /// read-back the state is unknown and nothing more was written.
     case staging(StagingRefusal)
 }
 
