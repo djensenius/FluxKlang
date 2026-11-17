@@ -25,8 +25,9 @@ protocol WingTransporting: Sendable {
     func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID,
                         authorization: WingMixerWriteAuthorization) async throws
 
-    /// Host-authority SET (#62 AU3). Spends `authorization` on every call and sends
-    /// only inside its `consume`, after checking the transport generation there.
+    /// Host-authority SET (#62 AU3). Spends `setting.address`'s target of
+    /// `authorization` on every call and sends only inside its `consume`, after
+    /// checking the transport generation there.
     func sendDirect(_ setting: WingSetting, sessionID: UUID,
                     authorization: DirectWriteAuthorization) async throws
 
@@ -46,10 +47,10 @@ extension WingTransporting {
         throw WingTransportError.notStarted
     }
 
-    /// No direct path: spends the grant and refuses without sending.
+    /// No direct path: spends the setting's target and refuses without sending.
     func sendDirect(_ setting: WingSetting, sessionID: UUID,
                     authorization: DirectWriteAuthorization) async throws {
-        try authorization.consume { throw WingTransportError.notStarted }
+        try authorization.consume(DirectSendTarget(setting.address)) { throw WingTransportError.notStarted }
     }
 
     /// Convenience send to the default destination.

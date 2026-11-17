@@ -59,7 +59,7 @@ struct StudioConnectionMigrationTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let cloud = MemoryCloudStore()
         let fileStore = JSONFileStore(directory: directory, cloud: cloud)
-        let fileName = "studio-connections-\(UUID().uuidString).json"
+        let fileName = "studio-connections.json"
         let synth = Equipment(name: "Synth", outputs: ["L", "R"], isStereo: true)
         let persisted = StudioConnectionsStore.Persisted(
             connections: GlobalStudioConnections(home: StudioHomeConnections(inputs: [
