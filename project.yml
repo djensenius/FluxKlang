@@ -804,6 +804,8 @@ targets:
       - path: FluxKlangTests/MIDI1WireTests.swift
       - path: FluxKlangTests/MIDI1WireTests+Refusals.swift
       - path: FluxKlangTests/MIDI1WireTests+RunningStatus.swift
+      - path: FluxKlangTests/MIDI1UMPInputDecoderTests.swift
+      - path: FluxKlangTests/MIDI1UMPInputDecoderTests+SysEx.swift
       - path: FluxKlangTests/PatchVariationTests.swift
       - path: FluxKlangTests/PatchVariationTests+Recall.swift
       - path: FluxKlangTests/PatchVariationTests+Editing.swift
