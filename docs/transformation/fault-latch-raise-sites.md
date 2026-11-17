@@ -72,7 +72,7 @@ each through `faultsRef._withUnsafeGuaranteedRef`, and one doc-comment mention a
 
 | # | Call | Component |
 |---|---|---|
-| S1 | `Shared/Audio/Kernel/Events/SysExAssembler.swift:339` | `SysExAssembler.raise`, reached from `discard` and `extend` |
+| S1 | `Shared/Audio/Kernel/Events/SysExAssembler.swift:339` | `SysExAssembler.raise`, reached from `discard` and `extend`. Since FLP4 it raises through a `FaultChainAuthority` chain token, not `FaultLatch.raise` (section 3.1) |
 | S2 | `Shared/Audio/Kernel/Memory/FanInHandoff.swift:365` | `FanInHandoff.claimProducer` |
 | S3 | `Shared/Audio/Kernel/Memory/DeferredRelease.swift:122` | `DeferredReleaseQueue.retire` |
 | S4 | `Shared/Audio/Kernel/Memory/ReservedCapacityRing.swift:238` | `ReservedCapacityRing.refuse` |
@@ -111,6 +111,21 @@ change that.
 | Can the scope be unprepared | Yes: not checked (`:39` to `:41`). Its raises then add to `unknownScopeFaults` |
 | Verdict | **UNPROVEN** |
 | Evidence a proof needs | The real MIDI receive path that calls `accept` (#81), shown to be one chain or a bounded set; the handoff, if the calling context ever changes; the scope table prepared in the latch the assembler uses |
+
+**Since FLP4** (#190; model in [fault-latch-chain-tokens.md](fault-latch-chain-tokens.md)
+section 7). The citations above are against this document's baseline; after FLP4 the
+only raise is `SysExAssembler.raise` at `SysExAssembler.swift:394`. `SysExAssembler`
+now takes a `FaultChainAuthority` instead of a `FaultLatch` and mints one chain in
+`init`, after every other check (a refusal is `.chainBudgetExhausted`). `accept` takes
+the chain's token after its pure guards, holds it for the whole call and puts it back
+on every path; a failed take (a concurrent `accept`) changes no assembler state, latches
+the authority's scope-less contended fault and returns `.refused(.notOwner)`, counted in
+`contendedChunkCount`. That discharges two rows for the reference model, by
+construction: chains over the latch's lifetime are at most the authority's
+`chainBudget`, and the slot's acquire/release orders one context's completed raises
+before the next context's `accept`. The authority never hands out its latch, so SysEx
+faults no longer share a latch with the kernel cycle. Still **UNPROVEN**: a real caller
+(#81) and whether its scopes are prepared.
 
 ### 3.2 S2: `FanInHandoff.claimProducer` (`FanInHandoff.swift:365`)
 
@@ -333,7 +348,9 @@ section 4):
 
 - [ ] S1: a finite bound on contexts that call `SysExAssembler.accept` over the
   latch's life, and the ordering between one context's completed raise and its
-  next `accept`.
+  next `accept`. FLP4 provides both by construction for the reference model (one
+  chain per assembler on its own `FaultChainAuthority`; section 3.1); open until a
+  real caller exists (#81).
 - [ ] S2: a finite bound on contexts that call `claimProducer`, and ordering
   from a refused claim's raise to that chain's next claim.
 - [ ] S3: the render caller of `DeferredReleaseQueue.retire` (via

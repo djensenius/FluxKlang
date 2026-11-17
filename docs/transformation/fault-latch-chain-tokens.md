@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Issue | #190 (slice FLP3); roadmap #48, parent #64 |
-| Status | Reference model and tests. No call site is migrated. #190 remains open |
+| Status | Reference model and tests. S1 (`SysExAssembler`) migrated in FLP4; S2 to S4 not yet. #190 remains open |
 | Source baseline | main at `66d15f01` |
 | Code | `Shared/Audio/Kernel/Memory/FaultLatch+Chains.swift` |
 | Tests | `FluxKlangTests/RealtimeHandoffTests+FaultChains.swift`, `FluxKlangTests/RealtimeHandoffTests+FaultChainsStress.swift` |
@@ -183,8 +183,9 @@ mint left, or its chain's token was lost) has no counted path and must fall back
 
 ## 6. What this does not prove
 
-- No real caller is migrated or identified. S1 to S4 still call
-  `FaultLatch.raise` directly on latches they are given, outside this model.
+- No real caller is identified. S1 is migrated (FLP4, section 7) but still has
+  no real caller (#81); S2 to S4 still call `FaultLatch.raise` directly on
+  latches they are given, outside this model.
 - `FaultLatch.raise` is still callable on any latch not built by an authority.
   Nothing yet stops new code from doing that; a lint tripwire is a follow-up.
 - Unsafe escapes of a token (`nonisolated(unsafe)`, `@unchecked Sendable`
@@ -216,7 +217,7 @@ token back.
 
 | FLP1 §8 item | This slice | Still needed (UNPROVEN until then) |
 |---|---|---|
-| S1 `SysExAssembler` | Mechanism only | One chain per assembler and receive-block generation; `accept` takes the token for the whole call (it can raise twice in one call); a failed take means a concurrent `accept`, which must also leave assembler state alone |
+| S1 `SysExAssembler` | **Migrated (FLP4)**: `init` takes a `FaultChainAuthority` and mints one chain per assembler, last, after every pure check and the output claim (`.chainBudgetExhausted`); `accept` takes the token after its pure guards, holds it for the whole call (two raises in one call stay on one token) and puts it back on every path; a failed take changes no assembler state, calls `raiseContended()`, counts `contendedChunkCount` and returns `.refused(.notOwner)`. K <= `chainBudget` per authority by construction; per-assembler happens-before edge via the slot. Tests: `RealtimeHandoffTests+SysExChains.swift`, `SysExChainingStress` | Real caller still #81. Successive calling contexts share the assembler's one chain, ordered by its slot, so no per-generation minting is needed. A SysEx authority cannot share the kernel cycle's latch (the authority never hands its latch out), so SysEx faults live on their own authority |
 | S2 `claimProducer` | Mechanism only | One chain per producer context, minted at preparation; a refused claim raises with that context's token |
 | S3 `retire` via `beginCycle` | Mechanism only | One chain per render block and generation; `beginCycle` holds the token for the cycle |
 | S4 `ReservedCapacityRing.refuse` | Mechanism only | One chain per lane, taken by each lane holder, so the slot's edge orders successive holders' raises; whether that can replace the "stop pushing before release" caller contract is for that slice to show |
