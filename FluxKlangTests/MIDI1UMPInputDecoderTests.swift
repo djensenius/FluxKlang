@@ -31,6 +31,12 @@ struct MIDI1UMPInputDecoderTests {
         word(0x1, group: group, status, data1, data2)
     }
 
+    /// Decodes one batch with a fresh decoder (no SysEx open).
+    static func decodeOnce(_ words: [UInt32]) -> MIDI1UMPInputDecoding {
+        var decoder = MIDI1UMPInputDecoder()
+        return decoder.decode(words)
+    }
+
     func events(_ bytes: [UInt8]) throws -> [MIDI1Event] {
         var parser = try #require(MIDI1Parser(maximumSysExPayloadBytes: 64))
         return bytes.compactMap { parser.consume($0) }
@@ -51,7 +57,7 @@ struct MIDI1UMPInputDecoderTests {
                 let status = family | channel
                 let word = Self.channelWord(status, data.first ?? 0, data.dropFirst().first ?? 0)
                 let expected = [status] + data
-                let decoded = MIDI1UMPInputDecoder.decode([word])
+                let decoded = Self.decodeOnce([word])
                 #expect(decoded.bytes == expected, "\(String(word, radix: 16))")
                 #expect(decoded.skipped.isEmpty)
             }
@@ -59,7 +65,7 @@ struct MIDI1UMPInputDecoderTests {
     }
 
     @Test func twoByteMessagesEmitNoThirdByte() throws {
-        let decoded = MIDI1UMPInputDecoder.decode([Self.channelWord(0xC3, 0x10), Self.channelWord(0xDA, 0x7F)])
+        let decoded = Self.decodeOnce([Self.channelWord(0xC3, 0x10), Self.channelWord(0xDA, 0x7F)])
         try #require(decoded.bytes.count == 4)
         #expect(decoded.bytes == [0xC3, 0x10, 0xDA, 0x7F])
     }
@@ -74,7 +80,7 @@ struct MIDI1UMPInputDecoderTests {
             (Self.systemWord(0xF3, 0x07), [0xF3, 0x07]), (Self.systemWord(0xF6), [0xF6])
         ]
         for (word, expected) in cases {
-            let decoded = MIDI1UMPInputDecoder.decode([word])
+            let decoded = Self.decodeOnce([word])
             #expect(decoded.bytes == expected, "\(String(word, radix: 16))")
             #expect(decoded.skipped.isEmpty)
         }
@@ -85,7 +91,7 @@ struct MIDI1UMPInputDecoderTests {
             Self.channelWord(0x91, 0x3C, 0x64), Self.systemWord(0xF8), 0x3002_7E01, 0x0000_0000,
             Self.channelWord(0xB2, 0x07, 0x50), Self.channelWord(0x81, 0x3C, 0x00)
         ]
-        let decoded = MIDI1UMPInputDecoder.decode(words)
+        let decoded = Self.decodeOnce(words)
         #expect(decoded.bytes == [0x91, 0x3C, 0x64, 0xF8, 0xF0, 0x7E, 0x01, 0xF7, 0xB2, 0x07, 0x50, 0x81, 0x3C, 0x00])
         #expect(decoded.skipped.isEmpty)
     }
@@ -95,7 +101,7 @@ struct MIDI1UMPInputDecoderTests {
             Self.channelWord(group: 0, 0x90, 0x3C, 0x64), Self.channelWord(group: 3, 0x91, 0x3D, 0x65),
             Self.systemWord(group: 7, 0xF8), Self.channelWord(group: 15, 0xC2, 0x09), 0x3A01_2200, 0x0000_0000
         ]
-        let decoded = MIDI1UMPInputDecoder.decode(words)
+        let decoded = Self.decodeOnce(words)
         #expect(decoded.bytes == [0x90, 0x3C, 0x64, 0x91, 0x3D, 0x65, 0xF8, 0xC2, 0x09, 0xF0, 0x22, 0xF7])
         #expect(decoded.skipped.isEmpty)
     }
@@ -108,7 +114,7 @@ struct MIDI1UMPInputDecoderTests {
             Self.channelWord(0x90, 0x3C, 0x64), 0x4091_3C00, 0xFFFF_0000, Self.systemWord(0xFA),
             0x40B2_0700, 0x8000_0000, Self.channelWord(0x80, 0x3C, 0x00)
         ]
-        let decoded = MIDI1UMPInputDecoder.decode(words)
+        let decoded = Self.decodeOnce(words)
         #expect(decoded.bytes == [0x90, 0x3C, 0x64, 0xFA, 0x80, 0x3C, 0x00])
         #expect(decoded.skipped == [.protocolMismatch(.midi2ChannelVoice), .protocolMismatch(.midi2ChannelVoice)])
     }
@@ -122,7 +128,7 @@ struct MIDI1UMPInputDecoderTests {
             0x6000_0000,             // MT 0x6 reserved
             Self.channelWord(0xB0, 0x40, 0x7F)
         ]
-        let decoded = MIDI1UMPInputDecoder.decode(words)
+        let decoded = Self.decodeOnce(words)
         #expect(decoded.bytes == [0xB0, 0x40, 0x7F])
         #expect(decoded.skipped == [
             .notMIDI1(.utility), .notMIDI1(.data128), .notMIDI1(.flexData), .notMIDI1(.stream), .notMIDI1(.reserved6)
@@ -130,21 +136,21 @@ struct MIDI1UMPInputDecoderTests {
     }
 
     @Test func truncatedBatchGivesNoBytes() {
-        let lone64 = MIDI1UMPInputDecoder.decode([Self.channelWord(0x90, 0x3C, 0x64), 0x3001_7E00])
+        let lone64 = Self.decodeOnce([Self.channelWord(0x90, 0x3C, 0x64), 0x3001_7E00])
         #expect(lone64.bytes.isEmpty)
         #expect(lone64.skipped == [.malformed(.truncated(mt: .data64, have: 1, need: 2))])
 
-        let lone128 = MIDI1UMPInputDecoder.decode([Self.systemWord(0xF8), 0x5000_0000, 0, 0])
+        let lone128 = Self.decodeOnce([Self.systemWord(0xF8), 0x5000_0000, 0, 0])
         #expect(lone128.bytes.isEmpty)
         #expect(lone128.skipped == [.malformed(.truncated(mt: .data128, have: 3, need: 4))])
     }
 
     @Test func batchAboveTheSplitterBoundIsRefusedWhole() {
-        let atBound = MIDI1UMPInputDecoder.decode(Array(repeating: Self.systemWord(0xF8), count: 4096))
+        let atBound = Self.decodeOnce(Array(repeating: Self.systemWord(0xF8), count: 4096))
         #expect(atBound.bytes == Array(repeating: 0xF8, count: 4096))
         #expect(atBound.skipped.isEmpty)
 
-        let aboveBound = MIDI1UMPInputDecoder.decode(Array(repeating: Self.systemWord(0xF8), count: 4097))
+        let aboveBound = Self.decodeOnce(Array(repeating: Self.systemWord(0xF8), count: 4097))
         #expect(aboveBound.bytes.isEmpty)
         #expect(aboveBound.skipped == [.malformed(.batchTooLarge(count: 4097, limit: 4096))])
     }
@@ -157,7 +163,7 @@ struct MIDI1UMPInputDecoderTests {
             Self.channelWord(0xC0, 0x05, 0x01),   // Program Change with a non-zero unused byte
             Self.channelWord(0x80, 0x3C, 0x00)
         ]
-        let decoded = MIDI1UMPInputDecoder.decode(words)
+        let decoded = Self.decodeOnce(words)
         #expect(decoded.bytes == [0x90, 0x3C, 0x64, 0x80, 0x3C, 0x00])
         try #require(decoded.skipped.count == 3)
         #expect(decoded.skipped == [
@@ -168,7 +174,7 @@ struct MIDI1UMPInputDecoderTests {
     }
 
     @Test func emptyBatchGivesNothing() {
-        #expect(MIDI1UMPInputDecoder.decode([]) == MIDI1UMPInputDecoding(bytes: [], skipped: []))
+        #expect(Self.decodeOnce([]) == MIDI1UMPInputDecoding(bytes: [], skipped: []))
     }
 
     // MARK: Differential
@@ -187,7 +193,7 @@ struct MIDI1UMPInputDecoderTests {
             words.append(Self.word(type, group: 0, status, data.first ?? 0, data.dropFirst().first ?? 0))
         }
         let original = messages.flatMap { $0 }
-        let decoded = MIDI1UMPInputDecoder.decode(words)
+        let decoded = Self.decodeOnce(words)
         #expect(decoded.skipped.isEmpty)
         let expected = try events(original)
         try #require(expected.count == messages.count)
