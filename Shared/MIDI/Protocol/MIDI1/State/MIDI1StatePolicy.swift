@@ -17,7 +17,7 @@ enum MIDI1ControllerPairing: Equatable, Hashable, Sendable {
     case unpaired
 }
 
-/// Receiver profile for one logical MIDI 1 stream. Selection of a profile per sender is #81's concern.
+/// Receiver profile for one logical MIDI 1 stream. Each sender selects its policy through `MIDISourceProfile`.
 struct MIDI1StatePolicy: Equatable, Hashable, Sendable {
     static let heldNoteBounds = 1...MIDI1HeldNotes.capacity
     static let parameterValueBounds = 1...32_768
