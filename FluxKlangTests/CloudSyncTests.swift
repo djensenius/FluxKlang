@@ -455,4 +455,30 @@ extension CloudSyncTests {
         await reloadedOwner.awaitScheduledSavesSnapshot()
         #expect(reloadedOwner.array == expected)
     }
+
+    /// The migration reader reads the local file only: a different synced value is neither read nor seeded.
+    @Test func migrationReaderNeverTouchesCloud() throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent("legacy-reader-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let local = Data(#"{"connections":{},"initialized":true}"#.utf8)
+        let synced = Data(#"{"connections":{"home":null},"initialized":false}"#.utf8)
+        let cloud = MemoryCloudStore()
+        cloud.setData(synced, forKey: "store.studio-connections_json")
+        let (reads, writes) = (cloud.readCount, cloud.writeCount)
+        try local.write(to: directory.appendingPathComponent("studio-connections.json"))
+
+        let report = LegacySourceReader.read(directory: directory, limits: try ProjectMigrationTests.Fixture.limits())
+        guard case .adopted(let part) = report.homeWiring else { Issue.record("not adopted"); return }
+        #expect(Array(part.original) == Array(local))
+        #expect(cloud.readCount == reads && cloud.writeCount == writes && cloud.synchronizeCount == 0)
+        #expect(cloud.data(forKey: "store.studio-connections_json") == synced)
+
+        let sources = ProjectMigrationTests.Legacy.readerSources()
+        #expect(sources.count == 2)
+        let banned = ["JSONFileStore", "CloudKeyValueStore", "CloudStore", "Ubiquitous", "AppPersistence", "contentsOf"]
+        for text in sources {
+            for word in banned { #expect(!text.contains(word), "\(word)") }
+        }
+    }
 }
