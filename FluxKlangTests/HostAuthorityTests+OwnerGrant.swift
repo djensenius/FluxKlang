@@ -157,5 +157,118 @@ extension HostAuthorityTests {
             let revoked = await minter.grant(for: .remaining, targets: WingApplyBench.targets(settings))
             #expect(Owner.refusal(revoked) == .gate(.refused(.rejected(.permissionDenied))))
         }
+
+        @Test func revokeWaitsForADelayedGrantPublication() async throws {
+            let pause = OwnerPublicationPause()
+            let owner = try HostAuthorityOwner(host: Owner.host, publicationCheckpoint: { await pause.visit($0) })
+            await owner.connected(session: UUID())
+            _ = try await owner.beginApply(window: Owner.windowOne).get()
+            let expected = HostAuthorityOwner.fingerprint(.host, revision: 1)
+            let cached = try #require(HostAuthorityOwner.admission(epoch: owner.hostEpoch, permission: expected))
+            let settings = try WingApplyBench.settings(3)
+            let targets = WingApplyBench.targets(settings)
+            let cachedMinter = WingApplyGrantMinter(
+                authority: owner.authority, project: owner.studio, window: Owner.windowOne,
+                budget: WingApplyTicketBudget(limit: 2), provider: { cached }
+            )
+            let freshMinter = WingApplyGrantMinter(
+                authority: owner.authority, project: owner.studio, window: Owner.windowOne,
+                budget: WingApplyTicketBudget(limit: 1), provider: owner.provider
+            )
+            // From here until both tasks are joined, assertions cannot throw.
+            let grant = Task {
+                let result = await owner.grant(.host)
+                await pause.grantFinished()
+                return result
+            }
+            guard await pause.next(waitingFor: "grant capture or completion") == .captured else {
+                Issue.record("Grant completed before its captured-publication checkpoint")
+                await pause.releaseAll()
+                _ = await grant.value
+                return
+            }
+            #expect(await owner.admission()?.intent.permission == cached.intent.permission)
+            let revoke = Task {
+                await owner.revoke()
+                await pause.revokeFinished()
+            }
+            let progress = await pause.next(waitingFor: "revoke to join or complete")
+            #expect(progress == .joining, "Revoke must join, not overtake, the delayed publisher")
+            await pause.resume()
+            let published = await pause.next(waitingFor: "grant publication or completion")
+            #expect(published == .published, "Grant returned before its publication was observed")
+            #expect(await pause.revoked == false)
+            if await pause.revoked {
+                // A competing publisher makes this the stale-grant window AFTER revoke returned.
+                let refusal = Owner.refusal(await cachedMinter.grant(for: .remaining, targets: targets))
+                #expect(refusal == .staleLive, "A cached admission must stay denied after revoke returns")
+            }
+            await pause.releaseAll()
+            _ = await grant.value
+            await revoke.value
+            #expect(await owner.permission == nil)
+            #expect(await owner.authority.snapshot().live.permission == nil)
+            #expect(Owner.refusal(await cachedMinter.grant(for: .remaining, targets: targets)) == .staleLive)
+            #expect(Owner.refusal(await freshMinter.grant(for: .remaining, targets: targets))
+                    == .gate(.refused(.rejected(.permissionDenied))))
+        }
+    }
+}
+
+/// Completion events prevent missing checkpoints from leaving a test waiting on a finished operation.
+private actor OwnerPublicationPause {
+    enum Event { case captured, published, joining, grantFinished, revokeFinished }
+    private let events = AsyncStream<Event>.makeStream()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+    private(set) var revoked = false
+
+    func visit(_ point: HostAuthorityOwner.PublicationCheckpoint) async {
+        guard !released else { return }
+        switch point {
+        case .captured(.some): await suspend(at: .captured)
+        case .published(.some): await suspend(at: .published)
+        case .joining: events.continuation.yield(.joining)
+        default: break
+        }
+    }
+
+    private func suspend(at event: Event) async {
+        await withCheckedContinuation {
+            continuation = $0
+            events.continuation.yield(event)
+        }
+    }
+
+    func next(waitingFor description: String) async -> Event? {
+        // Failure cleanup only: cancellation alone cannot resume the publication continuation.
+        let watchdog = Task {
+            do { try await Task.sleep(for: .seconds(10)) } catch { return }
+            Issue.record("Timed out waiting for \(description); releasing publication pause")
+            releaseAll()
+            events.continuation.finish()
+        }
+        var iterator = events.stream.makeAsyncIterator()
+        let event = await iterator.next()
+        watchdog.cancel()
+        await watchdog.value
+        return event
+    }
+
+    func grantFinished() { events.continuation.yield(.grantFinished) }
+
+    func revokeFinished() {
+        revoked = true
+        events.continuation.yield(.revokeFinished)
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func releaseAll() {
+        released = true
+        resume()
     }
 }

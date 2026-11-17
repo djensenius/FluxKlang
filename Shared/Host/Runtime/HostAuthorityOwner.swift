@@ -59,6 +59,12 @@ actor HostAuthorityOwner {
     private let checkpoint: (@Sendable (Checkpoint) async -> Void)?
     private let sessionInvalidated: (@Sendable () -> Void)?
     private let lifecycleQueued: (@Sendable () -> Void)?
+    private var publication: Task<Void, Never>?
+    /// Init-only test observation of the single publisher and its joining callers.
+    enum PublicationCheckpoint: Sendable {
+        case captured(PermissionFingerprint?), published(PermissionFingerprint?), joining
+    }
+    private let publicationCheckpoint: (@Sendable (PublicationCheckpoint) async -> Void)?
 
     /// `resumingGrantsAfter` is for tests only (exercising exhaustion), like
     /// `EngineLeaseRegistry(resumingAfter:)`; production starts at 0.
@@ -66,13 +72,15 @@ actor HostAuthorityOwner {
          resumingGrantsAfter lastGrant: UInt64 = 0,
          checkpoint: (@Sendable (Checkpoint) async -> Void)? = nil,
          sessionInvalidated: (@Sendable () -> Void)? = nil,
-         lifecycleQueued: (@Sendable () -> Void)? = nil) throws {
+         lifecycleQueued: (@Sendable () -> Void)? = nil,
+         publicationCheckpoint: (@Sendable (PublicationCheckpoint) async -> Void)? = nil) throws {
         hostEpoch = HostEpoch(host: host, generation: .initial)
         self.studio = studio
         grantRevision = lastGrant
         self.checkpoint = checkpoint
         self.sessionInvalidated = sessionInvalidated
         self.lifecycleQueued = lifecycleQueued
+        self.publicationCheckpoint = publicationCheckpoint
         capabilities = try DeviceCapabilityDocument(revision: .initial, host: host, hostEpoch: .initial,
                                                     devices: [], routes: [])
         let ledger = try GenerationLedger(primaryClock: Self.primaryClock, musicalClock: nil,
@@ -220,13 +228,28 @@ actor HostAuthorityOwner {
         await publishLive()
     }
 
-    /// Resends until no grant or revoke raced the update.
+    /// All callers await one publisher; no older update can remain after it completes.
     private func publishLive() async {
+        if let publication {
+            await publicationCheckpoint?(.joining)
+            await publication.value
+            return
+        }
+        let publication = Task { await flushLive() }
+        self.publication = publication
+        await publication.value
+    }
+
+    private func flushLive() async {
         var sent: PermissionFingerprint?
         repeat {
             sent = permission
+            await publicationCheckpoint?(.captured(sent))
             await authority.updateLive(HostLiveState(hostEpoch: hostEpoch, permission: sent,
                                                      capabilities: capabilities))
+            await publicationCheckpoint?(.published(sent))
         } while sent != permission
+        // Only the publisher clears its slot, in the same turn as the final comparison.
+        publication = nil
     }
 }
