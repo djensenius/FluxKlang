@@ -23,6 +23,17 @@ private final class SysExStressState: Sendable {
     let misordered = Atomic<UInt64>(0)
 }
 
+/// Shared state for the two-producer chain-token stress (#190 FLP4).
+private final class SysExChainStressState: Sendable {
+    let arrived = Atomic<Int>(0)
+    let started = Atomic<Bool>(false)
+    let exited = Atomic<Int>(0)
+    let delivered = Atomic<UInt64>(0)
+    let full = Atomic<UInt64>(0)
+    let contended = Atomic<UInt64>(0)
+    let unexpected = Atomic<UInt64>(0)
+}
+
 extension RealtimeHandoffTests {
     /// Producer and consumer on dedicated `Thread`s; run under TSan with `--filter Stress`.
     struct SysExStress {
@@ -135,6 +146,65 @@ extension RealtimeHandoffTests {
             #expect(fixture.assembler.emittedCount == Self.messages)
             #expect(fixture.assembler.discardedCount == refusals)
             #expect(fixture.assembler.receive { _, _ in } == .empty)
+        }
+    }
+
+    /// T8 (#190 FLP4). Two `Thread`s call `accept` on one assembler at once, outside its one-context contract:
+    /// every call is either processed in full while holding the chain token or refused once as contended, so the
+    /// assembler's plain state is never touched concurrently (TSan, `--filter Stress`) and the counts add up.
+    /// Kills: removing the take and put.
+    struct SysExChainingStress {
+        static let callsPerThread = 20_000
+
+        @Test(.timeLimit(.minutes(1)))
+        func concurrentAcceptsAreProcessedOrRefusedAsContended() throws {
+            let fixture = try SysExFixture(sources: 2, maximum: 6, pool: 128, ringCapacity: 64)
+            let state = SysExChainStressState()
+            for source: UInt32 in 0..<2 {
+                Thread {
+                    state.arrived.add(1, ordering: .releasing)
+                    let deadline = ContinuousClock.now + .seconds(25)
+                    while !state.started.load(ordering: .acquiring), ContinuousClock.now < deadline {}
+                    for call in 0..<Self.callsPerThread {
+                        let result = fixture.assembler.accept(source: source, status: .complete,
+                                                              bytes: (1, 2, 3, 4, 5, 6), count: UInt8(call % 7))
+                        switch result {
+                        case .ok: state.delivered.add(1, ordering: .relaxed)
+                        case .refused(.full): state.full.add(1, ordering: .relaxed)
+                        case .refused(.notOwner): state.contended.add(1, ordering: .relaxed)
+                        default: state.unexpected.add(1, ordering: .relaxed)
+                        }
+                    }
+                    state.exited.add(1, ordering: .releasing)
+                }.start()
+            }
+            let arrivalDeadline = ContinuousClock.now + .seconds(25)
+            while state.arrived.load(ordering: .acquiring) < 2, ContinuousClock.now < arrivalDeadline {
+                Thread.sleep(forTimeInterval: 0.001)
+            }
+            state.started.store(true, ordering: .releasing)
+            let exitDeadline = ContinuousClock.now + .seconds(50)
+            while state.exited.load(ordering: .acquiring) < 2, ContinuousClock.now < exitDeadline {
+                Thread.sleep(forTimeInterval: 0.001)
+            }
+            guard state.exited.load(ordering: .acquiring) == 2 else {
+                Issue.record("stress workers did not exit; post-run checks skipped")
+                return
+            }
+            let delivered = state.delivered.load(ordering: .relaxed)
+            let full = state.full.load(ordering: .relaxed)
+            let contended = state.contended.load(ordering: .relaxed)
+            print("SysExChainingStress contended chunks: \(contended)")
+            #expect(state.unexpected.load(ordering: .relaxed) == 0)
+            #expect(delivered + full + contended == UInt64(2 * Self.callsPerThread))
+            #expect(fixture.assembler.emittedCount == delivered && fixture.assembler.discardedCount == full)
+            #expect(fixture.assembler.contendedChunkCount == contended)
+            #expect(fixture.faults.hasContendedFault == (contended > 0))
+            // Each full refusal is one counted overflow raise on its source's scope.
+            let records = fixture.takeFaults()
+            #expect(records.allSatisfy { $0.kind == .sysexOverflow })
+            #expect(records.reduce(0) { $0 + $1.count } == full && fixture.faults.unknownScopeFaults == 0)
+            #expect(fixture.assembler.withChainTokenHeld {})
         }
     }
 }

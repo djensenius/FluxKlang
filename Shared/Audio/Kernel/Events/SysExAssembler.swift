@@ -27,8 +27,10 @@ struct SysExMessageRef: Sendable, BitwiseCopyable, Equatable {
 ///
 /// Contexts. `accept` is the producer side and must be called from exactly one context at a time (the MIDI receive
 /// path; #81 must verify or serialise it, which is why the output ring's policy must declare one producer).
-/// `withMessage`, `release` and `receive` are the consumer side and must be called only from the output ring's
-/// single consumer. The counters are readable from any context.
+/// `accept` holds this assembler's fault-chain token for the whole call, so a concurrent `accept` does not race:
+/// it finds the token taken, changes no state, latches the authority's contended fault and returns
+/// `.refused(.notOwner)` (counted in `contendedChunkCount`). `withMessage`, `release` and `receive` are the consumer
+/// side and must be called only from the output ring's single consumer. The counters are readable from any context.
 ///
 /// Exclusive production. `output` must be fresh (never pushed, so empty) and this assembler must be its only
 /// producer for its whole life. `init` claims the ring's producer endpoint, but that only excludes other
@@ -38,7 +40,10 @@ struct SysExMessageRef: Sendable, BitwiseCopyable, Equatable {
 ///
 /// Per source, a chunk moves a small state machine; the fault scope is `(handoff: scopeBase, target: source)`,
 /// and the caller must prepare those scopes in `faults` (an unprepared scope is still counted by
-/// `FaultLatch.unknownScopeFaults`).
+/// `FaultChainAuthority.unknownScopeFaults`). Every fault is raised through the one chain `init` mints from
+/// `faults`, never through `FaultLatch.raise` directly; observers read the authority's `isLatched` (which includes
+/// the contended fault) and `hasContendedFault`. The authority never hands out its latch, so these faults
+/// cannot share a latch with the kernel cycle's: give the assembler its own authority (#190 FLP4).
 ///
 /// | Chunk | idle | open | discarding (after an overflow) |
 /// |---|---|---|---|
@@ -54,20 +59,21 @@ struct SysExMessageRef: Sendable, BitwiseCopyable, Equatable {
 ///   the ring is full, the message is discarded, `.sysexOverflow` is raised and `.refused(.full)` returned; the
 ///   pool cursor does not move, so a refused message takes no space.
 /// - `count > 6` returns `.refused(.invalidLength)` and an unknown source `.refused(.slotOutOfRange)`; neither
-///   changes any state or raises a fault.
+///   changes any state or raises a fault. Both are checked before the token is taken, so neither contends.
 ///
 /// Every discarded message is counted in `discardedCount`. See `SysExPool` for the byte-ring ordering protocol.
 ///
 /// Progress: `accept` is wait-free (no loops beyond a copy of at most `maximumMessageBytes`); it never blocks,
-/// retries or allocates. The consumer methods are wait-free too.
+/// retries or allocates. Taking the token is one exchange, putting it back one store; a failed take is not
+/// retried. The consumer methods are wait-free too.
 ///
-/// Producer borrows. `accept` reaches the pool, the fault latch and the output ring only through immutable
-/// `Unmanaged` aliases made in `init`, each used inside a synchronous `_withUnsafeGuaranteedRef` that never
-/// escapes, so it adds no retain or release even unoptimised. `pool`, `faults`, `output` and the claimed producer
-/// endpoint stay the strong owners; the borrows rely only on the caller keeping the assembler alive across each
-/// call and tearing it down from a quiescent control context. The push calls `SPSCRing.tryPush` on `output`
-/// directly (which SPSCRing permits for composed handoffs) instead of the endpoint's forwarder, whose stored
-/// strong `ring` would be retained; the endpoint is still claimed and held, so "Exclusive production" is
+/// Producer borrows. `accept` reaches the pool, the fault authority, the fault chain and the output ring only
+/// through immutable `Unmanaged` aliases made in `init`, each used inside a synchronous `_withUnsafeGuaranteedRef`
+/// that never escapes, so it adds no retain or release even unoptimised. `pool`, `authority`, `chain`, `output` and
+/// the claimed producer endpoint stay the strong owners; the borrows rely only on the caller keeping the assembler
+/// alive across each call and tearing it down from a quiescent control context. The push calls `SPSCRing.tryPush`
+/// on `output` directly (which SPSCRing permits for composed handoffs) instead of the endpoint's forwarder, whose
+/// stored strong `ring` would be retained; the endpoint is still claimed and held, so "Exclusive production" is
 /// unchanged. The consumer methods still use the strong owners.
 ///
 /// `@unchecked Sendable`: staging and per-source state are producer-only, and the pool is split as documented.
@@ -84,6 +90,10 @@ final class SysExAssembler: @unchecked Sendable {
         case maximumMessageBytesOutOfRange(Int)
         /// `poolBytes` is not a power of two in `2...maximumPoolBytes`.
         case poolBytesOutOfRange(Int)
+        /// `faults` has minted its whole chain budget. Checked last, after the output's producer endpoint is
+        /// claimed, so no other refusal consumes a budget unit; this one leaves `output` claimed (it had to be
+        /// fresh and exclusive anyway).
+        case chainBudgetExhausted
     }
 
     private enum Assembly: UInt8 {
@@ -107,11 +117,14 @@ final class SysExAssembler: @unchecked Sendable {
     /// The claimed producer endpoint, held for life so no other `makeProducer()` claim succeeds; pushes go through
     /// `outputRef` (see "Producer borrows").
     private let producer: SPSCRing<SysExMessageRef>.Producer
-    private let faults: FaultLatch
+    private let authority: FaultChainAuthority
+    /// This assembler's only fault chain, minted in `init`; `accept` holds its token for the whole call.
+    private let chain: FaultChain
     private let pool: SysExPool
-    /// Producer borrows of `output`, `faults` and `pool`; never retained or released.
+    /// Producer borrows of `output`, `authority`, `chain` and `pool`; never retained or released.
     private let outputRef: Unmanaged<SPSCRing<SysExMessageRef>>
-    private let faultsRef: Unmanaged<FaultLatch>
+    private let authorityRef: Unmanaged<FaultChainAuthority>
+    private let chainRef: Unmanaged<FaultChain>
     private let poolRef: Unmanaged<SysExPool>
     /// `sources × maximumMessageBytes`; source `s` stages at `s * maximumMessageBytes`.
     private let staging: UnsafeMutablePointer<UInt8>
@@ -128,12 +141,13 @@ final class SysExAssembler: @unchecked Sendable {
     private var inBody = false
     private let emitted = Atomic<UInt64>(0)
     private let discarded = Atomic<UInt64>(0)
+    private let contended = Atomic<UInt64>(0)
 
-    /// Control-side preparation; allocates all staging and pool storage. `output` must be fresh and exclusively
-    /// this assembler's (see "Exclusive production"). `startingCursor` is a test seam that starts the pool cursors
-    /// and the message `sequence` near the `UInt64` wrap.
+    /// Control-side preparation; allocates all staging and pool storage and mints one chain from `faults`.
+    /// `output` must be fresh and exclusively this assembler's (see "Exclusive production"). `startingCursor` is a
+    /// test seam that starts the pool cursors and the message `sequence` near the `UInt64` wrap.
     init(sources: Int = defaultSources, maximumMessageBytes: Int = defaultMaximumMessageBytes,
-         poolBytes: Int = defaultPoolBytes, output: SPSCRing<SysExMessageRef>, faults: FaultLatch,
+         poolBytes: Int = defaultPoolBytes, output: SPSCRing<SysExMessageRef>, faults: FaultChainAuthority,
          scopeBase: UInt16, startingCursor: UInt64 = 0) throws(PreparationError) {
         guard output.policy.purpose == .sysex else { throw .policy(.violates(.r8SysExSeparate)) }
         guard sources >= 1, sources <= Self.maximumSources else { throw .sourcesOutOfRange(sources) }
@@ -144,16 +158,19 @@ final class SysExAssembler: @unchecked Sendable {
             throw .maximumMessageBytesOutOfRange(maximumMessageBytes)
         }
         guard let producer = output.makeProducer() else { throw .outputAlreadyClaimed }
+        guard let chain = faults.mintChain() else { throw .chainBudgetExhausted }
         self.producer = producer
         self.sources = sources
         self.maximumMessageBytes = maximumMessageBytes
         self.scopeBase = scopeBase
         self.output = output
-        self.faults = faults
+        authority = faults
+        self.chain = chain
         let pool = SysExPool(capacity: poolBytes, startingCursor: startingCursor)
         self.pool = pool
         outputRef = .passUnretained(output)
-        faultsRef = .passUnretained(faults)
+        authorityRef = .passUnretained(faults)
+        chainRef = .passUnretained(chain)
         poolRef = .passUnretained(pool)
         nextDelivery = startingCursor
         nextAcknowledgement = startingCursor
@@ -172,18 +189,33 @@ final class SysExAssembler: @unchecked Sendable {
     }
 
     /// Producer only. Accepts one UMP SysEx7 chunk of `count` data bytes; see the type's state table. `frame`
-    /// stamps any fault raised.
+    /// stamps any fault raised. Holds the chain token from after the pure guards until return; a failed take (a
+    /// concurrent `accept`) changes no assembler state and returns `.refused(.notOwner)`.
     func accept(source: UInt32, status: SysExChunkStatus, bytes: SysExChunkBytes, count: UInt8,
                 frame: Int64 = 0) -> KernelStatus {
         guard Int(count) <= Self.maximumChunkBytes else { return .refused(.invalidLength) }
         guard source < UInt32(truncatingIfNeeded: sources) else { return .refused(.slotOutOfRange) }
-        let index = Int(source)
-        switch status {
-        case .complete: return begin(index, bytes, count, frame, single: true)
-        case .start: return begin(index, bytes, count, frame, single: false)
-        case .continue: return extend(index, bytes, count, frame, final: false)
-        case .end: return extend(index, bytes, count, frame, final: true)
+        // `_withUnsafeGuaranteedRef` cannot return a noncopyable value or consume a captured one, so the token
+        // crosses the borrow through this optional.
+        var held: FaultChainToken?
+        chainRef._withUnsafeGuaranteedRef { held = $0.take() }
+        guard var token = held.take() else {
+            authorityRef._withUnsafeGuaranteedRef { $0.raiseContended() }
+            contended.wrappingAdd(1, ordering: .relaxed)
+            return .refused(.notOwner)
         }
+        let index = Int(source)
+        let result: KernelStatus = switch status {
+        case .complete: begin(index, bytes, count, frame, single: true, &token)
+        case .start: begin(index, bytes, count, frame, single: false, &token)
+        case .continue: extend(index, bytes, count, frame, final: false, &token)
+        case .end: extend(index, bytes, count, frame, final: true, &token)
+        }
+        held = consume token
+        chainRef._withUnsafeGuaranteedRef { chain in
+            if let token = held.take() { _ = chain.put(token) }
+        }
+        return result
     }
 
     /// Consumer only. Calls `body` with the bytes of `ref` when it is the oldest unacknowledged message, without
@@ -238,6 +270,20 @@ final class SysExAssembler: @unchecked Sendable {
     /// Messages discarded by overflow, abort, pool exhaustion or a full output ring; wraps only after 2^64.
     var discardedCount: UInt64 { discarded.load(ordering: .relaxed) }
 
+    /// Chunks refused because another context held the chain token (each also latched the contended fault);
+    /// wraps only after 2^64.
+    var contendedChunkCount: UInt64 { contended.load(ordering: .relaxed) }
+
+    /// Test seam, never on a producer path: runs `body` while holding this assembler's chain token, as a
+    /// concurrent `accept` would, then puts it back. `false` without calling `body` when the token is not in its
+    /// slot (held by an `accept` in progress, or lost). Never call it while a producer may run: every chunk in
+    /// that window is refused as contended and latches the contended fault.
+    func withChainTokenHeld(_ body: () -> Void) -> Bool {
+        guard let token = chain.take() else { return false }
+        body()
+        return chain.put(token) == .ok
+    }
+
     /// Consumer. `sequence` fixes which message is next; the offset check then pins it to where that message
     /// must start. Placement alone is ambiguous (a padded message can start where its successor would after a
     /// skipped acknowledgement), and an empty message leaves the byte cursor unchanged.
@@ -253,28 +299,36 @@ final class SysExAssembler: @unchecked Sendable {
     }
 
     /// `complete` or `start`: aborts an open message, then opens a new one; `complete` also delivers it.
-    private func begin(_ index: Int, _ bytes: SysExChunkBytes, _ count: UInt8, _ frame: Int64,
-                       single: Bool) -> KernelStatus {
-        if states[index] == .open { discard(index, .sysexAborted, frame) }
+    private func begin( // swiftlint:disable:this function_parameter_count
+        _ index: Int, _ bytes: SysExChunkBytes, _ count: UInt8, _ frame: Int64, single: Bool,
+        _ token: inout FaultChainToken
+    ) -> KernelStatus {
+        if states[index] == .open { discard(index, .sysexAborted, frame, &token) }
         states[index] = .open
         lengths[index] = 0
-        guard append(index, bytes, count) else { return overflow(index, frame, next: single ? .idle : .discarding) }
-        return single ? deliver(index, frame) : .ok
+        guard append(index, bytes, count) else {
+            return overflow(index, frame, next: single ? .idle : .discarding, &token)
+        }
+        return single ? deliver(index, frame, &token) : .ok
     }
 
     /// `continue` or `end`: appends to the open message; `end` also delivers it.
-    private func extend(_ index: Int, _ bytes: SysExChunkBytes, _ count: UInt8, _ frame: Int64,
-                        final: Bool) -> KernelStatus {
+    private func extend( // swiftlint:disable:this function_parameter_count
+        _ index: Int, _ bytes: SysExChunkBytes, _ count: UInt8, _ frame: Int64, final: Bool,
+        _ token: inout FaultChainToken
+    ) -> KernelStatus {
         switch states[index] {
         case .idle:
-            raise(index, .sysexAborted, frame)
+            raise(index, .sysexAborted, frame, &token)
             return .refused(.notOwner)
         case .discarding:
             if final { states[index] = .idle }
             return .refused(.invalidLength)
         case .open:
-            guard append(index, bytes, count) else { return overflow(index, frame, next: final ? .idle : .discarding) }
-            return final ? deliver(index, frame) : .ok
+            guard append(index, bytes, count) else {
+                return overflow(index, frame, next: final ? .idle : .discarding, &token)
+            }
+            return final ? deliver(index, frame, &token) : .ok
         }
     }
 
@@ -296,8 +350,9 @@ final class SysExAssembler: @unchecked Sendable {
         return true
     }
 
-    private func overflow(_ index: Int, _ frame: Int64, next: Assembly) -> KernelStatus {
-        discard(index, .sysexOverflow, frame)
+    private func overflow(_ index: Int, _ frame: Int64, next: Assembly,
+                          _ token: inout FaultChainToken) -> KernelStatus {
+        discard(index, .sysexOverflow, frame, &token)
         states[index] = next
         return .refused(.invalidLength)
     }
@@ -305,12 +360,12 @@ final class SysExAssembler: @unchecked Sendable {
     /// Copies the staged message into the pool and pushes its ref; the source returns to idle either way. Order:
     /// reserve, write, push, then commit and advance; a refusal moves neither the pool cursor nor `sequence`. The
     /// borrow closures capture only precomputed values, never `self`.
-    private func deliver(_ index: Int, _ frame: Int64) -> KernelStatus {
+    private func deliver(_ index: Int, _ frame: Int64, _ token: inout FaultChainToken) -> KernelStatus {
         let length = lengths[index]
         states[index] = .idle
         lengths[index] = 0
         guard let start = poolRef._withUnsafeGuaranteedRef({ $0.reserve(length: length) }) else {
-            discard(index, .sysexOverflow, frame)
+            discard(index, .sysexOverflow, frame, &token)
             return .refused(.full)
         }
         let staged = UnsafePointer(staging + index &* maximumMessageBytes)
@@ -318,7 +373,7 @@ final class SysExAssembler: @unchecked Sendable {
         let ref = SysExMessageRef(sequence: nextDelivery, offset: start, length: UInt32(truncatingIfNeeded: length),
                                   source: UInt32(truncatingIfNeeded: index))
         guard outputRef._withUnsafeGuaranteedRef({ $0.tryPush(ref) }) == .ok else {
-            discard(index, .sysexOverflow, frame)
+            discard(index, .sysexOverflow, frame, &token)
             return .refused(.full)
         }
         let end = start &+ UInt64(truncatingIfNeeded: length)
@@ -328,14 +383,16 @@ final class SysExAssembler: @unchecked Sendable {
         return .ok
     }
 
-    private func discard(_ index: Int, _ kind: FaultKind, _ frame: Int64) {
+    private func discard(_ index: Int, _ kind: FaultKind, _ frame: Int64, _ token: inout FaultChainToken) {
         lengths[index] = 0
         discarded.wrappingAdd(1, ordering: .relaxed)
-        raise(index, kind, frame)
+        raise(index, kind, frame, &token)
     }
 
-    private func raise(_ index: Int, _ kind: FaultKind, _ frame: Int64) {
+    /// The only raise: on the authority, with the token `accept` holds. The closure captures the token and
+    /// precomputed values, never `self`.
+    private func raise(_ index: Int, _ kind: FaultKind, _ frame: Int64, _ token: inout FaultChainToken) {
         let scope = FaultScope(handoff: scopeBase, target: UInt32(truncatingIfNeeded: index))
-        _ = faultsRef._withUnsafeGuaranteedRef { $0.raise(scope, kind, frame: frame) }
+        _ = authorityRef._withUnsafeGuaranteedRef { $0.raise(&token, scope, kind, frame: frame) }
     }
 }
