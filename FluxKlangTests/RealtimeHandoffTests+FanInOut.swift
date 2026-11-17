@@ -9,14 +9,18 @@ private typealias Root = RealtimeHandoffTests
 private typealias FanInError = FanInHandoff<UInt64>.PreparationError
 private typealias FanOutError = FanOutHandoff<UInt64>.PreparationError
 
-/// Why `FanInHandoff.init` refuses, or `nil` when it accepts.
+/// Why `FanInHandoff.init` refuses, or `nil` when it accepts. A refusal mints no claim chain; an acceptance mints one.
 private func fanInRefusal(_ policy: HandoffPolicy, laneCapacity: Int = 20, reserved: Int = 16,
-                          _ faults: FaultLatch) -> FanInError? {
+                          _ faults: FaultChainAuthority) throws -> FanInError? {
+    let claims = try Root.fanInClaims()
     do {
         _ = try FanInHandoff<UInt64>(policy: policy, laneCapacity: laneCapacity, reserved: reserved, faults: faults,
-                                     criticalScope: Root.fanInCriticalScope, producerSlotsScope: Root.fanInSlotsScope)
+                                     claimFaults: claims, criticalScope: Root.fanInCriticalScope,
+                                     producerSlotsScope: Root.fanInSlotsScope)
+        #expect(claims.mintedChains == 1)
         return nil
     } catch {
+        #expect(claims.mintedChains == 0)
         return error
     }
 }
@@ -62,15 +66,16 @@ extension RealtimeHandoffTests {
                overflow: .reservedCritical(reserved: reserved &* lanes))
     }
 
-    static func fanInLatch() throws -> FaultLatch {
-        try FaultLatch(scopes: [fanInCriticalScope, fanInSlotsScope, fanInNeighbourScope])
+    static func fanInLatch() throws -> FaultChainAuthority {
+        try FaultChainAuthority.testing(scopes: [fanInCriticalScope, fanInSlotsScope, fanInNeighbourScope])
     }
 
-    static func makeFanIn(_ faults: FaultLatch, lanes: Int = 4, laneCapacity: Int = 20,
-                          reserved: Int = 16) throws -> FanInHandoff<UInt64> {
+    static func makeFanIn(_ faults: FaultChainAuthority, claims: FaultChainAuthority? = nil, lanes: Int = 4,
+                          laneCapacity: Int = 20, reserved: Int = 16) throws -> FanInHandoff<UInt64> {
         try FanInHandoff<UInt64>(policy: fanInPolicy(lanes: lanes, laneCapacity: laneCapacity, reserved: reserved),
                                  laneCapacity: laneCapacity, reserved: reserved, faults: faults,
-                                 criticalScope: fanInCriticalScope, producerSlotsScope: fanInSlotsScope)
+                                 claimFaults: claims ?? fanInClaims(), criticalScope: fanInCriticalScope,
+                                 producerSlotsScope: fanInSlotsScope)
     }
 
     /// One drain's deliveries, in delivery order.
@@ -82,45 +87,40 @@ extension RealtimeHandoffTests {
         #expect(count == deliveries.count)
         return deliveries
     }
-
-    /// The latched record for `scope`, if any.
-    static func fanInRecord(_ faults: FaultLatch, _ scope: FaultScope) -> FaultRecord? {
-        var found: FaultRecord?
-        _ = faults.pending { if $0.scope == scope { found = $0 } }
-        return found
-    }
 }
 
 extension RealtimeHandoffTests {
     struct FanInClaims {
         @Test func initValidatesPolicyAndLaneShape() throws {
             let faults = try Root.fanInLatch()
-            #expect(fanInRefusal(Root.fanInPolicy(), faults) == nil)
+            #expect(try fanInRefusal(Root.fanInPolicy(), faults) == nil)
             let shared = Root.policy(producer: .midiReceive, producers: .conservativeDefault(for: .midiReceive),
                                      consumers: 2, capacity: 1_280, ordering: .fifoPerProducer,
                                      overflow: .reservedCritical(reserved: 1_024))
-            #expect(fanInRefusal(shared, faults) == .policy(.violates(.r1SingleConsumer)))
-            #expect(fanInRefusal(Root.fanInPolicy(ordering: .fifo), faults) == .unsupportedPolicy(.ordering(.fifo)))
-            #expect(fanInRefusal(Root.sysexPolicy(), faults) == .unsupportedPolicy(.ordering(.completeMessagesFIFO)))
-            #expect(fanInRefusal(Root.telemetryPolicy(), faults) == .unsupportedPolicy(.ordering(.latestOnly)))
+            #expect(try fanInRefusal(shared, faults) == .policy(.violates(.r1SingleConsumer)))
+            #expect(try fanInRefusal(Root.fanInPolicy(ordering: .fifo), faults)
+                    == .unsupportedPolicy(.ordering(.fifo)))
+            #expect(try fanInRefusal(Root.sysexPolicy(), faults)
+                    == .unsupportedPolicy(.ordering(.completeMessagesFIFO)))
+            #expect(try fanInRefusal(Root.telemetryPolicy(), faults) == .unsupportedPolicy(.ordering(.latestOnly)))
             let refusing = Root.policy(producer: .midiReceive, producers: .conservativeDefault(for: .midiReceive),
                                        ordering: .fifoPerProducer)
-            #expect(fanInRefusal(refusing, faults) == .unsupportedPolicy(.overflow(.refuseProducer)))
+            #expect(try fanInRefusal(refusing, faults) == .unsupportedPolicy(.overflow(.refuseProducer)))
             // `(1 << 62) + 20` times 4 lanes wraps to exactly 80: the shape check must see the overflow.
             for laneCapacity in Root.adversarialInts + [19, 21, (1 << 62) + 20] {
-                #expect(fanInRefusal(Root.fanInPolicy(), laneCapacity: laneCapacity, faults)
+                #expect(try fanInRefusal(Root.fanInPolicy(), laneCapacity: laneCapacity, faults)
                         == .laneShapeMismatch(laneCapacity: laneCapacity, reserved: 16))
             }
             for reserved in Root.adversarialInts + [15, 17, (1 << 62) + 16] {
-                #expect(fanInRefusal(Root.fanInPolicy(), reserved: reserved, faults)
+                #expect(try fanInRefusal(Root.fanInPolicy(), reserved: reserved, faults)
                         == .laneShapeMismatch(laneCapacity: 20, reserved: reserved))
             }
-            #expect(fanInRefusal(Root.fanInPolicy(laneCapacity: 20, reserved: 8), reserved: 8, faults)
+            #expect(try fanInRefusal(Root.fanInPolicy(laneCapacity: 20, reserved: 8), reserved: 8, faults)
                     == .lane(.reserveBelowMinimum(8)))
             let appOwnedMIDI = Root.policy(producer: .midiReceive, capacity: 20, ordering: .fifoPerProducer,
                                            overflow: .reservedCritical(reserved: 16))
-            #expect(fanInRefusal(appOwnedMIDI, faults) == .policy(.violates(.r2Cardinality)))
-            #expect(fanInRefusal(Root.fanInPolicy(lanes: 64, laneCapacity: 1_025), laneCapacity: 1_025, faults)
+            #expect(try fanInRefusal(appOwnedMIDI, faults) == .policy(.violates(.r2Cardinality)))
+            #expect(try fanInRefusal(Root.fanInPolicy(lanes: 64, laneCapacity: 1_025), laneCapacity: 1_025, faults)
                     == .policy(.violates(.r3Capacity)))
 
             let single = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 17)
@@ -129,26 +129,30 @@ extension RealtimeHandoffTests {
             #expect(widest.laneCount == 64 && widest.policy == Root.fanInPolicy(lanes: 64, laneCapacity: 1_024))
             let control = Root.policy(capacity: 20, ordering: .fifoPerProducer,
                                       overflow: .reservedCritical(reserved: 16))
-            #expect(fanInRefusal(control, faults) == nil)
+            #expect(try fanInRefusal(control, faults) == nil)
             #expect(!faults.isLatched(Root.fanInCriticalScope) && !faults.isLatched(Root.fanInSlotsScope))
         }
 
         @Test func claimProducerIsExclusiveAndBounded() throws {
             let faults = try Root.fanInLatch()
-            let handoff = try Root.makeFanIn(faults)
+            let claims = try Root.fanInClaims()
+            let handoff = try Root.makeFanIn(faults, claims: claims)
             let tokens = (0..<4).compactMap { _ in handoff.claimProducer(frame: 5) }
             #expect(tokens.map(\.lane) == [0, 1, 2, 3])
             #expect(tokens.allSatisfy { $0.handoff == handoff.identity && $0.generation == 1 })
-            #expect(handoff.refusedClaimCount == 0 && !faults.isLatched(Root.fanInSlotsScope))
+            #expect(handoff.refusedClaimCount == 0 && !claims.isLatched(Root.fanInSlotsScope))
 
             #expect(handoff.claimProducer(frame: 77) == nil)
             #expect(handoff.refusedClaimCount == 1)
             let slots = FaultRecord(scope: Root.fanInSlotsScope, kind: .producerSlotsExhausted, count: 1,
                                     firstFrame: 77)
-            #expect(Root.fanInRecord(faults, Root.fanInSlotsScope) == slots)
+            #expect(Root.fanInRecord(claims, Root.fanInSlotsScope) == slots)
             #expect(handoff.claimProducer() == nil)
-            #expect(handoff.refusedClaimCount == 2 && Root.fanInRecord(faults, Root.fanInSlotsScope)?.count == 2)
-            #expect(Root.fanInRecord(faults, Root.fanInSlotsScope)?.firstFrame == 77)
+            #expect(handoff.refusedClaimCount == 2 && Root.fanInRecord(claims, Root.fanInSlotsScope)?.count == 2)
+            #expect(Root.fanInRecord(claims, Root.fanInSlotsScope)?.firstFrame == 77)
+            #expect(handoff.contendedClaimCount == 0 && !claims.hasContendedFault)
+            // The claim fault lives on `claims` only; `faults` (the lanes' latch) holds nothing.
+            #expect(faults.pending { _ in } == 0 && !faults.isLatched(Root.fanInSlotsScope))
             #expect(!faults.isLatched(Root.fanInCriticalScope) && !faults.isLatched(Root.fanInNeighbourScope))
 
             // Each token pushes into its own lane only.
@@ -348,7 +352,7 @@ extension RealtimeHandoffTests {
             let faults = try Root.fanInLatch()
             let policy = Root.fanInPolicy(lanes: 3, laneCapacity: 40)
             let handoff = try FanInHandoff<KernelEvent>(
-                policy: policy, laneCapacity: 40, reserved: 16, faults: faults,
+                policy: policy, laneCapacity: 40, reserved: 16, faults: faults, claimFaults: Root.fanInClaims(),
                 criticalScope: Root.fanInCriticalScope, producerSlotsScope: Root.fanInSlotsScope)
             var pushed: [[KernelEvent]] = [[], [], []]
             for lane in 0..<3 {

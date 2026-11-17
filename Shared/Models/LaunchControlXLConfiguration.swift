@@ -82,25 +82,6 @@ struct MIDIControlChange: Equatable, Sendable {
 
     var normalizedValue: Float { Float(value) / 127 }
     var bipolarValue: Float { normalizedValue * 2 - 1 }
-
-    /// CCs of one self-contained byte buffer. Production no longer calls this: the Launch Control XL feeds raw
-    /// packets through `LaunchControlXLStream`, whose parser persists across packets.
-    static func decode(_ bytes: [UInt8]) -> [MIDIControlChange] {
-        guard var parser = MIDI1Parser(maximumSysExPayloadBytes: 256) else { return [] }
-        var messages: [MIDIControlChange] = []
-        for byte in bytes {
-            guard case let .channel(status, controller, value?)? = parser.consume(byte),
-                  status & 0xF0 == 0xB0 else {
-                continue
-            }
-            messages.append(MIDIControlChange(
-                channel: Int(status & 0x0F) + 1,
-                controller: controller,
-                value: value
-            ))
-        }
-        return messages
-    }
 }
 
 enum LaunchControlXLAction: Equatable, Sendable {

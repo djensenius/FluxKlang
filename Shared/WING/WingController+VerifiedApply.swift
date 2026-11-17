@@ -62,7 +62,7 @@ extension WingController {
         )
     }
 
-    private func uniqueSettings(_ settings: [WingSetting]) -> [WingSetting] {
+    func uniqueSettings(_ settings: [WingSetting]) -> [WingSetting] {
         var latest: [String: WingSetting] = [:]
         var order: [String] = []
         for setting in settings {

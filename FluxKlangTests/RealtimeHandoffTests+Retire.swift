@@ -70,11 +70,11 @@ final class RetireProbe: @unchecked Sendable {
 
 typealias ProbeExchange = RetiringExchange<RetireProbe>
 
-/// One exchange with its own retire queue and fault latch.
+/// One exchange with its own retire queue and fault chain authority.
 struct RetireFixture {
     let exchange: ProbeExchange
     let queue: DeferredReleaseQueue
-    let faults: FaultLatch
+    let faults: FaultChainAuthority
 }
 
 extension RealtimeHandoffTests {
@@ -85,14 +85,14 @@ extension RealtimeHandoffTests {
             Root.policy(purpose: .retire, producer: .render, consumer: .control, capacity: capacity, deadline: .none)
         }
 
-        static func makeQueue(capacity: Int) throws -> (DeferredReleaseQueue, FaultLatch) {
-            let faults = try FaultLatch(scopes: [scope])
+        static func makeQueue(capacity: Int) throws -> (DeferredReleaseQueue, FaultChainAuthority) {
+            let faults = try FaultChainAuthority(scopes: [scope], chainBudget: 1)
             return (try DeferredReleaseQueue(policy: retirePolicy(capacity: capacity), faults: faults, scope: scope),
                     faults)
         }
 
         static func preparationError(_ policy: HandoffPolicy) throws -> DeferredReleaseQueue.PreparationError? {
-            let faults = try FaultLatch(scopes: [scope])
+            let faults = try FaultChainAuthority(scopes: [scope], chainBudget: 1)
             do {
                 _ = try DeferredReleaseQueue(policy: policy, faults: faults, scope: scope)
                 return nil

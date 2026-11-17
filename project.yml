@@ -270,10 +270,13 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+FanInIdentity.swift
       - path: FluxKlangTests/RealtimeHandoffTests+FanInOut.swift
       - path: FluxKlangTests/RealtimeHandoffTests+FanInStress.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+FanInClaimChains.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Starvation.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Ramps.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Retire.swift
       - path: FluxKlangTests/RealtimeHandoffTests+RetireStress.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+RetireChains.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+LaneChains.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Scratch.swift
       - path: FluxKlangTests/RealtimeHandoffTests+ScratchStress.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
@@ -524,7 +527,6 @@ targets:
       - path: FluxKlangTests/UMPStreamMessageTests+Text.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+Fragments.swift
-      - path: FluxKlangTests/MIDIControlChangeDecodeTests+Legacy.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+RealTime.swift
       - path: FluxKlangTests/MIDICIMessageTests.swift
       - path: FluxKlangTests/MIDICIMessageTests+Decode.swift
@@ -804,6 +806,8 @@ targets:
       - path: FluxKlangTests/MIDI1WireTests.swift
       - path: FluxKlangTests/MIDI1WireTests+Refusals.swift
       - path: FluxKlangTests/MIDI1WireTests+RunningStatus.swift
+      - path: FluxKlangTests/MIDI1UMPInputDecoderTests.swift
+      - path: FluxKlangTests/MIDI1UMPInputDecoderTests+SysEx.swift
       - path: FluxKlangTests/PatchVariationTests.swift
       - path: FluxKlangTests/PatchVariationTests+Recall.swift
       - path: FluxKlangTests/PatchVariationTests+Editing.swift

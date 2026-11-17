@@ -377,8 +377,8 @@ struct StartupHardwareIsolationTests {
         #expect(spy.input.starts == [fixture.configuration.mapping.sourceNameContains])
         #expect(model.launchControlXL.status == .waiting)
 
-        let fader = MIDIControlChange(channel: 16, controller: 5, value: 127)
-        spy.input.send([fader])
+        let fader: [[UInt8]] = [[0xBF, 5, 127]]
+        spy.input.send(packets: fader)
         do {
             try await waitUntil { model.launchControlXL.lastAction != nil }
         } catch {
@@ -386,7 +386,7 @@ struct StartupHardwareIsolationTests {
             throw error
         }
         // Awaiting receive directly lets any (regressed) dispatch finish before the write check.
-        await model.launchControlXL.receive([fader])
+        await model.launchControlXL.receive(packets: fader)
 
         #expect(model.launchControlXL.lastAction == .fader(slot: 0, value: 1))
         #expect(model.wing === wing, "Startup must not replace the WING controller")
@@ -431,7 +431,7 @@ struct StartupHardwareIsolationTests {
         spy.input.reportSources(["Launch Control XL"])
         #expect(controller.status == .connected(["Launch Control XL"]))
 
-        spy.input.send([MIDIControlChange(channel: 16, controller: 5, value: 127)])
+        spy.input.send(packets: [[0xBF, 5, 127]])
         do {
             try await waitUntil { controller.lastAction != nil }
         } catch {

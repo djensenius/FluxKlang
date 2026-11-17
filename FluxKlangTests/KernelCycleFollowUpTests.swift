@@ -58,6 +58,7 @@ struct FollowUpCase {
             parts = KernelCycleParts(
                 events: try FanInHandoff<KernelEvent>(
                     policy: CycleRig.policy(consumer: .control), laneCapacity: 20, reserved: 16, faults: rig.faults,
+                    claimFaults: FaultChainAuthority(scopes: [CycleRig.slotsScope], chainBudget: 1),
                     criticalScope: CycleRig.criticalScope, producerSlotsScope: CycleRig.slotsScope),
                 faults: rig.faults, ownership: rig.ownership, safety: rig.safety, ramps: rig.ramps,
                 admissionRefusals: nil)

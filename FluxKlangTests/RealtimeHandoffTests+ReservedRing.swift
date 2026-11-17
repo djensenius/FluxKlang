@@ -17,11 +17,11 @@ private func reservedPolicy(capacity: Int = 20, reserved: Int = 16) -> HandoffPo
     Root.policy(capacity: capacity, overflow: .reservedCritical(reserved: reserved))
 }
 
-private func makeLatch() throws -> FaultLatch {
-    try FaultLatch(scopes: [ringScope, neighbourScope])
+private func makeLatch() throws -> FaultChainAuthority {
+    try FaultChainAuthority.testing(scopes: [ringScope, neighbourScope])
 }
 
-private func makeRing(_ faults: FaultLatch, capacity: Int = 20, reserved: Int = 16, startingIndex: UInt64 = 0,
+private func makeRing(_ faults: FaultChainAuthority, capacity: Int = 20, reserved: Int = 16, startingIndex: UInt64 = 0,
                       startingRefusals: UInt64 = 0) throws -> ReservedCapacityRing<UInt64> {
     try ReservedCapacityRing<UInt64>(policy: reservedPolicy(capacity: capacity, reserved: reserved), faults: faults,
                                      scope: ringScope, startingIndex: startingIndex,
@@ -29,7 +29,7 @@ private func makeRing(_ faults: FaultLatch, capacity: Int = 20, reserved: Int = 
 }
 
 /// Why `init` refuses `policy`, or `nil` when it accepts it.
-private func refusal(_ policy: HandoffPolicy, _ faults: FaultLatch) -> RingError? {
+private func refusal(_ policy: HandoffPolicy, _ faults: FaultChainAuthority) -> RingError? {
     do {
         _ = try ReservedCapacityRing<UInt64>(policy: policy, faults: faults, scope: ringScope)
         return nil
@@ -39,7 +39,7 @@ private func refusal(_ policy: HandoffPolicy, _ faults: FaultLatch) -> RingError
 }
 
 /// The latched record for `ringScope`, if any.
-private func record(_ faults: FaultLatch) -> FaultRecord? {
+private func record(_ faults: FaultChainAuthority) -> FaultRecord? {
     var found: FaultRecord?
     _ = faults.pending { if $0.scope == ringScope { found = $0 } }
     return found
@@ -142,7 +142,7 @@ extension RealtimeHandoffTests {
 
         /// An unprepared scope still refuses and stays visible through `unknownScopeFaults`.
         @Test func criticalExhaustionOnUnpreparedScopeIsStillVisible() throws {
-            let faults = try FaultLatch(scopes: [neighbourScope])
+            let faults = try FaultChainAuthority.testing(scopes: [neighbourScope])
             let ring = try ReservedCapacityRing<UInt64>(policy: reservedPolicy(capacity: 17), faults: faults,
                                                         scope: ringScope)
             for value in 0..<17 { #expect(ring.tryPush(UInt64(value), class: .critical, frame: 0) == .ok) }
