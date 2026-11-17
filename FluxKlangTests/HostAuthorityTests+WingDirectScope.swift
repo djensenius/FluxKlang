@@ -86,6 +86,36 @@ extension HostAuthorityTests {
             #expect(!admits(address, ParameterCatalog.wingMute))
         }
 
+        /// The length bound is exactly the longest send level: every kind's last
+        /// strip to the last bus still parses, and the longest is 19 bytes.
+        @Test func theLongestValidAddressesAreAdmitted() {
+            let longest = WingNodeKind.allCases.map {
+                WingAddress.sendLevel($0, $0.count, toBus: WingNodeKind.bus.count)
+            }
+            for address in longest {
+                #expect(address.utf8.count <= WingAddressClass.maxAddressBytes, "\(address)")
+                #expect(WingAddressClass(address: address) == .sendLevel, "\(address)")
+                #expect(admits(address, ParameterCatalog.wingSendDecibels), "\(address)")
+            }
+            #expect(longest.map(\.utf8.count).max() == WingAddressClass.maxAddressBytes)
+            #expect(WingAddressClass.maxAddressBytes == 19)
+        }
+
+        @Test(arguments: ["/main/4/send/16/lvl/", "/main/4/send/016/lvl", "/main/4/send/16/lvlx"])
+        func anAddressOneByteOverTheBoundIsRefused(_ address: String) {
+            #expect(address.utf8.count == WingAddressClass.maxAddressBytes + 1)
+            #expect(WingAddressClass(address: address) == nil)
+            #expect(!admits(address, ParameterCatalog.wingSendDecibels))
+        }
+
+        @Test func aVeryLongAddressIsRefused() {
+            let address = "/" + String(repeating: "x", count: 100_000) + "/1/mute"
+            #expect(WingAddressClass(address: address) == nil)
+            for parameter in wingParameters {
+                #expect(!admits(address, parameter), "\(parameter)")
+            }
+        }
+
         @Test(arguments: [
             CommandScope.route(RouteID(validated: "route.main")), .patch(PatchID(validated: "patch.main")),
             .action(ActionID(validated: "action.main")), .transport, .safety, .draft(DraftID(validated: "draft.main")),
