@@ -24,6 +24,10 @@ struct UMPTranslationStreamID: Hashable, Sendable {
 /// Common or System Real Time message has no stream path: `receive` refuses `.sysEx` with
 /// `.translation(.notChannelVoice)`.
 ///
+/// A stream is kept, with its translator and telemetry, from its first message until `remove` or `stop`. A caller
+/// should `remove` an input stream when that input goes away, so memory and the deadline scan stay bounded by the live
+/// inputs.
+///
 /// `stop()` is final: it cancels the timer and resets every stream, and after it nothing is sent to `sink`, even by a
 /// timer callback already queued.
 actor UMPTranslationStreamDriver {
@@ -112,7 +116,8 @@ actor UMPTranslationStreamDriver {
         rearm()
     }
 
-    /// Ends a segment of stream `id`: sends the held CC 6, if any, to `sink`.
+    /// Ends a segment of stream `id`: sends the held CC 6, if any, to `sink`. The stream and its telemetry are kept;
+    /// `remove` forgets it.
     func endOfStream(_ id: UMPTranslationStreamID) {
         guard var stream = streams[id] else { return }
         let flushed = stream.endOfStream()
@@ -123,7 +128,8 @@ actor UMPTranslationStreamDriver {
         rearm()
     }
 
-    /// Resets stream `id` as a new stream: sends the held CC 6, if any, to `sink`.
+    /// Resets stream `id` as a new stream: sends the held CC 6, if any, to `sink`. The stream and its telemetry are
+    /// kept; `remove` forgets it.
     func reset(_ id: UMPTranslationStreamID) {
         guard var stream = streams[id] else { return }
         let flushed = stream.reset()
@@ -131,6 +137,17 @@ actor UMPTranslationStreamDriver {
         pollBaselines[id] = nil
         lastReceived[id] = nil
         send(id, flushed.map(UMPTranslationStreamItem.voice))
+        rearm()
+    }
+
+    /// Forgets stream `id`, for an input that went away: sends its held CC 6, if any, to `sink`, drops the stream, its
+    /// telemetry and its time baseline, and re-arms the timer for the remaining streams. A later message on `id` starts
+    /// a new stream. Does nothing for an unknown `id` or after `stop()`.
+    func remove(_ id: UMPTranslationStreamID) {
+        guard !stopped, var stream = streams.removeValue(forKey: id) else { return }
+        pollBaselines[id] = nil
+        lastReceived[id] = nil
+        send(id, stream.reset().map(UMPTranslationStreamItem.voice))
         rearm()
     }
 

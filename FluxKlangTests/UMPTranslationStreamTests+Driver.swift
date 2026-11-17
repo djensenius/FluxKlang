@@ -8,7 +8,7 @@ import Testing
 
 // MARK: - The deadline-driven driver (#83)
 
-private final class FakeClock: UMPTranslationStreamClock, @unchecked Sendable {
+final class FakeClock: UMPTranslationStreamClock, @unchecked Sendable {
     private let lock = NSLock()
     private var now: UInt64 = 0
 
@@ -21,7 +21,7 @@ private final class FakeClock: UMPTranslationStreamClock, @unchecked Sendable {
 /// `latest` survives `cancel()` and `consume()`, to model a callback already queued when the timer was cancelled.
 /// Given a clock, an arming for a deadline the clock has reached also starts the callback at once in a `Task`, as a
 /// real timer would; `started` is that task.
-private final class FakeTimer: UMPTranslationStreamTimer, @unchecked Sendable {
+final class FakeTimer: UMPTranslationStreamTimer, @unchecked Sendable {
     private let lock = NSLock()
     private let clock: FakeClock?
     private var armed: UInt64?
@@ -60,7 +60,7 @@ private final class FakeTimer: UMPTranslationStreamTimer, @unchecked Sendable {
     func consume() { lock.withLock { armed = nil } }
 }
 
-private final class FakeSink: @unchecked Sendable {
+final class FakeSink: @unchecked Sendable {
     private let lock = NSLock()
     private var batches: [(stream: UMPTranslationStreamID, items: [UMPTranslationStreamItem])] = []
 
@@ -73,49 +73,53 @@ private final class FakeSink: @unchecked Sendable {
     }
 }
 
-private struct Fixture {
-    let driver: UMPTranslationStreamDriver
-    let clock = FakeClock()
-    let timer: FakeTimer
-    let sink = FakeSink()
+/// Nested in the suite, not top level: several other test files declare a file-private top-level `Fixture`.
+extension UMPTranslationStreamTests {
+    struct Fixture {
+        let driver: UMPTranslationStreamDriver
+        let clock = FakeClock()
+        let timer: FakeTimer
+        let sink = FakeSink()
 
-    /// `startsPassedDeadlines`: the timer starts the callback at once for a deadline the clock has reached.
-    init(startsPassedDeadlines: Bool = false) {
-        let sink = self.sink
-        timer = FakeTimer(clock: startsPassedDeadlines ? clock : nil)
-        driver = UMPTranslationStreamDriver(clock: clock, timer: timer) { sink.append($0, $1) }
-    }
-
-    /// The test's timer firing: the clock moves to `time`, the timer goes idle, and the most recently armed callback
-    /// runs to completion, so its output is in the sink when this returns. Fails the test if nothing was ever armed.
-    func fire(at time: UInt64) async {
-        guard let callback = timer.latest else {
-            Issue.record("the driver never armed the timer")
-            return
+        /// `startsPassedDeadlines`: the timer starts the callback at once for a deadline the clock has reached.
+        init(startsPassedDeadlines: Bool = false) {
+            let sink = self.sink
+            timer = FakeTimer(clock: startsPassedDeadlines ? clock : nil)
+            driver = UMPTranslationStreamDriver(clock: clock, timer: timer) { sink.append($0, $1) }
         }
-        clock.set(time)
-        timer.consume()
-        await callback()
+
+        /// The test's timer firing: the clock moves to `time`, the timer goes idle, and the most recently armed
+        /// callback runs to completion, so its output is in the sink when this returns. Fails the test if nothing was
+        /// ever armed.
+        func fire(at time: UInt64) async {
+            guard let callback = timer.latest else {
+                Issue.record("the driver never armed the timer")
+                return
+            }
+            clock.set(time)
+            timer.consume()
+            await callback()
+        }
     }
 }
 
 extension UMPTranslationStreamTests {
-    private static let one = UMPTranslationStreamID(1)
-    private static let two = UMPTranslationStreamID(2)
+    static let one = UMPTranslationStreamID(1)
+    static let two = UMPTranslationStreamID(2)
 
     /// One sink batch holding the CC 6 `msb` (with `lsb`) as a MIDI 2.0 RPN 0/6 message.
-    private static func batch(_ msb: UInt8, lsb: UInt8 = 0, channel: UInt8 = 0) throws -> [UMPTranslationStreamItem] {
+    static func batch(_ msb: UInt8, lsb: UInt8 = 0, channel: UInt8 = 0) throws -> [UMPTranslationStreamItem] {
         [.voice(try mpe(msb, lsb: lsb, channel: channel))]
     }
 
-    private static func control(_ channel: UInt8, _ controller: UInt8, _ value: UInt8) -> MIDI1Event {
+    static func control(_ channel: UInt8, _ controller: UInt8, _ value: UInt8) -> MIDI1Event {
         .channel(status: 0xB0 | channel, data1: controller, data2: value)
     }
 
     /// Selects RPN 0/6 and receives CC 6 value `value` at `time`: the CC 6 is held until `time` + 5 ms. Nothing reaches
     /// the sink.
-    private static func hold(_ fixture: Fixture, _ id: UMPTranslationStreamID, at time: UInt64, value: UInt8 = 15,
-                             channel: UInt8 = 0) async throws {
+    static func hold(_ fixture: Fixture, _ id: UMPTranslationStreamID, at time: UInt64, value: UInt8 = 15,
+                     channel: UInt8 = 0) async throws {
         let group = try UMPGroup(0)
         let sent = fixture.sink.received.count
         for (controller, data) in [(UInt8(101), UInt8(0)), (100, 6), (6, value)] {
