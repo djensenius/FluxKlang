@@ -6,6 +6,7 @@ import Testing
 #endif
 
 private typealias Root = RealtimeHandoffTests
+private typealias Ring = ReservedCapacityRing<UInt64>
 
 extension RealtimeHandoffTests {
     struct PolicyValidation {
@@ -238,6 +239,63 @@ extension RealtimeHandoffTests {
             #expect(KernelRefusal.allCases.last == .nonFinite)
             for (index, status) in statuses.enumerated() {
                 #expect(statuses.indices.filter { statuses[$0] == status } == [index])
+            }
+        }
+    }
+
+    /// #190 FLP7a: `ReservedCapacityRing.validate` is the ring init's policy checks, no more and no less.
+    struct ReservedRingValidation {
+        static func reserved(capacity: Int = 20, reserved: Int) -> HandoffPolicy {
+            Root.policy(capacity: capacity, overflow: .reservedCritical(reserved: reserved))
+        }
+
+        /// Policies with the refusal both `validate` and `init` must give (`nil`: accepted).
+        private static var table: [(HandoffPolicy, Ring.PreparationError?)] {
+            var rows: [(HandoffPolicy, Ring.PreparationError?)] = [
+                (Root.policy(), .unsupportedPolicy(.refuseProducer)),
+                (Root.telemetryPolicy(), .unsupportedPolicy(.overwriteLatest)),
+                (reserved(reserved: 16), nil),
+                (reserved(capacity: 17, reserved: 16), nil),
+                (reserved(capacity: 16, reserved: 16), .policy(.violates(.r7Reserve))),
+                (reserved(capacity: 64, reserved: 15), .reserveBelowMinimum(15)),
+                (reserved(capacity: 64, reserved: 1), .reserveBelowMinimum(1)),
+                (Root.policy(consumers: 2, overflow: .reservedCritical(reserved: 16)),
+                 .policy(.violates(.r1SingleConsumer))),
+                // Valid fan-in policy: only the ring's own single-producer check refuses it.
+                (Root.policy(producer: .midiReceive, producers: .conservativeDefault(for: .midiReceive),
+                             overflow: .reservedCritical(reserved: 16)), .policy(.violates(.r2Cardinality))),
+                (Root.policy(producer: .midiReceive, producers: .init(maximum: 1, evidence: .verified),
+                             overflow: .reservedCritical(reserved: 16)), nil),
+                // The single-producer check comes before the overflow and reserve-minimum checks.
+                (Root.policy(producer: .midiReceive, producers: .conservativeDefault(for: .midiReceive)),
+                 .policy(.violates(.r2Cardinality))),
+                (Root.policy(producer: .midiReceive, producers: .conservativeDefault(for: .midiReceive),
+                             overflow: .reservedCritical(reserved: 8)), .policy(.violates(.r2Cardinality)))
+            ]
+            for value in Root.adversarialInts where !(1..<20).contains(value) {
+                rows.append((reserved(reserved: value), .policy(.violates(.r7Reserve))))
+            }
+            return rows
+        }
+
+        @Test func validateRefusesExactlyWhatInitRefuses() throws {
+            let faults = try FaultLatch(scopes: [FaultScope(handoff: 4, target: 2)])
+            for (policy, expected) in Self.table {
+                var validated: Int?
+                var validateError: Ring.PreparationError?
+                do { validated = try Ring.validate(policy) } catch { validateError = error }
+                var ring: Ring?
+                var initError: Ring.PreparationError?
+                do {
+                    ring = try Ring(policy: policy, faults: faults, scope: FaultScope(handoff: 4, target: 2))
+                } catch {
+                    initError = error
+                }
+                #expect(validateError == expected)
+                #expect(initError == expected)
+                // Accepted alike, with the reserve the ring then uses.
+                #expect((validated == nil) == (ring == nil))
+                #expect(validated == ring?.reserved)
             }
         }
     }

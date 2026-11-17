@@ -90,7 +90,7 @@ struct StartupHardwareIsolationTests {
             let owner = NSObject()
             callbackOwner = owner
             input.start(sourceNameContains: ["Synthetic MIDI source"],
-                        onMessages: { _ in callbackObjects.append(owner) },
+                        onPackets: { _ in callbackObjects.append(owner) },
                         onSourcesChanged: { _ in callbackObjects.append(owner) })
         }
 
