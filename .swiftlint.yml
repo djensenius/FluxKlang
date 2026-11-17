@@ -17,3 +17,10 @@ custom_rules:
       - identifier
     message: FaultLatch seams are restricted to root tests.
     severity: error
+  fault_latch_raw_raise:
+    name: FaultLatch raw raise
+    regex: '(?<=\.)raise(?=\s*\((?!\s*&))'
+    match_kinds:
+      - identifier
+    message: Production code raises faults through a FaultChainAuthority token (`raise(&token, ...)`), not FaultLatch.raise.
+    severity: error

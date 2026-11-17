@@ -9,6 +9,13 @@ enum WingDirectApplyPhase: Hashable, Sendable, CaseIterable {
     case retry
 }
 
+/// A gated apply's unique settings, the safety ones among them, and the rest.
+struct WingDirectApplyPlan {
+    let expected: [WingSetting]
+    let safety: [WingSetting]
+    let remaining: [WingSetting]
+}
+
 /// Mints one direct-send grant for one chunk of at most
 /// `HostAuthority.directSendBatchLimit` targets of an apply phase, bound to
 /// exactly `targets`, so a phase mints once per chunk. The controller cannot
@@ -41,10 +48,8 @@ extension WingController {
         session: UUID,
         minting: some WingDirectGrantMinting
     ) async -> WingApplyVerification {
-        let expected = uniqueSettings(settings)
-        let safety = uniqueSettings(safetySettings).filter(expected.contains)
-        let safetyAddresses = Set(safety.map(\.address))
-        let remaining = expected.filter { !safetyAddresses.contains($0.address) }
+        let plan = directApplyPlan(settings, safetySettings: safetySettings)
+        let (expected, safety, remaining) = (plan.expected, plan.safety, plan.remaining)
 
         if !safety.isEmpty {
             let sent = await sendDirectPhase(.safety, session: session, minting: minting) { safety }
@@ -66,6 +71,16 @@ extension WingController {
         return await verifyAndRetryDirect(
             expected, sendFailed: sent == .failed, retry: .retry, session: session, minting: minting
         )
+    }
+
+    /// The settings of a gated apply: every unique setting, the safety ones among
+    /// them, and the rest, which are sent only once the safety ones verify.
+    func directApplyPlan(_ settings: [WingSetting], safetySettings: [WingSetting]) -> WingDirectApplyPlan {
+        let expected = uniqueSettings(settings)
+        let safety = uniqueSettings(safetySettings).filter(expected.contains)
+        let safetyAddresses = Set(safety.map(\.address))
+        let remaining = expected.filter { !safetyAddresses.contains($0.address) }
+        return WingDirectApplyPlan(expected: expected, safety: safety, remaining: remaining)
     }
 
     /// Verifies `expected`, then retries what is still pending in `retry`. A

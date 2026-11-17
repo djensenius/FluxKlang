@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Regression tripwire for #192's source policy, not compiler access control.
 
+The same self-check also covers `fault_latch_raw_raise` (#190): production code must
+not call the plain `FaultLatch.raise(scope, kind, frame:)`; authority raises
+(`raise(&token, ...)`) and `raiseContended()` stay allowed.
+
 The seams remain compiled in app modules. This type-blind, non-adversarial policy
 does not defend against lint suppressions or configuration edits. Its declaration
 exception accepts plain/backtick function names after `func` plus one ASCII space;
@@ -24,6 +28,7 @@ import tempfile
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 RULE = "fault_latch_test_seams"
+RAW_RAISE_RULE = "fault_latch_raw_raise"
 # Independent expectations, deliberately not extracted from the policy regex.
 SEAMS = (
     "admitRaiseForTesting",
@@ -269,8 +274,78 @@ class Check:
             "file": sentinel, "line": 2, "character": 27,
             "rule_id": "trailing_whitespace", "severity": "Error",
         }], (sentinel,))
+        self.check_raw_raise()
         self.manifest["outcome"] = "PASS"
         print("PASS fault-seam-policy self-check: 200 negatives, positives, other-rule sentinel")
+
+    def check_raw_raise(self):
+        # Second rule (fault_latch_raw_raise), linted over explicit paths so the
+        # 200-case matrix above stays exactly as it was.
+        positives = (
+            "    latch.raise(scope, kind, frame: 1)",
+            "    _ = faultsRef._withUnsafeGuaranteedRef { $0.raise(scope, kind, frame: 1) }",
+            "    _ = optional?.raise(scope, kind, frame: 1)",
+            "    latch\n        .raise(\n            scope, kind, frame: 1)",
+            "    latch.raise(\n        scope, kind, frame: 1)",
+            "    latch.raise (scope, kind, frame: 1)",
+        )
+        negatives = (
+            "    raise(1)",
+            "    authority.raise(&token, scope, kind, frame: 1)",
+            "    authority.raise(\n        &token, scope, kind, frame: 1)",
+            "    authority.raise(  &token, scope, kind, frame: 1)",
+            "    _ = authorityRef._withUnsafeGuaranteedRef { $0.raise(&token, scope, kind, frame: 1) }",
+            "    latch.raiseContended()",
+            "    raiseContended()",
+        )
+        plain = ["func rawRaisePositives() {"]
+        expected = []
+        for text in positives:
+            plain.extend(text.splitlines())
+            # The identifier is the last `raise` before the argument list.
+            line = max(i for i, row in enumerate(plain) if "raise" in row)
+            expected.append({
+                "file": "Shared/RawRaisePositives.swift", "line": line + 1,
+                "character": plain[line].index("raise") + 1,
+                "rule_id": RAW_RAISE_RULE, "severity": "Error",
+            })
+        plain.append("}")
+        # Space before the paren also trips the unrelated no_space_in_method_call rule.
+        spaced = next(i for i, row in enumerate(plain) if "raise (" in row)
+        expected.append({
+            "file": "Shared/RawRaisePositives.swift", "line": spaced + 1,
+            "character": plain[spaced].index("raise (") + len("raise") + 1,
+            "rule_id": "no_space_in_method_call", "severity": "Error",
+        })
+        declared = ["struct Assembler {", "    private func raise(_ index: Int) {}",
+                    "    func caller() {"]
+        for text in negatives:
+            declared.extend(text.splitlines())
+        declared.extend(["    }", "}"])
+        write(self.root / "Shared/RawRaisePositives.swift", "\n".join(plain) + "\n")
+        write(self.root / "Shared/RawRaiseNegatives.swift", "\n".join(declared) + "\n")
+        write(self.root / "FluxKlangTests/RawRaisePositives.swift", "\n".join(plain) + "\n")
+        self.lint("raw-raise-positives", expected, ("Shared/RawRaisePositives.swift",))
+        self.lint("raw-raise-negatives", [], ("Shared/RawRaiseNegatives.swift",))
+        exempt = [dict(expected[-1], file="FluxKlangTests/RawRaisePositives.swift")]
+        self.lint("raw-raise-root-tests-exempt", exempt, ("FluxKlangTests/RawRaisePositives.swift",))
+        # The one legitimate plain call carries a narrow, reviewable disable comment.
+        source = "Shared/Audio/Kernel/Memory/FaultLatch+Chains.swift"
+        self.copy_input(source, "Shared/RealFaultLatchChains.swift")
+        self.lint("raw-raise-real-chains", [], ("Shared/RealFaultLatchChains.swift",))
+        lines = (REPOSITORY / source).read_text(encoding="utf-8").splitlines()
+        disables = [i for i, row in enumerate(lines)
+                    if f"swiftlint:disable:next {RAW_RAISE_RULE}" in row]
+        if len(disables) != 1 or "latch.raise(" not in lines[disables[0] + 1]:
+            raise RuntimeError("FaultLatch+Chains.swift must keep exactly one disable on its plain raise")
+        del lines[disables[0]]
+        write(self.root / "Shared/MutatedFaultLatchChains.swift", "\n".join(lines) + "\n")
+        self.lint("raw-raise-real-chains-without-disable", [{
+            "file": "Shared/MutatedFaultLatchChains.swift", "line": disables[0] + 1,
+            "character": lines[disables[0]].index("raise(") + 1,
+            "rule_id": RAW_RAISE_RULE, "severity": "Error",
+        }], ("Shared/MutatedFaultLatchChains.swift",))
+        print("PASS fault-seam-policy self-check: raw-raise positives, negatives, exemptions")
 
 
 def main():

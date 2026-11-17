@@ -324,6 +324,27 @@ extension RealtimeHandoffTests {
                 #expect(rig.run(Int64(block) * 64, 64).0.status == .silenced(.scopeFaulted))
             }
         }
+
+        /// T13 (#190 FLP7c). `lanesRaiseOn` is identity of the authority the lanes were minted from: true for it,
+        /// false for another authority even with the same scopes and budget, and not moved by the claim authority
+        /// (a separate one, or a twin of `faults`). Every lane is on it, since one `faults` mints them all; a lane set
+        /// with one foreign lane cannot be built, so swapping `allSatisfy` for `anySatisfy` is not caught here.
+        /// Kills: a comparison by scopes or budget; a constant `true`; the claim authority counted.
+        @Test func lanesRaiseOnIsIdentityOfTheLaneAuthority() throws {
+            let faults = try Root.fanInLatch()
+            let twin = try Root.fanInLatch()
+            #expect(twin.chainBudget == faults.chainBudget && twin !== faults)
+            let claims = try Root.fanInClaims()
+            let handoff = try Root.makeFanIn(faults, claims: claims, lanes: 4, laneCapacity: 20)
+            #expect(!handoff.owners.isEmpty && handoff.owners.allSatisfy { $0.raisesOn(faults) })
+            #expect(handoff.lanesRaiseOn(faults))
+            #expect(!handoff.lanesRaiseOn(twin) && !handoff.lanesRaiseOn(claims))
+            #expect(handoff.owners.allSatisfy { !$0.raisesOn(twin) && !$0.raisesOn(claims) })
+            let onTwinClaims = try Root.makeFanIn(faults, claims: twin, lanes: 2, laneCapacity: 20)
+            #expect(onTwinClaims.lanesRaiseOn(faults) && !onTwinClaims.lanesRaiseOn(twin))
+            let single = try Ring(policy: ringPolicy, faults: faults, scope: Root.fanInCriticalScope)
+            #expect(single.raisesOn(faults) && !single.raisesOn(twin))
+        }
     }
 
     /// T12 (#190 FLP7b). `Thread`s push critical events at once onto two full lanes, two threads per lane: every
