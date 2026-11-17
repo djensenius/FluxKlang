@@ -242,7 +242,15 @@ file is clean and a copy without the comment is not. It cannot tell whose latch
 it is, and the same suppression and configuration caveats apply. Known gaps:
 `latch . raise(` and an unqualified `raise(` inside `extension FaultLatch` are
 missed; a comment before the `&` of an authority call is a false positive that
-fails closed (put the `&` first).
+fails closed (put the `&` first). A third ERROR rule,
+`fault_latch_authority_raise`, rejects the authority form `.raise(&token, ...)`
+outside the four lane-owner files named in its `excluded:` allowlist
+(`DeferredRelease.swift`, `ReservedCapacityRing+Chains.swift`,
+`FanInHandoff+Chains.swift`, `SysExAssembler.swift`); adding a caller means
+editing that list. It is equally type-blind (it cannot prove the authority is
+the lane's own; FLP7c checks that at preparation), a suppression comment or
+config edit defeats it, and whitespace or a newline between `.` and `raise` is
+missed.
 
 This is type-blind source policy, not compiler access control or an adversarial
 boundary: the seams remain compiled into app modules. Same-name unrelated
