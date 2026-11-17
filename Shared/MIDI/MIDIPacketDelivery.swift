@@ -6,10 +6,13 @@
 import Synchronization
 
 /// One delivered batch: the raw bytes of each packet, in order. `afterGap` marks the first batch accepted after the
-/// delivery dropped one or more batches, so framing must not carry into it.
+/// delivery dropped one or more batches, so framing must not carry into it. `source` is the connection the batch came
+/// from (one read callback is one connection); nil only for a batch not tied to a connection, which feeds the shared
+/// legacy source.
 struct MIDIPacketBatch: Equatable, Sendable {
     var packets: [[UInt8]]
     var afterGap = false
+    var source: MIDIConnectionToken?
 }
 
 /// One input start's ordered path from the MIDI read thread to the main actor: a bounded `AsyncStream` with a
@@ -62,9 +65,9 @@ final class MIDIPacketDelivery {
     /// No lock-order inversion: `continuation.yield` takes only the stream's internal lock, and nothing takes this
     /// lock while holding that one.
     @discardableResult
-    nonisolated func yield(_ packets: [[UInt8]]) -> Bool {
+    nonisolated func yield(_ packets: [[UInt8]], source: MIDIConnectionToken? = nil) -> Bool {
         gapPending.withLock { pending in
-            let batch = MIDIPacketBatch(packets: packets, afterGap: pending)
+            let batch = MIDIPacketBatch(packets: packets, afterGap: pending, source: source)
             willYield?(batch)
             guard case .enqueued = continuation.yield(batch) else {
                 pending = true
