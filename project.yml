@@ -663,6 +663,7 @@ targets:
       - path: FluxKlangTests/ProjectMigrationTests+RetireCrash.swift
       - path: FluxKlangTests/ProjectMigrationTests+RetireRace.swift
       - path: FluxKlangTests/ProjectMigrationTests+Review.swift
+      - path: FluxKlangTests/ProjectMigrationTests+Launch.swift
       - path: FluxKlangTests/PeerReconnectTests.swift
       - path: FluxKlangTests/PeerReconnectTests+Epochs.swift
       - path: FluxKlangTests/ParameterAutomationTests.swift
@@ -822,6 +823,11 @@ targets:
       - path: FluxKlangTests/CoreMIDIAdapterTests.swift
       - path: FluxKlangTests/CoreMIDIAdapterTests+Identity.swift
       - path: FluxKlangTests/CoreMIDIAdapterTests+Binding.swift
+      - path: FluxKlangTests/CoreMIDIAdapterTests+IngressFixtures.swift
+      - path: FluxKlangTests/CoreMIDIAdapterTests+IngressBounds.swift
+      - path: FluxKlangTests/CoreMIDIAdapterTests+IngressConcurrency.swift
+      - path: FluxKlangTests/CoreMIDIAdapterTests+IngressDelivery.swift
+      - path: FluxKlangTests/CoreMIDIAdapterTests+IngressController.swift
       - path: FluxKlangTests/PatchVariationTests.swift
       - path: FluxKlangTests/PatchVariationTests+Recall.swift
       - path: FluxKlangTests/PatchVariationTests+Editing.swift

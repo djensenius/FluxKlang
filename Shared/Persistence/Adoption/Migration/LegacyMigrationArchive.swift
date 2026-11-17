@@ -2,8 +2,8 @@ import Foundation
 
 /// Proof that the archive at `LegacyMigrationArchive.destination` holds the adopted sources byte for byte. For a new
 /// archive it describes the sources just read, which read the same before and after it was verified; for an existing
-/// one it describes the archive's own contents, and the live draft names agree with its draft member. Only
-/// `LegacyMigrationArchive.archive` mints one.
+/// one it describes the archive's own contents, and the live draft names agree with its draft member. Only the archive
+/// implementation mints one, including for a validated launch observation. It is not a pin on the archive pathname.
 struct LegacyMigrationReceipt: Sendable, Equatable {
     let report: LegacySourceReport
     /// The adopted sources, in `ProjectMigrationSource` order; each one's original bytes are in the archive.
@@ -139,19 +139,37 @@ enum LegacyMigrationArchive {
     private static func existing<FS: StagingFileSystem>(
         _ plan: StagingPlan, _ policy: ProjectPackageManifestPolicy, _ store: inout FS
     ) -> LegacyMigrationArchiveOutcome {
+        switch observation(plan, policy, &store) {
+        case .failure(.invalidArchive): return .refused(.archiveDiffers)
+        case .failure(.readFailed(let refusal)): return .refused(.staging(refusal))
+        case .success(let observed):
+            guard let receipt = observed.receipt else { return .refused(.archiveDiffers) }
+            return .alreadyArchived(receipt)
+        }
+    }
+
+    /// One validated archive read, then classification against that report's draft bytes. Conflicting names keep
+    /// their report and classification for inert review, but cannot mint a receipt.
+    static func observation<FS: StagingFileSystem>(
+        _ plan: StagingPlan, _ policy: ProjectPackageManifestPolicy, _ store: inout FS
+    ) -> Result<LegacyMigrationObservation, LegacyMigrationLaunchRefusal> {
         let report: LegacySourceReport
         switch committed(plan, policy, &store) {
         case .success(let recorded): report = recorded
-        case .failure(let refusal): return .refused(refusal)
+        case .failure(let refusal): return .failure(refusal)
         }
         let member: Data? = if case .adopted(let draft) = report.draft { draft.original } else { nil }
+        let launch: LegacyDraftLaunchState
         switch LegacyDraftRetirement.state(member: member, in: &store, policy: policy) {
-        case .failure(let refusal): return .refused(.staging(refusal))
-        case .success(.draftChanged), .success(.retiredNameOccupied), .success(.draftGone):
-            return .refused(.archiveDiffers)
-        case .success(.noDraftArchived), .success(.pending), .success(.retired):
-            return .alreadyArchived(LegacyMigrationReceipt(report: report))
+        case .failure(let refusal): return .failure(.readFailed(refusal))
+        case .success(let state): launch = state
         }
+        let receipt: LegacyMigrationReceipt?
+        switch launch {
+        case .draftChanged, .retiredNameOccupied, .draftGone: receipt = nil
+        case .noDraftArchived, .pending, .retired: receipt = LegacyMigrationReceipt(report: report)
+        }
+        return .success(LegacyMigrationObservation(report: report, launch: launch, receipt: receipt))
     }
 
     /// Builds the package for `report`, stages it under `plan` and re-reads it; nil when nothing was adopted.
@@ -198,13 +216,13 @@ enum LegacyMigrationArchive {
     /// writes and reads nothing outside the archive.
     private static func committed<FS: StagingFileSystem>(
         _ plan: StagingPlan, _ policy: ProjectPackageManifestPolicy, _ store: inout FS
-    ) -> Result<LegacySourceReport, LegacyMigrationArchiveRefusal> {
+    ) -> Result<LegacySourceReport, LegacyMigrationLaunchRefusal> {
         let found: ProjectPackageContents
         do {
             found = try readArchive(plan, policy, &store)
         } catch {
-            if case .ioFailed = error { return .failure(.staging(error)) }
-            return .failure(.archiveDiffers)
+            if case .ioFailed = error { return .failure(.readFailed(error)) }
+            return .failure(.invalidArchive)
         }
         func member(_ path: String) -> Data? { found.files.first { $0.path == path }?.bytes }
         guard let projectBytes = member(projectPath),
@@ -215,7 +233,7 @@ enum LegacyMigrationArchive {
               let report = recordedReport(sources, member: member, limits: policy.packageLimits),
               let rebuilt = try? contents(report, projectID: project.id, policy: policy),
               rebuilt.manifestBytes == found.manifestBytes, rebuilt.directories == found.directories,
-              rebuilt.files == found.files else { return .failure(.archiveDiffers) }
+              rebuilt.files == found.files else { return .failure(.invalidArchive) }
         return .success(report)
     }
 
