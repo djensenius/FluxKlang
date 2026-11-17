@@ -195,6 +195,37 @@ extension LaunchControlXLTests {
         #expect(dispatched() == [.fader(slot: 0, value: 1)])
         await controller.setMode(.disabled)
     }
+
+    /// P9: under `.resetStream` a source joining or leaving while another stays connected also drops the half
+    /// message, not only a full unplug; the next complete message still maps.
+    @MainActor
+    @Test func partialSourceChangesResetWhenOptedIn() async throws {
+        let fixture = try LaunchControlXLFixture(mode: .control)
+        defer { fixture.cleanUp() }
+        let input = SourcesRecordingInput()
+        let policy = LaunchControlXLSourcePolicy(profile: .unpaired, sourceChange: .resetStream)
+        let (controller, dispatched) = Self.policyController(fixture, input: input, policy: policy)
+        await controller.load()
+        let report = try #require(input.onSourcesChanged.last)
+        let fader: [LaunchControlXLAction] = [.fader(slot: 0, value: 1)]
+
+        report(["LCXL3 A"])
+        await controller.receive(packets: [[0xBF, 5]])
+        report(["LCXL3 A", "LCXL3 B"])
+        await controller.receive(packets: [[127]])
+        #expect(dispatched().isEmpty)
+        await controller.receive(packets: [[0xBF, 5, 127]])
+        #expect(dispatched() == fader)
+
+        await controller.receive(packets: [[0xBF, 5]])
+        report(["LCXL3 B"])
+        #expect(controller.status == .connected(["LCXL3 B"]))
+        await controller.receive(packets: [[127]])
+        #expect(dispatched() == fader)
+        await controller.receive(packets: [[0xBF, 5, 127]])
+        #expect(dispatched() == fader + fader)
+        await controller.setMode(.disabled)
+    }
 }
 
 /// Keeps every start's sources callback, so a test can invoke one from an earlier start. Like CoreMIDI, `stop()`
