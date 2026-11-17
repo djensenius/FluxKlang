@@ -16,6 +16,12 @@ future `FaultLatch` raiser would run in, so that the caller proofs that
 [`fault-latch-raise-sites.md`](fault-latch-raise-sites.md) (FLP1) section 8 asks
 for can start from cited platform text instead of from assumption.
 
+[K-RC1 refusal caller ownership](refusal-caller-ownership.md) is a later,
+separate capability prerequisite. Its slot supplies an explicit HB handoff
+without assuming platform serialization, but no counter-writing API or
+application callback uses it yet. K-RC2 migration and platform qualification
+remain separate; this adds no platform guarantee.
+
 The contract being served is `FaultLatch`'s "Raise-context contract"
 (`FaultLatch.swift:123` to `:130`, summarised in FLP1 section 2): at most
 K < 2^39 logical chains over the latch's whole life, each chain non-reentrant,

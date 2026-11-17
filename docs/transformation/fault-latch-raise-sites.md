@@ -26,6 +26,11 @@ have to be gathered from authoritative sources.
 
 Citations use `Path.swift:line` against the baseline. Source is not pasted.
 
+Later prerequisite: [K-RC1 refusal caller ownership](refusal-caller-ownership.md)
+provides a bounded process-wide caller capability, but does not yet wire it into
+the counter-writing APIs inventoried here. K-RC2 still owes that migration and
+coverage proof; no application callback integration or #190 completion is claimed.
+
 ## 2. The contract being inventoried
 
 In my own words, from `FaultLatch.swift:123` (Raise-context contract), `:136`
