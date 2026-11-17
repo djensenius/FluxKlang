@@ -49,7 +49,8 @@ private let ackRequestIdentities = Atomic<UInt64>(0)
 
 /// The acknowledgement-request epoch of one `KernelCycle`: a single atomic word, allocated in `init`.
 ///
-/// Happens-before chain (sequential argument; the formal model-check of this handshake is tracked in #190):
+/// Happens-before chain (sequential argument, checked by an exhaustive reduced interleaving model in
+/// `RealtimeHandoffTests+AckHandshakeModel.swift`; not a weak-memory proof):
 /// 1. control: a raise reaches `FaultLatch.observe`, then `request(for:)` increments the epoch with a releasing
 ///    compare-exchange, publishing epoch `e`;
 /// 2. render: `loadForRender()` acquire-loads the epoch at the start of `KernelCycle.run`, before

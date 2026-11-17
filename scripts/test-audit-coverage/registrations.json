@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "4b65363726f04056d7ccc27e21549e773cea46f09cc278d1d4960286f9f15cf3",
+    "sha256": "63b32d9f2970251afbef0076a9b7b2ce9b5e9aaa34c3116a15bc7ce3de9a8f2b",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -138,6 +138,9 @@
         "FluxKlangTests/ProjectPackageIOTests+ConcurrentMutation.swift",
         "FluxKlangTests/ProjectPackageIOTests+Inspection.swift",
         "FluxKlangTests/ProjectPackageIOTests+InspectionRefusals.swift",
+        "FluxKlangTests/ProjectPackageIOTests+InspectionSession.swift",
+        "FluxKlangTests/ProjectPackageIOTests+InspectionInterleavings.swift",
+        "FluxKlangTests/ProjectPackageIOTests+InspectionSessionSupport.swift",
         "FluxKlangTests/ProjectStagingTests.swift",
         "FluxKlangTests/ProjectStagingTests+Aliasing.swift",
         "FluxKlangTests/ProjectStagingTests+CombiningMarks.swift",
@@ -835,6 +838,8 @@
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionBounds.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionPlan.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleTakeoverGap.swift",
+        "FluxKlangTests/RealtimeHandoffTests+AckHandshakeModelState.swift",
+        "FluxKlangTests/RealtimeHandoffTests+AckHandshakeModel.swift",
         "FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift",
         "FluxKlangTests/RealtimeHandoffTests+Catalog.swift",
         "FluxKlangTests/PerformanceProjectSessionTests.swift",

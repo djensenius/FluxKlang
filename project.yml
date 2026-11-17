@@ -240,6 +240,9 @@ targets:
       - path: FluxKlangTests/ProjectPackageIOTests+ConcurrentMutation.swift
       - path: FluxKlangTests/ProjectPackageIOTests+Inspection.swift
       - path: FluxKlangTests/ProjectPackageIOTests+InspectionRefusals.swift
+      - path: FluxKlangTests/ProjectPackageIOTests+InspectionSession.swift
+      - path: FluxKlangTests/ProjectPackageIOTests+InspectionInterleavings.swift
+      - path: FluxKlangTests/ProjectPackageIOTests+InspectionSessionSupport.swift
       - path: FluxKlangTests/ProjectStagingTests.swift
       - path: FluxKlangTests/ProjectStagingTests+Aliasing.swift
       - path: FluxKlangTests/ProjectStagingTests+CombiningMarks.swift
@@ -937,6 +940,8 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionBounds.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionPlan.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleTakeoverGap.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+AckHandshakeModelState.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+AckHandshakeModel.swift
       - path: FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Catalog.swift
       - path: FluxKlangTests/PerformanceProjectSessionTests.swift
