@@ -636,6 +636,13 @@ audit issue recorded. These runs add no process-identity, argv or bootstrap
 evidence and do not cover the iOS owners; the remaining #60 gates above still
 apply and #60 remains open.
 
+Later note (#80, slice MU6): production `MIDIControlChange.decode` was retired.
+`MIDIControlChangeDecodeTests` keeps its name, owner rows and annotation, and
+now drives `MIDI1Parser` through the test-local `ccs(_:)` helper, which keeps
+`decode`'s logic and 256-byte SysEx bound. The `+Legacy` extension file was
+deleted, so two `MIDIControlChangeDecodeTests+` extension files remain; the
+text above describes the tree as it was at adoption.
+
 ## UMP codec and MIDI 1 translation source adoption
 
 `UMPPacketFramingTests`, `UMPChannelVoiceTests`, `UMPScalingTests`,
