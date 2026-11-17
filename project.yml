@@ -813,6 +813,7 @@ targets:
       - path: FluxKlangTests/MIDI1UMPInputDecoderTests+SysEx.swift
       - path: FluxKlangTests/CoreMIDIAdapterTests.swift
       - path: FluxKlangTests/CoreMIDIAdapterTests+Identity.swift
+      - path: FluxKlangTests/CoreMIDIAdapterTests+Binding.swift
       - path: FluxKlangTests/PatchVariationTests.swift
       - path: FluxKlangTests/PatchVariationTests+Recall.swift
       - path: FluxKlangTests/PatchVariationTests+Editing.swift
