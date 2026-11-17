@@ -181,7 +181,8 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
 /// `acknowledgeCritical(observation, ticket)`, which reads this cycle's own telemetry slot and acknowledges only
 /// when that sample's `KernelCycleTelemetry.permitsAcknowledgement(_:)` is `true` and the cycle-private
 /// `lastFaultedAckEpoch` atomic (stored only by this cycle's render, on `.scopeFaulted` cycles) is at least the
-/// ticket's epoch (the happens-before chain is on `KernelAckRequests`; its formal model-check is tracked in #190).
+/// ticket's epoch (the happens-before chain is on `KernelAckRequests`; it is checked by an exhaustive reduced
+/// interleaving model in `RealtimeHandoffTests+AckHandshakeModel.swift`, not a weak-memory proof).
 /// No caller-supplied sample is accepted, and a sample forged into the slot (all its fields are settable) cannot
 /// approve alone: the atomic is reachable only from this file.
 /// Step 0 of `run` acquire-loads the epoch before step 2's latch read. Tickets are bound to this cycle's
