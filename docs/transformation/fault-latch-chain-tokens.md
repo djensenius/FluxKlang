@@ -223,7 +223,20 @@ mint left, or its chain's token was lost) has no counted path and must fall back
   comment has one. The tripwire is a type-blind regex, not access control: it
   cannot prove that the latch is the lane's own authority (FLP7c enforces that at
   preparation), a suppression comment or a config edit defeats it (it is visible
-  in review), and authority raises and the contended path are not restricted.
+  in review), and the contended path is not restricted. Authority raises are
+  restricted by a second rule, `fault_latch_authority_raise`: `.raise(&token,
+  ...)` is rejected outside the four lane-owner files listed in the rule's own
+  `excluded:` allowlist (`DeferredRelease.swift`,
+  `ReservedCapacityRing+Chains.swift`, `FanInHandoff+Chains.swift`,
+  `SysExAssembler.swift`), so a new caller needs a visible `.swiftlint.yml`
+  edit; root `FluxKlangTests/` disables it. The self-check asserts the
+  allowlist matches its own list, that exactly those production files contain
+  an authority raise, and that each file's call fires the rule once moved off
+  the allowlist. It is equally type-blind (it cannot prove the authority is the
+  lane's own; FLP7c enforces that at preparation), a suppression comment or a
+  config edit defeats it, and whitespace or a newline between `.` and `raise`
+  is missed by the rule (the self-check's own scan of the real tree does catch
+  it).
   Known gaps: whitespace or a newline before the dot (`latch . raise(`) is
   missed; an unqualified `raise(` inside an `extension FaultLatch` is missed
   (no leading dot); a comment before the `&` (`raise(/* x */ &token`, or a

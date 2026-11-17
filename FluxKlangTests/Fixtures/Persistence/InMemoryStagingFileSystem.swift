@@ -8,8 +8,8 @@ import Foundation
 /// A value-type fake volume for `StagingFileSystem`. Every primitive is logged with its outcome and consults a
 /// script by index (relative to `arm`), so tests can inject faults, crashes (before or after a primitive, or a torn
 /// `createFile`), planted nodes and silent corruption. `removeTree` is expanded into one primitive per node.
-/// The script-keyed maps (plant, remove, mutateOnRead, statusSizeSkew, silent) match by exact spelling and are not
-/// folded under `caseInsensitive`.
+/// The script-keyed maps (plant, plantFile, remove, mutateOnRead, statusSizeSkew, silent) match by exact spelling and
+/// are not folded under `caseInsensitive`.
 struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
     struct Node: Equatable, Sendable {
         var kind: ProjectPackageEntryKind
@@ -60,6 +60,14 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
         case bumpGeneration, appendByte, addLink, changeVolume, changeKind
     }
 
+    /// A regular file put at `path` just before a primitive, replacing any node there as an atomic save would. It gets
+    /// a new identity unless `identity` is given, which models a file rewritten in place.
+    struct PlantedFile: Equatable, Sendable {
+        var path: String
+        var bytes: Data
+        var identity: UInt64?
+    }
+
     struct Script: Equatable, Sendable {
         var faults: [Int: StagingIOFault] = [:]
         var crashIndex: Int?
@@ -72,6 +80,8 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
         var mutateOnRead: [String: ReadMutation] = [:]
         /// Added to the byte count every status reports for the path; the bytes themselves are untouched.
         var statusSizeSkew: [String: Int] = [:]
+        /// Like `plant`, but a regular file with new bytes and generation, and a new identity unless one is given.
+        var plantFile: [Int: PlantedFile] = [:]
 
         static func fault(_ fault: StagingIOFault, at index: Int) -> Script {
             Script(faults: [index: fault])
@@ -349,6 +359,10 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
         }
         if let path = script.plant[index] { place(path, Node(kind: .directory)) }
         if let path = script.remove[index] { nodes[path] = nil }
+        if let file = script.plantFile[index] {
+            insert(file.path, Node(kind: .regularFile, bytes: file.bytes, volume: parentVolume(of: file.path)))
+            if let identity = file.identity { nodes[file.path]?.identity = identity }
+        }
         if script.crashIndex == index, script.crash == .before {
             isDown = true
             log.append(Entry(operation: operation, outcome: .crashedBefore))
