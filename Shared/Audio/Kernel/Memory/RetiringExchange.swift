@@ -72,7 +72,8 @@ import Synchronization
 /// `current`. This assumes every direct `retire` was reserved first (see `DeferredReleaseQueue`).
 ///
 /// Progress (source level only). `beginCycle` makes at most two retires and one exchange; `withCurrent` adds `body`.
-/// Retire refusal includes `FaultLatch`'s bounded scope lookup. Atomic lowering and target progress are unqualified.
+/// Each retire takes and puts the queue's `FaultChainAuthority` chain token (one store and one counter add when
+/// contended); a refusal adds the bounded scope lookup and raise. Atomic lowering and target progress are unqualified.
 /// ARC/allocation/lock checks cover only inspected configurations, not arbitrary caller bodies or runtime callees.
 /// Control `publish` may release one payload; a refusal's release is not last because the caller still owns `next`.
 /// Control `reclaim` releases up to `retire.capacity` payloads; their `deinit` time is outside render's source bound.
@@ -140,10 +141,13 @@ final class RetiringExchange<Payload: AnyObject & Sendable>: @unchecked Sendable
     /// Render. Adopts the pending payload, if any, and retires the previous one; never releases or allocates.
     /// - `.ok`: a pending payload was adopted, so `current` changed. This holds even if the displaced payload's
     ///   retire was refused (the defensive path). That payload is then kept in `stalled`; the refused retire
-    ///   raised `.retireBacklog` and counts in `retire.refusedCount`.
+    ///   raised `.retireBacklog` and counts in `retire.refusedCount` or, contended, latched the authority's
+    ///   contended fault and counts in `retire.contendedRetireCount`.
     /// - `.empty`: nothing was pending; `current` is unchanged.
     /// - `.refused(.full)`: nothing was adopted (`current` is unchanged) because an earlier stalled retire is
-    ///   still refused. Each cycle retries a stalled payload first and adopts nothing until the retry succeeds.
+    ///   still refused (full or, contended, latched the authority's contended fault and counts in
+    ///   `retire.contendedRetireCount`). Each cycle retries a stalled payload first and adopts nothing until the
+    ///   retry succeeds.
     ///
     /// Must not be called from inside a `withCurrent` body on the same exchange: it would retire the payload
     /// that body is still reading, and control could reclaim it concurrently.

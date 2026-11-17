@@ -584,6 +584,7 @@
 		2545A6E54D6CED7167E5C871 /* PerformanceProjectSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4110A125C2BB87ABDCDFD281 /* PerformanceProjectSession.swift */; };
 		2551C4F8EE6F1F29FD2AB454 /* MetronomeConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D529810A29EBCDCB6E726CD /* MetronomeConfiguration.swift */; };
 		255369198DA1507813D527FE /* UMPCapabilityTests+Packet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A94ABB3AD4F25BD8AC7F76A /* UMPCapabilityTests+Packet.swift */; };
+		255C9C9BBFEED1F945B327C3 /* RealtimeHandoffTests+RetireChains.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9FE342826F66D28383C352F /* RealtimeHandoffTests+RetireChains.swift */; };
 		2598DF6781F2D98ECD198011 /* PerformPanelLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07CE9651024810D1644C4618 /* PerformPanelLayoutTests.swift */; };
 		25A06432C20DAB1CE4A6FAEF /* LegacySidecarAdoptionTests+Order.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9AC85E13530E43F9F3D0592 /* LegacySidecarAdoptionTests+Order.swift */; };
 		25A8DA4E832ACDA6B8C9AE98 /* MeterDisplayTests+Ballistics.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9D163911BE1757039924489 /* MeterDisplayTests+Ballistics.swift */; };
@@ -2181,6 +2182,7 @@
 		89851AA45F4510D502325239 /* AUEventBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FD3C7A5B013E8501714F71F /* AUEventBridgeTests.swift */; };
 		89A729187DF1607E264F24C5 /* StreamsV1Record.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84702610F18755FA65BAE836 /* StreamsV1Record.swift */; };
 		89A7F1AAE828BCFE3BAAA4A3 /* RealtimeHandoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AE3F327090227B3E98CC91C /* RealtimeHandoffTests.swift */; };
+		89B3B1AE0E40B218381974C7 /* RealtimeHandoffTests+RetireChains.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9FE342826F66D28383C352F /* RealtimeHandoffTests+RetireChains.swift */; };
 		89BA82A8E9170055E94E0371 /* WiringConnectionListText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 188A5CCF3D1EDAE937D6E77D /* WiringConnectionListText.swift */; };
 		89CBE1E66270AE1CF03BB640 /* MPEZoneTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CFAD1B9DF258A1B16303B64 /* MPEZoneTracker.swift */; };
 		89D392395FDACF0501FD73FC /* StudioNodeDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91BDAA2E7774E86BD873FC43 /* StudioNodeDisplay.swift */; };
@@ -5735,6 +5737,7 @@
 		B9B3F340EE0C7AB0EB8C7554 /* MIDIInputSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIInputSession.swift; sourceTree = "<group>"; };
 		B9C4F7825771C039E62BA128 /* ActivationTransaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivationTransaction.swift; sourceTree = "<group>"; };
 		B9FDE815579DD78FF0DA1F7C /* MetronomeRefusal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetronomeRefusal.swift; sourceTree = "<group>"; };
+		B9FE342826F66D28383C352F /* RealtimeHandoffTests+RetireChains.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RealtimeHandoffTests+RetireChains.swift"; sourceTree = "<group>"; };
 		BA8DF0E078599F86D994861C /* RemoteRoleTests+RawInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RemoteRoleTests+RawInput.swift"; sourceTree = "<group>"; };
 		BADFC68ABF0D8DFBBE52790E /* RealtimeHandoffTests+Scratch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RealtimeHandoffTests+Scratch.swift"; sourceTree = "<group>"; };
 		BAEF48255948E3D20F00166A /* HostAuthorityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostAuthorityTests.swift; sourceTree = "<group>"; };
@@ -10072,6 +10075,7 @@
 				D35BC0FF2D98A3143FE86018 /* RealtimeHandoffTests+ReleaseTombstones.swift */,
 				3D3402D7A5A78472D2B6FFB2 /* RealtimeHandoffTests+ReservedRing.swift */,
 				B60C9252E12F606D5EEE14E1 /* RealtimeHandoffTests+Retire.swift */,
+				B9FE342826F66D28383C352F /* RealtimeHandoffTests+RetireChains.swift */,
 				EB507E2707AA4734B9428AFA /* RealtimeHandoffTests+RetireStress.swift */,
 				BADFC68ABF0D8DFBBE52790E /* RealtimeHandoffTests+Scratch.swift */,
 				83B9A5531685B554F7877D17 /* RealtimeHandoffTests+ScratchStress.swift */,
@@ -13554,6 +13558,7 @@
 				58C611B30C1377FF367D2E94 /* RealtimeHandoffTests+ReleaseTombstones.swift in Sources */,
 				80ACB05F228BF888173BD20D /* RealtimeHandoffTests+ReservedRing.swift in Sources */,
 				819F5A6008D76A33D77F354D /* RealtimeHandoffTests+Retire.swift in Sources */,
+				89B3B1AE0E40B218381974C7 /* RealtimeHandoffTests+RetireChains.swift in Sources */,
 				D65DD2FFDAFF6A72B5CD7B00 /* RealtimeHandoffTests+RetireStress.swift in Sources */,
 				1057F8E01461EC3EE2A76F56 /* RealtimeHandoffTests+Scratch.swift in Sources */,
 				E3CEAEB94E8DE06BCC41B5F5 /* RealtimeHandoffTests+ScratchStress.swift in Sources */,
@@ -14520,6 +14525,7 @@
 				FD2F45F2CDD5AFBC1E3C76A2 /* RealtimeHandoffTests+ReleaseTombstones.swift in Sources */,
 				035D113C7E012BC99F26F7D1 /* RealtimeHandoffTests+ReservedRing.swift in Sources */,
 				AC0A5EB7F91102592B86CFDD /* RealtimeHandoffTests+Retire.swift in Sources */,
+				255C9C9BBFEED1F945B327C3 /* RealtimeHandoffTests+RetireChains.swift in Sources */,
 				802BF3D3416903E17B5B5EE2 /* RealtimeHandoffTests+RetireStress.swift in Sources */,
 				9FFE00EB22D31835A1FEA426 /* RealtimeHandoffTests+Scratch.swift in Sources */,
 				4000618D368269103FDCDFA0 /* RealtimeHandoffTests+ScratchStress.swift in Sources */,
