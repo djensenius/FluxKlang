@@ -74,7 +74,7 @@ each through `faultsRef._withUnsafeGuaranteedRef`, and one doc-comment mention a
 |---|---|---|
 | S1 | `Shared/Audio/Kernel/Events/SysExAssembler.swift:339` | `SysExAssembler.raise`, reached from `discard` and `extend`. Since FLP4 it raises through a `FaultChainAuthority` chain token, not `FaultLatch.raise` (section 3.1) |
 | S2 | `Shared/Audio/Kernel/Memory/FanInHandoff.swift:365` | `FanInHandoff.claimProducer` |
-| S3 | `Shared/Audio/Kernel/Memory/DeferredRelease.swift:122` | `DeferredReleaseQueue.retire` |
+| S3 | `Shared/Audio/Kernel/Memory/DeferredRelease.swift:122` | `DeferredReleaseQueue.retire`. Since FLP5 it raises through a `FaultChainAuthority` chain token, not `FaultLatch.raise` (section 3.3) |
 | S4 | `Shared/Audio/Kernel/Memory/ReservedCapacityRing.swift:238` | `ReservedCapacityRing.refuse` |
 
 Common to all four: none of them checks that its scope is prepared. The scope is
@@ -159,6 +159,25 @@ faults no longer share a latch with the kernel cycle. Still **UNPROVEN**: a real
 | Verdict | **UNPROVEN** |
 | Evidence a proof needs | The real render caller of `beginCycle` or `retire`, its serialization, and every other component whose raises share this latch |
 
+**Since FLP5** (#190; model in [fault-latch-chain-tokens.md](fault-latch-chain-tokens.md)
+section 7). The citations above are against this document's baseline; after FLP5 the
+only raise is at `DeferredRelease.swift:152`, in `retire` (`:138`). `DeferredReleaseQueue`
+now takes a `FaultChainAuthority` instead of a `FaultLatch` and mints one chain in
+`init` (`:115`), after the policy checks and the ring (a refusal is
+`.chainBudgetExhausted`). `retire` takes the chain's token first (`:142`), holds it
+across the push and the raise and puts it back before returning (`:154` to `:157`); a
+failed take (a concurrent `retire`) pushes nothing, latches the authority's scope-less
+contended fault, counts in `contendedRetireCount` and returns `.refused(.notOwner)`
+with the +1 left with the caller (`:143` to `:146`). `RetiringExchange.beginCycle` and
+`PreparedPlanSlot.beginCycle` treat that status like any refused retire: the payload
+stalls and is retried next cycle, at the cost of one stall per contended cycle
+(fail closed). That discharges two rows for the reference model, by construction:
+chains over the latch's lifetime are at most the authority's `chainBudget` (one per
+queue; every exchange or slot sharing a queue shares its chain), and the slot's
+acquire/release orders one context's completed raise before the next context's
+`retire`. Still **UNPROVEN**: a real render caller (FLP2: one chain per render block
+and generation) and whether its scope is prepared.
+
 ### 3.4 S4: `ReservedCapacityRing.refuse` (`ReservedCapacityRing.swift:238`)
 
 | Item | Finding |
@@ -238,7 +257,7 @@ sequencing edge between a completed raise and that chain's next admission.
 | Stale-clock reporting | Reported in `KernelCycleResult.resync` and telemetry, not on the latch. `FaultKind.staleClock` exists, but is not raised | `KernelCycle.swift:178` to `:179`; `KernelCycleTelemetry.swift:8` to `:10` |
 | Invalid-token paths in `FanInHandoff` | Refused with `.refused(.notOwner)` and counted; "no fault is raised" | `FanInHandoff.swift:369` to `:371`, `:392`, `:197` to `:199` |
 | Invalid or unknown scope | `raise` itself returns `.refused(.slotOutOfRange)` and counts in `unknownScopeFaults`; this is a result of S1 to S4, not a separate caller | `FaultLatch.swift:235` to `:240` |
-| `PreparedPlanSlot` and `RetiringExchange` | They reach `raise` only through `DeferredReleaseQueue.retire` (S3) | `PreparedPlanSlot.swift:82` to `:85`; `RetiringExchange.swift:75`, `:184`, and the `beginCycle` doc at `:143` |
+| `PreparedPlanSlot` and `RetiringExchange` | They reach `raise` only through `DeferredReleaseQueue.retire` (S3) | `PreparedPlanSlot.swift:84` to `:90`; `RetiringExchange.swift:75` to `:76`, `:188`, and the `beginCycle` doc at `:141` to `:150` (post-FLP5 lines) |
 
 Notes:
 
@@ -355,7 +374,9 @@ section 4):
   from a refused claim's raise to that chain's next claim.
 - [ ] S3: the render caller of `DeferredReleaseQueue.retire` (via
   `RetiringExchange` and `PreparedPlanSlot.beginCycle`) shown to be one chain or
-  a bounded set, and its ordering.
+  a bounded set, and its ordering. FLP5 provides both by construction for the
+  reference model (one chain per queue on a `FaultChainAuthority`; section 3.3);
+  open until a real render caller exists.
 - [ ] S4: the set of producers that can hold a lane over the latch's life,
   their pushes ordered, and a hand-over ordering for successive holders of a lane
   (the code's edge at `FanInHandoff.swift:207` to `:213` holds only if each holder
