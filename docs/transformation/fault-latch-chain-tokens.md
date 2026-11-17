@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Issue | #190 (slice FLP3); roadmap #48, parent #64 |
-| Status | Reference model and tests. No call site is migrated. #190 remains open |
+| Status | Reference model and tests. S1 (`SysExAssembler`) migrated in FLP4; S2 to S4 not yet. #190 remains open |
 | Source baseline | main at `66d15f01` |
 | Code | `Shared/Audio/Kernel/Memory/FaultLatch+Chains.swift` |
 | Tests | `FluxKlangTests/RealtimeHandoffTests+FaultChains.swift`, `FluxKlangTests/RealtimeHandoffTests+FaultChainsStress.swift` |
@@ -65,6 +65,17 @@ internal initializer takes another allocator so tests can reach the bound;
 production uses only the process allocator, and identities are unique per
 allocator.
 
+Batch minting and ownership checks (FLP7a, groundwork for FLP7b's per-lane S4
+chains). `mintChains(count:)` is all or nothing: under one lock it checks
+`1 <= count <= chainBudget - minted`, then adds `count`, and allocates the
+chains (consecutive ids) after the lock; a refusal returns `nil` and spends
+nothing. `mintChain()` is `mintChains(count: 1)?.first`. Both are control-side
+only (`Mutex`, allocation). `issued(_:)` is `true` only for a chain this
+authority minted (exact within one identity allocator; production uses only
+the process allocator), and `isObservation(_:)` only for an observation of its latch
+(`FaultObservation.isObservation(of:)`), so callers can check ownership without
+the latch being exposed.
+
 ## 3. Why the Raise-context contract holds
 
 Scope of the argument: every `FaultLatch.raise` on an authority's latch, which
@@ -125,8 +136,9 @@ budget must fail closed (section 5), never recycle.
   allocation, no retry loop, no blocking at the source level.
 - `isLatched`: `FaultLatch.isLatched` (one acquiring load), then one acquiring
   load of the flag (section 5 gives the order).
-- Minting, `pending`, `observe` and `acknowledge` take a `Mutex` and stay on
-  control. Minting also allocates.
+- `issued`, `isObservation`: one identity comparison; no locks, no allocation.
+- Minting (`mintChain`, `mintChains`), `pending`, `observe` and `acknowledge`
+  take a `Mutex` and stay on control. Minting also allocates.
 - Not checked here: `@_noAllocation`/`@_noLocks` on these paths, ARC
   retain/release on the class references at `-Onone`, and target lowering of
   the atomics. As for `FaultLatch` (Progress), they stay unqualified for #64.
@@ -171,8 +183,9 @@ mint left, or its chain's token was lost) has no counted path and must fall back
 
 ## 6. What this does not prove
 
-- No real caller is migrated or identified. S1 to S4 still call
-  `FaultLatch.raise` directly on latches they are given, outside this model.
+- No real caller is identified. S1 is migrated (FLP4, section 7) but still has
+  no real caller (#81); S2 to S4 still call `FaultLatch.raise` directly on
+  latches they are given, outside this model.
 - `FaultLatch.raise` is still callable on any latch not built by an authority.
   Nothing yet stops new code from doing that; a lint tripwire is a follow-up.
 - Unsafe escapes of a token (`nonisolated(unsafe)`, `@unchecked Sendable`
@@ -204,7 +217,7 @@ token back.
 
 | FLP1 §8 item | This slice | Still needed (UNPROVEN until then) |
 |---|---|---|
-| S1 `SysExAssembler` | Mechanism only | One chain per assembler and receive-block generation; `accept` takes the token for the whole call (it can raise twice in one call); a failed take means a concurrent `accept`, which must also leave assembler state alone |
+| S1 `SysExAssembler` | **Migrated (FLP4)**: `init` takes a `FaultChainAuthority` and mints one chain per assembler, last, after every pure check and the output claim (`.chainBudgetExhausted`); `accept` takes the token after its pure guards, holds it for the whole call (two raises in one call stay on one token) and puts it back on every path; a failed take changes no assembler state, calls `raiseContended()`, counts `contendedChunkCount` and returns `.refused(.notOwner)`. K <= `chainBudget` per authority by construction; per-assembler happens-before edge via the slot. Tests: `RealtimeHandoffTests+SysExChains.swift`, `SysExChainingStress` | Real caller still #81. Successive calling contexts share the assembler's one chain, ordered by its slot, so no per-generation minting is needed. A SysEx authority cannot share the kernel cycle's latch (the authority never hands its latch out), so SysEx faults live on their own authority |
 | S2 `claimProducer` | Mechanism only | One chain per producer context, minted at preparation; a refused claim raises with that context's token |
 | S3 `retire` via `beginCycle` | Mechanism only | One chain per render block and generation; `beginCycle` holds the token for the cycle |
 | S4 `ReservedCapacityRing.refuse` | Mechanism only | One chain per lane, taken by each lane holder, so the slot's edge orders successive holders' raises; whether that can replace the "stop pushing before release" caller contract is for that slice to show |
@@ -228,3 +241,12 @@ bounded `Thread` stress where every attempt is either one counted raise or one
 fallback, holders never overlap, and a plain counter touched only by token
 holders matches the counted total. The kernel mirror's TSan filter
 (`Stress`) includes the stress test.
+
+FLP7a adds, in the same suites: `batchMintIsAllOrNothing`,
+`batchMintRejectsNonPositiveCount`, `batchMintIdsAreConsecutiveAndOwned`,
+`issuedRejectsForeignChain`, `isObservationRejectsTwinAuthority`, and the stress
+test `concurrentBatchMintsNeverOvershootBudget` (racing batch mints never
+overshoot the budget, and the grants are exactly ids `1...mintedChains`).
+`ReservedRingValidation.validateRefusesExactlyWhatInitRefuses` pins
+`ReservedCapacityRing.validate(_:)`, the ring init's pure policy checks that
+FLP7b can run before minting, to the init's refusals.
