@@ -61,9 +61,13 @@ extension ProjectMigrationTests {
             return .object(fields)
         }
 
-        /// The archive's production files, read from the checkout or from the package mirror; empty when absent.
+        /// The archive's and the retirement's production files, read from the checkout or from the package mirror;
+        /// empty when absent.
         static func archiveSources() -> [String] {
-            let names = ["LegacyMigrationArchive.swift", "LegacyMigrationArchiveOutcome.swift"]
+            let names = [
+                "LegacyMigrationArchive.swift", "LegacyMigrationArchiveOutcome.swift", "LegacyDraftRetirement.swift",
+                "LegacyDraftRetirementOutcome.swift"
+            ]
             let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             let relative = "Shared/Persistence/Adoption/Migration/"
             let parent = folder.deletingLastPathComponent()
@@ -229,24 +233,57 @@ extension ProjectMigrationTests {
         #expect(store.shapes(at: Archive.destination) == archive)
     }
 
+    /// An existing archive that is not a valid commit record is refused, never overwritten. A live USB map or project
+    /// ID that changed after archiving is not this case (rule A); `ProjectMigrationTests+Retire.swift` pins those.
     @Test
     func differingArchiveIsRefusedNotOverwritten() throws {
-        var store = Legacy.volume([Legacy.connections: Fixture.connectionsBytes])
-        _ = try #require(Archive.archived(try Archive.run(&store)))
-        store.seedFile(Legacy.usbMap, Fixture.usbMapBytes)
-        var other = store
-        let archive = store.nodes.filter { StagingPlan.isWithin($0.key, of: Archive.destination) }
-        store.arm()
-        let mark = store.log.count
-        #expect(try Archive.run(&store) == .refused(.archiveDiffers))
-        #expect(store.log.dropFirst(mark).allSatisfy { !$0.operation.isMutating })
-        #expect(store.nodes.filter { StagingPlan.isWithin($0.key, of: Archive.destination) } == archive)
-
-        other.unseed(Legacy.usbMap)
-        other.arm()
-        let otherMark = other.log.count
-        #expect(try Archive.run(&other, projectID: ProjectID(validated: "prj.other")) == .refused(.archiveDiffers))
-        #expect(other.log.dropFirst(otherMark).allSatisfy { !$0.operation.isMutating })
+        let policy = try Archive.policy()
+        var source = Legacy.volume()
+        let report = LegacySourceReader.read(in: &source, limits: policy.packageLimits)
+        let valid = try #require(try LegacyMigrationArchive.contents(
+            report, projectID: Archive.projectID, policy: policy
+        ))
+        let project = try Archive.project(valid)
+        // In the order `contents` lists them, which the manifest records.
+        let members = [
+            LegacyMigrationArchive.connectionsPath, LegacyMigrationArchive.usbMapPath, LegacyMigrationArchive.draftPath
+        ].compactMap { path in valid.files.first { $0.path == path } }
+        func package(
+            files: [ProjectPackageFile]? = nil, _ edit: (inout ProjectDocument) -> Void = { _ in }
+        ) throws -> ProjectPackageContents {
+            var document = project
+            edit(&document)
+            return try ProjectPackageContents.make(
+                project: (LegacyMigrationArchive.projectPath, document), graphs: [], extraFiles: files ?? members,
+                policy: policy
+            )
+        }
+        let extra = ProjectPackageFile(path: "legacy/Extra.json", role: .opaqueState, bytes: Fixture.text("{}"))
+        let unsplittable = members.map {
+            $0.path == LegacyMigrationArchive.connectionsPath
+                ? ProjectPackageFile(path: $0.path, role: .opaqueState, bytes: Fixture.text("[]")) : $0
+        }
+        let cases: [(String, ProjectPackageContents)] = [
+            ("valid", try package()),
+            ("no record", try package { $0.extensions?["legacyMigration"] = nil }),
+            ("granted", try package { $0.extensions?["provenance"] = .object(["authority": .string("granted")]) }),
+            ("missing member", try package(files: members.filter { $0.path != LegacyMigrationArchive.usbMapPath })),
+            ("extra member", try package(files: members + [extra])),
+            ("unsplittable member", try package(files: unsplittable))
+        ]
+        for (label, contents) in cases {
+            var store = Legacy.volume()
+            store.seed(package: contents, at: Archive.destination)
+            let before = store.nodes
+            let outcome = try Archive.run(&store)
+            if label == "valid" {
+                guard case .alreadyArchived = outcome else { Issue.record("valid: \(outcome)"); continue }
+            } else {
+                #expect(outcome == .refused(.archiveDiffers), "\(label)")
+            }
+            #expect(store.mutations.isEmpty, "\(label)")
+            #expect(store.nodes == before, "\(label)")
+        }
 
         var file = Legacy.volume()
         file.seedFile(Archive.destination, Data("not a package".utf8))
@@ -315,14 +352,16 @@ extension ProjectMigrationTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: scratch.path).isEmpty)
     }
 
-    /// The archive's sources name no store, cloud type or link-following file API; it works only through the protocol.
+    /// The archive's and the retirement's sources name no store, cloud type or link-following file API, and no call
+    /// that removes, deletes, creates or replaces a node; they work only through the protocol.
     @Test
     func archiveSourcesNameNoStoreOrCloudType() {
         let sources = Archive.archiveSources()
-        #expect(sources.count == 2)
+        #expect(sources.count == 4)
         let banned = [
             "JSONFileStore", "CloudKeyValueStore", "CloudStore", "Ubiquitous", "AppPersistence", "contentsOf",
-            "FileManager", "FileHandle", "NSData", "fopen", "Data(contentsOf", "replaceExisting", "removeTree"
+            "FileManager", "FileHandle", "NSData", "fopen", "Data(contentsOf", "replaceExisting", "removeTree",
+            "createFile", "removeItem", "removeNode", "unlink", "remove(", "delete(", "renameat(", "replaceItem"
         ]
         for text in sources {
             for word in banned { #expect(!text.contains(word), "\(word)") }

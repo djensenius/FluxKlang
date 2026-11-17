@@ -170,7 +170,8 @@ extension ProjectMigrationTests {
         #expect(Archive.untouched(store) == Archive.untouched(start))
     }
 
-    /// An existing, identical archive is not `alreadyArchived` when the second source read differs.
+    /// An existing, identical archive is not `alreadyArchived` when the archived draft vanishes while it is validated:
+    /// the draft names no longer agree with the archive (P12 rule A; Home wiring and the USB map are not re-read).
     @Test
     func changedSourceOverAnExistingArchiveIsNotAlreadyArchived() throws {
         let (start, log) = try secondRun()
@@ -180,7 +181,7 @@ extension ProjectMigrationTests {
         var store = start
         store.arm(ArchiveVolume.Script(remove: [recheck: Legacy.draft]))
         let mark = store.log.count
-        #expect(try Archive.run(&store) == .refused(.sourcesChanged))
+        #expect(try Archive.run(&store) == .refused(.archiveDiffers))
         #expect(store.log.dropFirst(mark).allSatisfy { !$0.operation.isMutating })
         #expect(store.shapes(at: Archive.destination) == start.shapes(at: Archive.destination))
     }
