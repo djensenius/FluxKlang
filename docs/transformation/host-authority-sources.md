@@ -66,7 +66,7 @@ existing APIs.
 |---|---|---|---|---|
 | `HostID` | Process-wide owner (*proposed* `HostAuthorityOwner`) | Once, in the owner's init | Never during the process; a new launch is a new host | `DeviceCapability.swift:35-36` |
 | `HostEpoch` | Owner | Once, in init: the new `HostID` with `Generation.initial` | Never during the process (decision 1) | `CommandContracts.swift:19-22`, `Revisions.swift:98` |
-| `PermissionFingerprint?` (live) | Owner, set only by the AU8b grant owner | `nil` at launch; set by an explicit Host-role grant gesture | Revoke clears it to `nil`; any change stales tickets (`staleLive`) | `HostAuthorityTypes.swift:13-14`, `HostCommandGate.swift:109-111`, `:132-134` |
+| `PermissionFingerprint?` (live) | Owner, minted from the AU8b grant owner's role with a never-reused grant revision (decision 2) | `nil` at launch; set by an explicit Host-role grant gesture | Revoke clears it to `nil`; every grant mints new bytes, so any change, including revoke then regrant, stales tickets (`staleLive`) | `HostAuthorityTypes.swift:13-14`, `HostCommandGate.swift:109-111`, `:132-134` |
 | `DeviceCapabilityDocument` | Owner | In init, for the same `host` and `hostEpoch` generation; minimal (decision 9) | Not during the process in AU8 | `DeviceCapability.swift:288-292` |
 | `GenerationLedger` | `HostAuthority`, seeded by the owner | In init, primary clock per decision 9; the actor declares the context key | Context bumps on every lease grant, release and loss | `GenerationLedger.swift:70`, `:83`; `HostAuthorityBook.swift:53-58`, `:202-214`, `:218-228` |
 | `HostAuthority` | Owner | Once, in init, with `sendScope: WingDirectSendScope()` | Never replaced during the process | `HostAuthority.swift:48-54`; `WingDirectSendScope.swift:56-59`, `:76` |
@@ -109,10 +109,11 @@ These sequences describe the design after AU8a–AU8c; none runs today.
 document and ledger for that epoch, the Studio `ProjectID`, and the `HostAuthority` with `permission: nil`. It
 opens the Studio project with an empty running graph. No lease is held, so every window observes `.stopped`.
 
-**Grant (AU8b).** A user gesture in a host window grants the Host role. The grant owner builds the fingerprint and
-the owner calls `updateLive` with the same epoch and the new permission. Revoking calls `updateLive` with `nil`.
-Each change stales every outstanding ticket (`HostCommandGate.swift:132-134`). Until AU8b exists the permission stays
-`nil` and every gated write is refused.
+**Grant (AU8b).** A user gesture in a host window grants the Host role. The grant owner passes the role. The owner
+raises its grant revision, mints the fingerprint (decision 2) and calls `updateLive` with the same epoch and the new
+permission. Revoking calls `updateLive` with `nil` and leaves the revision as it is. Because no two grants share a
+fingerprint, each change stales every outstanding ticket (`HostCommandGate.swift:132-134`), including a ticket left
+over from before a revoke and regrant. Until AU8b exists the permission stays `nil` and every gated write is refused.
 
 **Connect.** `AppModel.connect` establishes the WING session and nothing else in the authority: the owner records the
 controller's `sessionID` as the live session. It never acquires the render lease (decision 8). This holds for the
@@ -179,7 +180,14 @@ The user delegated these choices ("make your best assumption"); the coordinator 
    (`docs/transformation/workspace-ux/host-remote-roles.md:16-17`), and admission refuses a `nil` permission
    before any other running-set check (`CommandAdmission.swift:124-126`). Nothing is granted because a caller is
    local or in-process. Revoking clears it. Until the grant UI exists, gated writes refuse; that is why AU8a changes
-   no caller.
+   no caller. Each grant gets a fingerprint that is never reused in the process. Tickets and redemption compare
+   fingerprints by value (`HostCommandGate.swift:132-134`), and `updateLive` drops no ticket
+   (`HostAuthority.swift:136-138`). So if a regrant of the same role produced the same bytes, grant → revoke →
+   grant would make an untouched pre-revoke ticket redeemable again whenever its lease and context are unchanged.
+   The owner therefore mints the live fingerprint itself, the way the peer fingerprint includes its record
+   revision (`PeerTrustStore.swift:57-71`): a digest of the granted role plus a process-lifetime `UInt64` grant
+   revision. The revision starts at 1, rises on every grant, including a regrant of the same role, is never reset by
+   a revoke, and refuses a grant rather than wrap. The grant owner (AU8b) passes the role, not a fingerprint.
 3. **Render lease without an audio engine.** The connected WING session is the leased output. The lease is
    acquired at apply time (decision 8) and ends on a planned loss with `release` or on an unplanned drop with
    `leaseLost` (decision 7). Each new lease has a new token and context, so old tickets go stale. (Amended by
@@ -251,7 +259,7 @@ The user delegated these choices ("make your best assumption"); the coordinator 
 
 | Slice | Owner | Content | Limits |
 |---|---|---|---|
-| AU8a | Worker | `Shared/Host/Runtime/HostAuthorityOwner.swift` (*proposed*): the owner of section 3, its `shared` instance, the session, apply-time acquire, attach, release, drop, verified-reconnect restore, demo and window hooks, the permission input that only AU8b calls (*proposed*), and the admission provider. No caller changes | Owner at most 150 lines; `FluxKlangTests/HostAuthorityTests+Owner.swift` at most 250 lines, registered by the coordinator |
+| AU8a | Worker | `Shared/Host/Runtime/HostAuthorityOwner.swift` (*proposed*): the owner of section 3, its `shared` instance, the session, apply-time acquire, attach, release, drop, verified-reconnect restore, demo and window hooks, the role grant and revoke input that only AU8b calls, which mints the live fingerprint with the grant revision (decision 2, *proposed*), and the admission provider. No caller changes | Owner at most 150 lines; `FluxKlangTests/HostAuthorityTests+Owner.swift` at most 250 lines, registered by the coordinator |
 | AU8b | Worker | The host-user permission grant owner and a minimal grant and revoke gesture; the only path to a non-`nil` live permission | No peer path, no automatic grant |
 | AU7c | Coordinator | Composition root: construct `shared` at launch, call the owner from `AppModel`'s connect, disconnect and demo functions, thread each scene's `WindowID` into `StudioView` and `applyStudio` | Wiring only; the verified-reconnect signal is a separate follow-up |
 | AU8d | Worker (follow-up, after AU7c) | Verified-reconnect signal: report from the WING path that a new session is connected and its state re-read, and feed it to the owner's verified-reconnect input | Until it lands, a drop leaves gated writes refused |
@@ -260,7 +268,7 @@ The user delegated these choices ("make your best assumption"); the coordinator 
 ## 9. AU8a test plan
 
 Each test names the mutation that must make it fail. Mutations are applied to production code in a throwaway mirror
-only and restored. Except the first row, each test first grants a fixture fingerprint through that input.
+only and restored. Except the first row, each test first grants the Host role through that input.
 
 | Test | Expectation | Mutation that must fail it |
 |---|---|---|
@@ -271,6 +279,7 @@ only and restored. Except the first row, each test first grants a fixture finger
 | Unplanned drop, then verified reconnect | After the drop hook, admissions are `.gate(.unavailable(.recovering))`; after a new session, apply-time acquire and the verified-reconnect input, the owner completes its restore and a new ticket is admitted | Owner never drains its lane or never calls `restoreCompleted` (writes stay refused) |
 | No restore without a verified reconnect | With the new session connected but no verified re-read, the project stays `.recovering` and admissions are refused | Owner calls `restoreCompleted` as soon as it acquires, without the verified reconnect |
 | Demo Mode holds no lease | After entering Demo Mode no lease is held, earlier tickets are `.staleLease`, and nothing is queued | Owner keeps the lease, or raises `leaseLost`, on entering Demo Mode |
+| Revoke then regrant stales old tickets | Grant the Host role and admit ticket T, leaving it unredeemed; revoke; grant the same role again with the lease and context unchanged; T redeems `.staleLive`, and the two grants' fingerprints differ | Owner mints the fingerprint without the grant revision, or resets the revision on revoke |
 | The epoch is minted once | `live.hostEpoch` is unchanged across connect, disconnect, drop, demo, grant and revoke | Owner mints a new epoch outside its init (for example on connect) |
 | One owner per process | `HostAuthorityOwner.shared` returns the identical instance on every read, with the same `HostID` | `shared` becomes a computed property that builds a new owner |
 | A new window attaches to an unattached lease | After the rendering window closes, the lease is held with no window; a new window's apply gesture attaches it and a ticket is admitted, with no `.lease(.alreadyHeld)` | Owner calls `acquire` instead of `attach` (refused `.lease(.alreadyHeld)`; the window stays `.heldByOther`) |
