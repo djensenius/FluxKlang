@@ -17,7 +17,8 @@ enum WingAddressClass: Hashable, Sendable {
     case fader, mute, pan, colour, sendLevel
 
     init?(address: String) {
-        let segments = address.split(separator: "/", omittingEmptySubsequences: false)
+        // Six splits cover the longest shape; any remainder lands in a seventh segment the switch refuses.
+        let segments = address.split(separator: "/", maxSplits: 6, omittingEmptySubsequences: false)
         guard segments.count >= 4, segments[0].isEmpty,
               let kind = WingNodeKind(rawValue: String(segments[1])),
               Self.index(segments[2], in: 1...kind.count) != nil else { return nil }

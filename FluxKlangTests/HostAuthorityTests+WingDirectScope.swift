@@ -70,13 +70,20 @@ extension HostAuthorityTests {
             "/ch/1/send/+1/lvl", "", "/ch/\u{0661}/mute", "/main/1/lvl", "/main/5/fdr", "/dca/17/fdr",
             "ch/1/mute", "/ch/1/mute/", "/ch//mute", "//ch/1/mute", "/x/ch/1/mute", "/ch/1/send/1/lvl/x",
             "/ch/1/send/1", "/ch/1 /fdr", "/ch/1/fdr ", "/ch/99999999999999999999/fdr",
-            "x/ch/1/mute", "wing/ch/1/fdr", "/ch//1/mute", "/ch/\u{FF11}/mute", "/ch/1/main/1/lvl"
+            "x/ch/1/mute", "wing/ch/1/fdr", "/ch//1/mute", "/ch/\u{FF11}/mute", "/ch/1/main/1/lvl",
+            "/ch/1/send/1/lvl/x/y", "/ch/1/mute////"
         ])
         func malformedOrOutOfRangeAddressesAreRefused(_ address: String) {
             #expect(WingAddressClass(address: address) == nil)
             for parameter in wingParameters {
                 #expect(!admits(address, parameter), "\(parameter)")
             }
+        }
+
+        @Test func aTargetWithManySeparatorsIsRefused() {
+            let address = "/ch/1/mute" + String(repeating: "/", count: 200_000)
+            #expect(WingAddressClass(address: address) == nil)
+            #expect(!admits(address, ParameterCatalog.wingMute))
         }
 
         @Test(arguments: [
