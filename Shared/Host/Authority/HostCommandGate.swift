@@ -58,8 +58,16 @@ enum DirectWriteRefusal: Error, Hashable, Sendable {
     /// `detach` of its window, or dropped as unredeemable at capacity.
     case notOutstanding
     case recovering
-    /// `HostAuthority.directWriteCapacity` redeemable tickets are outstanding.
+    /// `HostAuthority.directWriteCapacity` redeemable tickets, or
+    /// `HostAuthority.directSendCapacity` armed send grants, are outstanding.
     case tooManyOutstanding
+    /// A send grant's targets are empty, repeat, or exceed `HostAuthority.directSendBatchLimit`.
+    case invalidBinding
+    /// A send grant's target is not admitted by the authority's `DirectSendScopePolicy`
+    /// under the ticket's scope.
+    case outOfScope
+    /// A send to a target the grant does not bind, or already sent; the grant is revoked.
+    case notGranted
 }
 
 /// What a ticket is checked against at redemption, read from the book at that moment.

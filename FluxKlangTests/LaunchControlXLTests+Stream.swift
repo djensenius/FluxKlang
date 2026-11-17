@@ -109,33 +109,6 @@ extension LaunchControlXLTests {
         #expect(mapping.actions(for: outputs) == [.fader(slot: 0, value: 100 / 127)])
     }
 
-    /// T5: the message shim feeds exactly the bytes of each valid CC and drops channels outside 1...16 and data
-    /// bytes of 0x80 or more.
-    @Test func messageShimMatchesBytesAndDropsInvalid() throws {
-        func control(_ channel: Int, _ controller: UInt8, _ value: UInt8) -> MIDIControlChange {
-            MIDIControlChange(channel: channel, controller: controller, value: value)
-        }
-        let valid = [control(16, 5, 127), control(1, 0, 0), control(16, 64, 100), control(9, 119, 1)]
-        let validBytes: [[UInt8]] = [[0xBF, 5, 127], [0xB0, 0, 0], [0xBF, 64, 100], [0xB8, 119, 1]]
-        let invalid = [
-            control(0, 5, 127), control(17, 5, 127), control(-1, 5, 127), control(16, 0x80, 1), control(16, 5, 0x80),
-            control(16, 0xFF, 0xFF)
-        ]
-        #expect(valid.map { LaunchControlXLStream.bytes(of: $0) } == validBytes.map(Optional.some))
-        for message in invalid {
-            #expect(LaunchControlXLStream.bytes(of: message) == nil, "\(message)")
-        }
-
-        var bytePath = try LaunchControlXLStream.make()
-        let byteOutputs = bytePath.feed(packets: validBytes)
-        var shim = try LaunchControlXLStream.make()
-        let mixed = zip(valid, invalid).flatMap { [$1, $0] } + invalid.dropFirst(valid.count)
-        let shimOutputs = shim.feed(mixed)
-        #expect(byteOutputs.count == valid.count)
-        #expect(shimOutputs == byteOutputs)
-        #expect(shim.snapshot == bytePath.snapshot)
-    }
-
     /// T8: one source, bounded at CoreMIDI's `UInt16` length; a longer packet is refused whole, the longest consumed.
     @Test func oversizePacketConsumesNothing() throws {
         let mapping = try Self.bundledMapping()

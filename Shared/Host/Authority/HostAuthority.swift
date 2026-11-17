@@ -17,8 +17,10 @@ actor HostAuthority {
     static let planCapacity = 64
     /// Outstanding direct-write tickets (#62 AU1).
     static let directWriteCapacity = 64
-    /// Armed direct-send grants (#62 AU2).
+    /// Armed direct-send grants (#62 AU2); a batch grant holds one.
     static let directSendCapacity = 64
+    /// Targets bound to one direct-send grant (#62 AU4).
+    static let directSendBatchLimit = 256
 
     // Access audit (B1, #176 review). Isolation only forbids *synchronous* access
     // from outside the actor: module code may `await` a read of any internal
@@ -36,22 +38,29 @@ actor HostAuthority {
         didSet { book.revokeUnredeemableSendGrants() }
     }
     private let preparationLimits: AudioRoutingLimits?
+    /// Which targets a direct-send grant may bind under its ticket's scope (#62 AU5).
+    private let sendScope: any DirectSendScopePolicy
     private var preparation: PendingPreparation?
     private var preparationLifetime: OwnedPreparationLifetime = .vacant
 
     /// Declares `EngineLeaseRegistry.contextKey` in `ledger` unless it already is.
+    /// `sendScope` defaults to admitting no direct-send target.
     init(host ledger: GenerationLedger, live: HostLiveState,
-         planCapacity: Int = HostAuthority.planCapacity) throws(HostAuthorityRefusal) {
+         planCapacity: Int = HostAuthority.planCapacity,
+         sendScope: any DirectSendScopePolicy = DenyAllDirectSendScope()) throws(HostAuthorityRefusal) {
         book = try HostAuthorityBook(host: ledger, live: live, planCapacity: planCapacity)
         preparationLimits = nil
+        self.sendScope = sendScope
     }
 
     /// Construction-only custody. Never produces successful prepare answers or
     /// bound plans. Unsupported recovery work may remain blocked indefinitely.
     init(host ledger: GenerationLedger, live: HostLiveState, prepareOnly: AudioRoutingLimits,
-         planCapacity: Int = HostAuthority.planCapacity) throws(HostAuthorityRefusal) {
+         planCapacity: Int = HostAuthority.planCapacity,
+         sendScope: any DirectSendScopePolicy = DenyAllDirectSendScope()) throws(HostAuthorityRefusal) {
         book = try HostAuthorityBook(host: ledger, live: live, planCapacity: planCapacity)
         preparationLimits = prepareOnly
+        self.sendScope = sendScope
     }
 
     func snapshot() -> HostAuthoritySnapshot {
@@ -112,9 +121,11 @@ actor HostAuthority {
         book.outstandingDirectWriteCount
     }
 
-    /// `HostAuthorityBook.authorizeDirectSend(_:)`: the send runs in the grant's `consume`.
-    func authorizeDirectSend(_ ticket: DirectWriteTicket) -> Result<DirectWriteAuthorization, DirectWriteRefusal> {
-        book.authorizeDirectSend(ticket)
+    /// `HostAuthorityBook.authorizeDirectSend(_:targets:policy:)` under this authority's
+    /// `sendScope`: each send runs in the grant's `consume`.
+    func authorizeDirectSend(_ ticket: DirectWriteTicket,
+                             targets: [DirectSendTarget]) -> Result<DirectWriteAuthorization, DirectWriteRefusal> {
+        book.authorizeDirectSend(ticket, targets: targets, policy: sendScope)
     }
 
     /// `HostAuthorityBook.outstandingDirectSendCount`: armed send grants.

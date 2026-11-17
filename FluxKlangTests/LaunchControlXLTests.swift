@@ -39,11 +39,13 @@ struct LaunchControlXLTests {
         #expect(mapping.action(for: .init(channel: 1, controller: 5, value: 127)) == nil)
     }
 
-    @Test func midiDecoderHandlesChannel16AndRunningStatus() {
-        #expect(MIDIControlChange.decode([0xBF, 5, 127, 6, 64]) == [
-            MIDIControlChange(channel: 16, controller: 5, value: 127),
-            MIDIControlChange(channel: 16, controller: 6, value: 64)
-        ])
+    @MainActor
+    @Test func midiDecoderHandlesChannel16AndRunningStatus() async throws {
+        let mapping = try #require(LaunchControlXLConfiguration.bundled()).mapping
+        let bytes: [UInt8] = [0xBF, 5, 127, 6, 64]
+        let expected: [LaunchControlXLAction] = [.fader(slot: 0, value: 1), .fader(slot: 1, value: 64 / 127)]
+        #expect(try Self.stateActions(bytes, mapping: mapping) == expected)
+        #expect(await Self.dispatched([bytes], mapping: mapping) == expected)
     }
 
     @MainActor
@@ -54,7 +56,7 @@ struct LaunchControlXLTests {
         var dispatched: [LaunchControlXLAction] = []
         controller.setActionHandler { dispatched.append($0) }
 
-        await controller.receive([MIDIControlChange(channel: 16, controller: 5, value: 127)])
+        await controller.receive(packets: [[0xBF, 5, 127]])
 
         #expect(controller.lastAction == .fader(slot: 0, value: 1))
         #expect(dispatched.isEmpty)
@@ -68,7 +70,7 @@ struct LaunchControlXLTests {
         var dispatched: [LaunchControlXLAction] = []
         controller.setActionHandler { dispatched.append($0) }
 
-        await controller.receive([MIDIControlChange(channel: 16, controller: 45, value: 127)])
+        await controller.receive(packets: [[0xBF, 45, 127]])
         controller.moveBank(1, stripCount: 18)
         controller.moveBank(10, stripCount: 18)
 
@@ -113,14 +115,14 @@ extension LaunchControlXLTests {
 
     @MainActor
     static func dispatched(
-        _ messages: [MIDIControlChange], mapping: LaunchControlXLMapping
+        _ packets: [[UInt8]], mapping: LaunchControlXLMapping
     ) async -> [LaunchControlXLAction] {
         let controller = LaunchControlXLController(
             defaultConfiguration: LaunchControlXLConfiguration(version: 1, mode: .control, mapping: mapping)
         )
         var dispatched: [LaunchControlXLAction] = []
         controller.setActionHandler { dispatched.append($0) }
-        await controller.receive(messages)
+        await controller.receive(packets: packets)
         return dispatched
     }
 
@@ -136,12 +138,12 @@ extension LaunchControlXLTests {
                 }
             }
         }
-        let bytes = messages.flatMap { [0xB0 | UInt8($0.channel - 1), $0.controller, $0.value] }
+        let packets = messages.map { [0xB0 | UInt8($0.channel - 1), $0.controller, $0.value] }
         for mapping in [bundled, Self.pairedCCMapping] {
             let expected = messages.compactMap(mapping.action(for:))
             #expect(!expected.isEmpty)
-            #expect(try Self.stateActions(bytes, mapping: mapping) == expected)
-            #expect(await Self.dispatched(messages, mapping: mapping) == expected)
+            #expect(try Self.stateActions(packets.flatMap(\.self), mapping: mapping) == expected)
+            #expect(await Self.dispatched(packets, mapping: mapping) == expected)
         }
     }
 
@@ -169,8 +171,8 @@ extension LaunchControlXLTests {
         ])
         let sustain: [LaunchControlXLAction] = [.fader(slot: 6, value: 100 / 127), .fader(slot: 6, value: 0)]
         #expect(Self.pairedCCMapping.actions(for: outputs) == sustain)
-        let messages = [UInt8(100), 0].map { MIDIControlChange(channel: 16, controller: 64, value: $0) }
-        #expect(await Self.dispatched(messages, mapping: Self.pairedCCMapping) == sustain)
+        let packets: [[UInt8]] = [[0xBF, 64, 100], [0xBF, 64, 0]]
+        #expect(await Self.dispatched(packets, mapping: Self.pairedCCMapping) == sustain)
 
         var modeMapping = Self.pairedCCMapping
         modeMapping.faderCCs = Array(120...127)
@@ -200,7 +202,8 @@ extension LaunchControlXLTests {
         ))
     }
 
-    /// T5: running status, also across interleaved real-time bytes, through the registry and the decoder path.
+    /// T5: running status, also across interleaved real-time bytes, through the registry and, one control change per
+    /// packet, the controller.
     @MainActor
     @Test func runningStatusStillMapsThroughTheState() async throws {
         let mapping = try #require(LaunchControlXLConfiguration.bundled()).mapping
@@ -210,32 +213,37 @@ extension LaunchControlXLTests {
             .moveBank(1)
         ]
         #expect(try Self.stateActions(bytes, mapping: mapping) == expected)
-        #expect(await Self.dispatched(MIDIControlChange.decode(bytes), mapping: mapping) == expected)
+        let packets: [[UInt8]] = [[0xBF, 5, 127], [0xBF, 6, 64], [0xBF, 38, 127], [0xBF, 37, 127], [0xBF, 102, 127]]
+        #expect(await Self.dispatched(packets, mapping: mapping) == expected)
     }
 
-    /// T7: the controller itself goes through the state: channel mode CCs, out-of-range data and channels map to
-    /// nothing even where the raw mapping would act, and an RPN selection does not capture the next CC 6.
+    /// T7: the controller itself goes through the state: channel mode CCs map to nothing even where the raw mapping
+    /// would act, a status byte where a data byte belongs starts a new message, and an RPN selection does not
+    /// capture the next CC 6. A value of 0x80 or a channel outside 1...16 has no byte form, so only the raw mapping
+    /// is pinned for those.
     @MainActor
     @Test func controllerRoutesMessagesThroughTheState() async throws {
         var modeMapping = Self.pairedCCMapping
         modeMapping.faderCCs = Array(120...127)
         let modes = (UInt8(120)...127).map { MIDIControlChange(channel: 16, controller: $0, value: 0) }
         #expect(!modes.compactMap(modeMapping.action(for:)).isEmpty)
-        #expect(await Self.dispatched(modes, mapping: modeMapping).isEmpty)
+        let modePackets = modes.map { [0xBF, $0.controller, $0.value] }
+        #expect(await Self.dispatched(modePackets, mapping: modeMapping).isEmpty)
 
         let bundled = try #require(LaunchControlXLConfiguration.bundled()).mapping
         let wide = MIDIControlChange(channel: 16, controller: 5, value: 0x80)
         #expect(bundled.action(for: wide) != nil)
-        #expect(await Self.dispatched([wide], mapping: bundled).isEmpty)
+        #expect(await Self.dispatched([[0xBF, 5, 0x80, 5, 127]], mapping: bundled).isEmpty)
+        let recovered = await Self.dispatched([[0xBF, 5, 0x80, 5, 127, 0xBF, 5, 127]], mapping: bundled)
+        #expect(recovered == [.fader(slot: 0, value: 1)])
         for channel in [0, 17] {
             var outside = bundled
             outside.channel = channel
             let message = MIDIControlChange(channel: channel, controller: 5, value: 127)
             #expect(outside.action(for: message) != nil)
-            #expect(await Self.dispatched([message], mapping: outside).isEmpty, "channel \(channel)")
         }
 
-        let rpnThenDataEntry = MIDIControlChange.decode([0xBF, 101, 0, 100, 0, 6, 127])
+        let rpnThenDataEntry: [[UInt8]] = [[0xBF, 101, 0], [0xBF, 100, 0], [0xBF, 6, 127]]
         #expect(await Self.dispatched(rpnThenDataEntry, mapping: Self.pairedCCMapping) == [
             .fader(slot: 5, value: 0), .fader(slot: 4, value: 0), .fader(slot: 0, value: 1)
         ])
