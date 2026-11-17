@@ -252,8 +252,11 @@ targets:
       - path: FluxKlangTests/PerformRecallTests+Release.swift
       - path: FluxKlangTests/ProjectStagingTests+Recovery.swift
       - path: FluxKlangTests/ProjectStagingTests+Scenario.swift
+      - path: FluxKlangTests/ProjectStagingTests+Disk.swift
+      - path: FluxKlangTests/ProjectStagingTests+DiskPrimitives.swift
       - path: FluxKlangTests/Fixtures/Persistence/InMemoryStagingFileSystem.swift
       - path: FluxKlangTests/MIDIProtocolTests.swift
+      - path: FluxKlangTests/MIDIProtocolTests+State.swift
       - path: FluxKlangTests/RealtimeHandoffTests.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Policy.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Faults.swift
