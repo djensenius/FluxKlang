@@ -1,5 +1,6 @@
-/// Persistent MIDI 1 state for the 16 channels of one logical stream. Per-source keying and sender cleanup,
-/// including the response to System Reset (FF), belong to #81; system messages never change this state.
+/// Persistent MIDI 1 state for the 16 channels of one logical stream. Per-source keying, sender cleanup and the
+/// per-source System Reset (FF) policy live in `MIDISourceRegistry` and `MIDISourceProfile`; endpoint lifecycle is
+/// #81. System messages never change this state.
 struct MIDI1PerformanceState: Equatable, Sendable {
     static let channelCount = 16
 
