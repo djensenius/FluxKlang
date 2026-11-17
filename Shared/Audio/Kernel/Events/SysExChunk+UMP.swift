@@ -53,7 +53,8 @@ struct SysExChunk: Sendable, BitwiseCopyable {
 
 extension SysExAssembler {
     /// Producer only. Accepts one UMP SysEx7 packet from `source`, forwarding to
-    /// `accept(source:status:bytes:count:frame:)` with the same state table and refusals. `source` is the
+    /// `accept(source:status:bytes:count:frame:)` with the same state table and refusals (including
+    /// `.refused(.notOwner)` when another context holds the chain token). `source` is the
     /// caller's endpoint or slot index; the packet's group is not consulted.
     func accept(source: UInt32, packet: UMPSysEx7Packet, frame: Int64 = 0) -> KernelStatus {
         let chunk = SysExChunk(packet)

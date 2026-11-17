@@ -12,7 +12,7 @@ private typealias Root = RealtimeHandoffTests
 struct SysExFixture {
     static let base: UInt16 = 9
     let ring: SPSCRing<SysExMessageRef>
-    let faults: FaultLatch
+    let faults: FaultChainAuthority
     let assembler: SysExAssembler
 
     init(sources: Int = 4, maximum: Int = 32, pool: Int = 128, ringCapacity: Int = 64,
@@ -21,7 +21,7 @@ struct SysExFixture {
         // Prepared neighbours on either side of the base catch a fault raised on the wrong handoff.
         let scopes = (0..<sources).map { FaultScope(handoff: Self.base, target: UInt32($0)) }
             + [FaultScope(handoff: Self.base &- 1, target: 0), FaultScope(handoff: Self.base &+ 1, target: 0)]
-        faults = try FaultLatch(scopes: scopes)
+        faults = try FaultChainAuthority(scopes: scopes, chainBudget: 1)
         assembler = try SysExAssembler(sources: sources, maximumMessageBytes: maximum, poolBytes: pool,
                                        output: ring, faults: faults, scopeBase: Self.base,
                                        startingCursor: startingCursor)
@@ -256,7 +256,8 @@ extension RealtimeHandoffTests {
                 let output = try ring ?? SPSCRing(policy: Root.sysexRingPolicy())
                 do {
                     _ = try SysExAssembler(sources: sources, maximumMessageBytes: maximum, poolBytes: pool,
-                                           output: output, faults: FaultLatch(scopes: [.init(handoff: 0, target: 0)]),
+                                           output: output, faults: FaultChainAuthority(
+                                               scopes: [.init(handoff: 0, target: 0)], chainBudget: 1),
                                            scopeBase: 0)
                     return nil
                 } catch let error as SysExAssembler.PreparationError {
