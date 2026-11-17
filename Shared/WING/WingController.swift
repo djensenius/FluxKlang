@@ -384,20 +384,21 @@ final class WingController {
         } catch { return false }
     }
 
-    /// Grant-gated SET (#62 AU3; no app callers yet). The transport sends `setting`
-    /// inside `authorization.consume`, so a grant the authority has revoked (lease,
-    /// live or commit change) never sends. Every call spends the grant exactly once,
-    /// refusals here included. That is stricter than `setConfirmedMixerValue`: a
-    /// refused call never keeps one of the 64 (`HostAuthority.directSendCapacity`)
-    /// armed grants. The grant is not bound to a WING address or scope, so it allows
-    /// any one setting. One grant and one transport actor hop per setting; batch
-    /// grants are later work (AU4).
+    /// Grant-gated SET (#62 AU3; no app callers yet): `applyDirect` with a batch of
+    /// one. The grant must bind `setting.address`, and every call spends the whole
+    /// grant, refusals here included, so a refused call never keeps one of the 64
+    /// (`HostAuthority.directSendCapacity`) armed grants.
     func setDirect(_ setting: WingSetting, session: UUID, authorization: DirectWriteAuthorization) async -> Bool {
+        await applyDirect([setting], session: session, authorization: authorization).sent == [setting]
+    }
+
+    /// One entry of a grant-gated batch: the controller checks, then the transport
+    /// sends inside `authorization.consume` for `setting.address`, so a revoked
+    /// grant never sends. Spends nothing on a controller refusal; the caller does.
+    func sendDirectEntry(_ setting: WingSetting, session: UUID,
+                         authorization: DirectWriteAuthorization) async -> Bool {
         guard !Task.isCancelled, !isDemo, connection.isConnected, sessionID == session,
-              let transportSessionID else {
-            try? authorization.consume { throw WingTransportError.notAuthorized }
-            return false
-        }
+              let transportSessionID else { return false }
         transportWriteCount += 1
         do {
             try await transport.sendDirect(setting, sessionID: transportSessionID, authorization: authorization)

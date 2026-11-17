@@ -9,6 +9,8 @@ private let windowA = AuthorityBench.windowA
 private let windowA2 = AuthorityBench.windowA2
 private let windowB = AuthorityBench.windowB
 private let liveParameter = ParameterID(validated: "parameter.live")
+/// Every grant here binds this one target.
+private let target = DirectSendTarget("target.direct")
 
 private func nextEpoch() throws -> HostEpoch {
     HostEpoch(host: AuthorityBench.host, generation: try Generation.initial.next())
@@ -45,7 +47,7 @@ private func ticket(_ authority: HostAuthority, window: WindowID = windowA) asyn
 }
 
 private func grant(_ authority: HostAuthority, window: WindowID = windowA) async throws -> DirectWriteAuthorization {
-    try await authority.authorizeDirectSend(try await ticket(authority, window: window)).get()
+    try await authority.authorizeDirectSend(try await ticket(authority, window: window), targets: [target]).get()
 }
 
 private func refusal<Success>(_ result: Result<Success, DirectWriteRefusal>) -> DirectWriteRefusal? {
@@ -64,7 +66,7 @@ private enum SendAttempt: Equatable {
 private func attempt(_ grant: DirectWriteAuthorization) -> SendAttempt {
     var runs = 0
     do {
-        try grant.consume { runs += 1 }
+        try grant.consume(target) { runs += 1 }
     } catch let refused as DirectWriteRefusal {
         return runs == 0 ? .refused(refused) : .broken
     } catch {
@@ -181,16 +183,16 @@ extension HostAuthorityTests {
             let stale = try await ticket(authority)
             await authority.updateLive(try live(epoch: try nextEpoch()))
             let before = await authority.snapshot()
-            #expect(refusal(await authority.authorizeDirectSend(stale)) == .staleLive)
+            #expect(refusal(await authority.authorizeDirectSend(stale, targets: [target])) == .staleLive)
             #expect(await authority.snapshot() == before)
             #expect(await authority.outstandingDirectSendCount() == 0)
             #expect(await authority.outstandingDirectWriteCount() == 0)
 
             await authority.updateLive(try live())
             let redeemed = try await ticket(authority)
-            let armed = try await authority.authorizeDirectSend(redeemed).get()
+            let armed = try await authority.authorizeDirectSend(redeemed, targets: [target]).get()
             let after = await authority.snapshot()
-            #expect(refusal(await authority.authorizeDirectSend(redeemed)) == .notOutstanding)
+            #expect(refusal(await authority.authorizeDirectSend(redeemed, targets: [target])) == .notOutstanding)
             #expect(await authority.snapshot() == after)
             #expect(await authority.outstandingDirectSendCount() == 1)
             #expect(armed.isArmed)
@@ -199,7 +201,7 @@ extension HostAuthorityTests {
         @Test func aThrowingSendStillConsumes() async throws {
             let authority = try await AuthorityBench.makeAuthority()
             let issued = try await grant(authority)
-            #expect(throws: SendFailed()) { try issued.consume { throw SendFailed() } }
+            #expect(throws: SendFailed()) { try issued.consume(target) { throw SendFailed() } }
             #expect(await authority.outstandingDirectSendCount() == 0)
             #expect(attempt(issued) == .refused(.notOutstanding))
         }
@@ -218,7 +220,7 @@ extension HostAuthorityTests {
 
             let refused = try await ticket(authority)
             #expect(await authority.outstandingDirectWriteCount() == 1)
-            #expect(refusal(await authority.authorizeDirectSend(refused)) == .tooManyOutstanding)
+            #expect(refusal(await authority.authorizeDirectSend(refused, targets: [target])) == .tooManyOutstanding)
             // Fails closed: the ticket is spent.
             #expect(await authority.outstandingDirectWriteCount() == 0)
             #expect(refusal(await authority.redeemDirect(refused)) == .notOutstanding)
@@ -243,7 +245,7 @@ extension HostAuthorityTests {
             let ticker = Ticker(), bodyExit = Stamp(), updateReturn = Stamp()
             defer { release.set() }
             Thread {
-                try? held.consume {
+                try? held.consume(target) {
                     entered.set()
                     let limit = ContinuousClock.now + .seconds(10)
                     while !release.isSet, ContinuousClock.now < limit { Thread.sleep(forTimeInterval: 0.001) }
