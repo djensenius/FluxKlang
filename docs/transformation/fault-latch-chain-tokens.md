@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Issue | #190 (slice FLP3); roadmap #48, parent #64 |
-| Status | Reference model and tests. S1 (`SysExAssembler`) migrated in FLP4; S2 to S4 not yet. #190 remains open |
+| Status | Reference model and tests. S1 (`SysExAssembler`) migrated in FLP4, S3 (`DeferredReleaseQueue.retire`) in FLP5; S2 and S4 not yet. #190 remains open |
 | Source baseline | main at `66d15f01` |
 | Code | `Shared/Audio/Kernel/Memory/FaultLatch+Chains.swift` |
 | Tests | `FluxKlangTests/RealtimeHandoffTests+FaultChains.swift`, `FluxKlangTests/RealtimeHandoffTests+FaultChainsStress.swift` |
@@ -183,9 +183,9 @@ mint left, or its chain's token was lost) has no counted path and must fall back
 
 ## 6. What this does not prove
 
-- No real caller is identified. S1 is migrated (FLP4, section 7) but still has
-  no real caller (#81); S2 to S4 still call `FaultLatch.raise` directly on
-  latches they are given, outside this model.
+- No real caller is identified. S1 and S3 are migrated (FLP4 and FLP5, section 7)
+  but still have no real caller (#81; a render caller); S2 and S4 still call
+  `FaultLatch.raise` directly on latches they are given, outside this model.
 - `FaultLatch.raise` is still callable on any latch not built by an authority.
   Nothing yet stops new code from doing that; a lint tripwire is a follow-up.
 - Unsafe escapes of a token (`nonisolated(unsafe)`, `@unchecked Sendable`
@@ -219,7 +219,7 @@ token back.
 |---|---|---|
 | S1 `SysExAssembler` | **Migrated (FLP4)**: `init` takes a `FaultChainAuthority` and mints one chain per assembler, last, after every pure check and the output claim (`.chainBudgetExhausted`); `accept` takes the token after its pure guards, holds it for the whole call (two raises in one call stay on one token) and puts it back on every path; a failed take changes no assembler state, calls `raiseContended()`, counts `contendedChunkCount` and returns `.refused(.notOwner)`. K <= `chainBudget` per authority by construction; per-assembler happens-before edge via the slot. Tests: `RealtimeHandoffTests+SysExChains.swift`, `SysExChainingStress` | Real caller still #81. Successive calling contexts share the assembler's one chain, ordered by its slot, so no per-generation minting is needed. A SysEx authority cannot share the kernel cycle's latch (the authority never hands its latch out), so SysEx faults live on their own authority |
 | S2 `claimProducer` | Mechanism only | One chain per producer context, minted at preparation; a refused claim raises with that context's token |
-| S3 `retire` via `beginCycle` | Mechanism only | One chain per render block and generation; `beginCycle` holds the token for the cycle |
+| S3 `retire` via `beginCycle` | **Migrated (FLP5)**: `DeferredReleaseQueue.init` takes a `FaultChainAuthority` and mints one chain per queue, last, after the policy checks and the ring (`.chainBudgetExhausted`); `retire` takes the token first, holds it across the push and the `.retireBacklog` raise and puts it back on every path; a failed take pushes nothing, calls `raiseContended()`, counts `contendedRetireCount` and returns `.refused(.notOwner)` with the +1 left with the caller. `RetiringExchange` and `PreparedPlanSlot` treat it as a refused retire (stall, retry next cycle; fail closed at the cost of a stall). K <= `chainBudget` per authority by construction; per-queue happens-before edge via the slot. Tests: `RealtimeHandoffTests+RetireChains.swift`, `RetireChainingStress` | A real render caller (FLP2: one chain per render block and generation). Every exchange or slot sharing a queue shares its one chain, so the token is held per `retire`, not per cycle |
 | S4 `ReservedCapacityRing.refuse` | Mechanism only | One chain per lane, taken by each lane holder, so the slot's edge orders successive holders' raises; whether that can replace the "stop pushing before release" caller contract is for that slice to show |
 | Global K over one latch, incl. unknown scopes | **Discharged by construction for raises through one authority**: K <= `chainBudget` <= 2^16 | Holds for the app only once every raiser on that latch goes through the authority, and each site's chains fit its budget |
 | C counters | Not discharged | A bound per counter lifetime, through a similar authority or a site proof |

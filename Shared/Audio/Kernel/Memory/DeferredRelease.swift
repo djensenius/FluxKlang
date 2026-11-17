@@ -34,17 +34,26 @@ import Synchronization
 /// path: it raises `.retireBacklog` on `scope`, returns `.refused(.full)`, and leaves the +1 with the caller
 /// (never released on render).
 ///
+/// Fault chain (#190 FLP5). `init` mints one chain from `faults`, and `retire` holds its token for the whole call,
+/// push included. Every fault is raised through that token, never through `FaultLatch.raise` directly; observers
+/// read the authority's `isLatched` (which includes the contended fault) and `hasContendedFault`. A `retire` that
+/// finds the token taken (a concurrent `retire`) does not push: it latches the authority's contended fault, counts
+/// in `contendedRetireCount`, returns `.refused(.notOwner)` and leaves the +1 with the caller.
+///
 /// `reservedCount` is a plain control-owned `Int` in `0...capacity`. It never wraps, and `reclaim` and
 /// `cancelReservation` clamp it at 0. This matters only when unreserved retires have occurred.
 ///
-/// Progress (source level only). `retire` makes one ring push and, on refusal, one bounded fault-scope lookup/raise.
-/// Atomic lowering/target progress is unqualified; ARC/allocation/lock checks cover only inspected configurations.
-/// Control `reclaim` releases up to `capacity` payloads; their `deinit` time is outside render's source-level bound.
+/// Progress (source level only). `retire` makes one token take (exchange), one ring push, on refusal one bounded
+/// fault-scope lookup/raise, and one token put (store); a contended call makes one store and one counter add
+/// instead of the push and put. Atomic lowering/target progress is unqualified; ARC/allocation/lock checks cover
+/// only inspected configurations. Control `reclaim` releases up to `capacity` payloads; their `deinit` time is
+/// outside render's source-level bound.
 ///
 /// `@unchecked Sendable`: one render thread may call `retire`, and one control thread may call everything else.
 /// Every user of a shared queue (for example several `RetiringExchange`s) must use that same render/control
-/// thread pair. This is documented, not enforced. `init` validates the policy. Teardown (`deinit`) is
-/// control-side and requires a detached render side (D10).
+/// thread pair. A concurrent second `retire` is refused as contended (see "Fault chain"), not raced; the
+/// control-side methods are not guarded. `init` validates the policy. Teardown (`deinit`) is control-side and
+/// requires a detached render side (D10).
 final class DeferredReleaseQueue: @unchecked Sendable {
     /// Why `init` refused to prepare a retire queue.
     enum PreparationError: Error, Equatable, Sendable {
@@ -52,6 +61,9 @@ final class DeferredReleaseQueue: @unchecked Sendable {
         case policy(HandoffPolicyError)
         /// The policy is valid but is not a render-to-control, refusing retire queue.
         case requires(Requirement)
+        /// `faults` has minted its whole chain budget. Checked last, after the policy and the ring, so no other
+        /// refusal consumes a budget unit.
+        case chainBudgetExhausted
     }
 
     /// What a retire queue's policy must declare.
@@ -63,20 +75,24 @@ final class DeferredReleaseQueue: @unchecked Sendable {
     let capacity: Int
 
     private let ring: SPSCRing<UInt>
-    private let faults: FaultLatch
+    private let authority: FaultChainAuthority
+    /// This queue's only fault chain, minted in `init`; `retire` holds its token for the whole call.
+    private let chain: FaultChain
     private let scope: FaultScope
-    /// Unretained aliases of `ring` and `faults`, for render. The strong `let`s above own both for this queue's
-    /// whole life, so these are valid whenever `self` is. Borrowing through them (`_withUnsafeGuaranteedRef`)
+    /// Unretained aliases of `ring`, `authority` and `chain`, for render. The strong `let`s above own them for this
+    /// queue's whole life, so these are valid whenever `self` is. Borrowing through them (`_withUnsafeGuaranteedRef`)
     /// avoids the retain/release that reading a stored class reference costs in an unoptimised (`-Onone`) build.
     private let ringRef: Unmanaged<SPSCRing<UInt>>
-    private let faultsRef: Unmanaged<FaultLatch>
+    private let authorityRef: Unmanaged<FaultChainAuthority>
+    private let chainRef: Unmanaged<FaultChain>
     /// Control-owned; reservations not yet returned by `reclaim` or `cancelReservation`.
     private var reserved = 0
+    private let contended = Atomic<UInt64>(0)
 
-    /// Control-side preparation. Requires `purpose == .retire`, render to control, and `.refuseProducer`.
-    /// The fault scope is not checked against `faults`; an unprepared scope still shows in
-    /// `FaultLatch.unknownScopeFaults`.
-    init(policy: HandoffPolicy, faults: FaultLatch, scope: FaultScope) throws(PreparationError) {
+    /// Control-side preparation. Requires `purpose == .retire`, render to control, and `.refuseProducer`, then
+    /// mints one chain from `faults` (last). The fault scope is not checked against `faults`; an unprepared scope
+    /// still shows in `FaultChainAuthority.unknownScopeFaults`.
+    init(policy: HandoffPolicy, faults: FaultChainAuthority, scope: FaultScope) throws(PreparationError) {
         do {
             try policy.validate()
         } catch {
@@ -96,12 +112,15 @@ final class DeferredReleaseQueue: @unchecked Sendable {
             case .unsupportedPolicy: throw .requires(.refuseProducer)  // Unreachable after the checks above.
             }
         }
+        guard let chain = faults.mintChain() else { throw .chainBudgetExhausted }
         self.ring = ring
         ringRef = Unmanaged.passUnretained(ring)
         self.policy = policy
         capacity = policy.capacity
-        self.faults = faults
-        faultsRef = Unmanaged.passUnretained(faults)
+        authority = faults
+        self.chain = chain
+        authorityRef = Unmanaged.passUnretained(faults)
+        chainRef = Unmanaged.passUnretained(chain)
         self.scope = scope
     }
 
@@ -110,16 +129,31 @@ final class DeferredReleaseQueue: @unchecked Sendable {
         reclaim()
     }
 
-    /// Render. Hands `object` (+1) to control. If the queue is full, it raises `.retireBacklog`, returns
-    /// `.refused(.full)` and leaves the +1 with the caller. It never releases; allocation checks are probe-scoped.
-    /// Control must have `reserve()`d a slot (see backpressure). Calls borrow the ring and fault latch through
-    /// unretained aliases; no retain/release was observed in the inspected configurations, including `-Onone`.
+    /// Render. Hands `object` (+1) to control. If the queue is full, it raises `.retireBacklog` through the chain
+    /// token, returns `.refused(.full)` and leaves the +1 with the caller. If another context holds the token, it
+    /// pushes nothing, latches the contended fault and returns `.refused(.notOwner)`, again leaving the +1 with the
+    /// caller. It never releases; allocation checks are probe-scoped. Control must have `reserve()`d a slot (see
+    /// backpressure). Calls borrow the ring, authority and chain through unretained aliases; no retain/release was
+    /// observed in the inspected configurations, including `-Onone` (FLP5 has not re-inspected them).
     func retire(_ object: Unmanaged<AnyObject>, frame: Int64) -> KernelStatus {
+        // `_withUnsafeGuaranteedRef` cannot return a noncopyable value or consume a captured one, so the token
+        // crosses the borrow through this optional.
+        var held: FaultChainToken?
+        chainRef._withUnsafeGuaranteedRef { held = $0.take() }
+        guard var token = held.take() else {
+            authorityRef._withUnsafeGuaranteedRef { $0.raiseContended() }
+            contended.wrappingAdd(1, ordering: .relaxed)
+            return .refused(.notOwner)
+        }
         let bits = UInt(bitPattern: object.toOpaque())
         let status = ringRef._withUnsafeGuaranteedRef { $0.tryPush(bits) }
         if status != .ok {
             let scope = scope
-            _ = faultsRef._withUnsafeGuaranteedRef { $0.raise(scope, .retireBacklog, frame: frame) }
+            _ = authorityRef._withUnsafeGuaranteedRef { $0.raise(&token, scope, .retireBacklog, frame: frame) }
+        }
+        held = consume token
+        chainRef._withUnsafeGuaranteedRef { chain in
+            if let token = held.take() { _ = chain.put(token) }
         }
         return status
     }
@@ -155,4 +189,18 @@ final class DeferredReleaseQueue: @unchecked Sendable {
 
     /// Render retires refused because the queue was full; saturates at `UInt64.max`.
     var refusedCount: UInt64 { ring.refusedCount }
+
+    /// Render retires refused because another context held the chain token (each also latched the contended
+    /// fault); wraps only after 2^64.
+    var contendedRetireCount: UInt64 { contended.load(ordering: .relaxed) }
+
+    /// Test seam, never on a render path: runs `body` while holding this queue's chain token, as a concurrent
+    /// `retire` would, then puts it back. `false` without calling `body` when the token is not in its slot (held
+    /// by a `retire` in progress, or lost). Never call it while a producer (render) may run: every retire in that
+    /// window is refused as contended and latches the contended fault.
+    func withChainTokenHeld(_ body: () -> Void) -> Bool {
+        guard let token = chain.take() else { return false }
+        body()
+        return chain.put(token) == .ok
+    }
 }

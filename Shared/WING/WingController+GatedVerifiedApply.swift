@@ -33,7 +33,8 @@ extension WingController {
     /// most `HostAuthority.directSendBatchLimit` addresses, just before sending that
     /// chunk, and spends it before the next chunk mints or verification starts. A
     /// phase with nothing to send mints nothing. A refused mint sends nothing more
-    /// in that phase or any later one, and the verdict is `.failed`.
+    /// in that phase or any later one, and the verdict is `.failed`. A WING session
+    /// that changed during the apply fails it with `confirmedCount` 0.
     func applyAndVerify(
         _ settings: [WingSetting],
         safetySettings: [WingSetting] = [],
@@ -67,6 +68,10 @@ extension WingController {
         )
     }
 
+    /// Verifies `expected`, then retries what is still pending in `retry`. A
+    /// session that changed during either verification delay fails with
+    /// `confirmedCount` 0, before the retry mints or the verdict is computed, since
+    /// another session's replies do not confirm this apply.
     private func verifyAndRetryDirect(
         _ expected: [WingSetting],
         sendFailed: Bool,
@@ -76,6 +81,7 @@ extension WingController {
     ) async -> WingApplyVerification {
         await refreshForVerification(expected.map(\.address))
         try? await Task.sleep(for: WingNetwork.applyVerificationDelay)
+        guard sessionID == session else { return directSessionChanged(expected) }
         var retried: [String] = []
         let sent = await sendDirectPhase(retry, session: session, minting: minting) {
             WingApplyVerifier.pendingSettings(expected: expected, confirmedValues: confirmedValues)
@@ -85,6 +91,7 @@ extension WingController {
             await refreshForVerification(retried)
             try? await Task.sleep(for: WingNetwork.applyVerificationDelay)
         }
+        guard sessionID == session else { return directSessionChanged(expected) }
         return WingApplyVerifier.result(
             expected: expected,
             confirmedValues: confirmedValues,
@@ -134,6 +141,16 @@ extension WingController {
             settings: expected,
             confirmedCount: 0,
             details: "The host did not authorize the WING write. Nothing more was sent."
+        )
+    }
+
+    /// Replies from a replacement session do not confirm this apply.
+    private func directSessionChanged(_ expected: [WingSetting]) -> WingApplyVerification {
+        WingApplyVerification(
+            state: .failed,
+            settings: expected,
+            confirmedCount: 0,
+            details: "The WING session changed during the apply. Nothing was confirmed."
         )
     }
 }

@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import Synchronization
 import Testing
 @testable import FluxKlang
 
@@ -98,11 +99,14 @@ actor GatedApplyMinter: WingDirectGrantMinting {
 /// `consume` and stores the value; a GET of a stored address is answered with it,
 /// so the controller confirms what was sent. `drop` leaves the next `times` writes
 /// of an address unstored (sent, never confirmed), `fail` makes its writes throw
-/// inside `consume`, and `holdNextWrite` holds the next successful direct write's
-/// return until `release()`.
+/// inside `consume`, `holdNextWrite` holds the next successful direct write's
+/// return until `release()`, and `replaceSession` reconnects during verification.
+/// Each `start` opens a fresh incoming stream, as a new socket would: a reconnect
+/// cancels the old listener, which ends the stream it was reading.
 actor EchoingDirectTransport: WingTransporting {
-    nonisolated let incoming: AsyncStream<WingIncoming>
-    private let continuation: AsyncStream<WingIncoming>.Continuation
+    private nonisolated let streams = Mutex(AsyncStream<WingIncoming>.makeStream())
+    nonisolated var incoming: AsyncStream<WingIncoming> { streams.withLock { $0.stream } }
+    private var continuation: AsyncStream<WingIncoming>.Continuation { streams.withLock { $0.continuation } }
     private(set) var sessionID: UUID?
     private(set) var peerHosts: Set<String> = []
     private(set) var directCalls = 0
@@ -114,12 +118,10 @@ actor EchoingDirectTransport: WingTransporting {
     private var holds = false
     private var held: CheckedContinuation<Void, Never>?
     private var holdWaiters: [CheckedContinuation<Void, Never>] = []
-
-    init() {
-        (incoming, continuation) = AsyncStream.makeStream()
-    }
+    private var replacing: (writes: Int, step: GatedApplyMinter.Step)?
 
     func start(remoteHost: String, localPort: UInt16?, broadcast: Bool) {
+        streams.withLock { $0 = AsyncStream.makeStream() }
         sessionID = UUID()
         peerHosts = [remoteHost]
     }
@@ -145,7 +147,19 @@ actor EchoingDirectTransport: WingTransporting {
         }
     }
 
-    func send(_ address: String, _ value: WingValue?, to host: String?, port: UInt16?) {
+    /// Before answering the first GET sent once `writes` direct writes were made,
+    /// runs `step` in its own task, so cancelling the querying task (a reconnect
+    /// cancels the bulk refresh) cannot cut it short; the GET is then answered on
+    /// whatever session is current, as a reconnect during verification would.
+    func replaceSession(afterWrites writes: Int, run step: @escaping GatedApplyMinter.Step) {
+        replacing = (writes, step)
+    }
+
+    func send(_ address: String, _ value: WingValue?, to host: String?, port: UInt16?) async {
+        if value == nil, let planned = replacing, directWrites.count >= planned.writes {
+            replacing = nil
+            await Task { await planned.step() }.value
+        }
         if let value {
             legacyWrites.append(WingSetting(address: address, value: value))
         } else if let value = stored[address], let sessionID, let host = peerHosts.first {

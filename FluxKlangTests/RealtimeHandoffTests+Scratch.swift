@@ -106,9 +106,9 @@ private struct ScratchRun {
 extension RealtimeHandoffTests {
     static let scratchRetireScope = FaultScope(handoff: 7, target: 0)
 
-    /// A dedicated M6 retire queue for one slot, with the latch it raises `.retireBacklog` on.
-    static func scratchRetireQueue(capacity: Int) throws -> (DeferredReleaseQueue, FaultLatch) {
-        let faults = try FaultLatch(scopes: [scratchRetireScope])
+    /// A dedicated M6 retire queue for one slot, with the authority it raises `.retireBacklog` through.
+    static func scratchRetireQueue(capacity: Int) throws -> (DeferredReleaseQueue, FaultChainAuthority) {
+        let faults = try FaultChainAuthority(scopes: [scratchRetireScope], chainBudget: 1)
         let retire = Self.policy(purpose: .retire, producer: .render, consumer: .control, capacity: capacity,
                                  deadline: .none)
         return (try DeferredReleaseQueue(policy: retire, faults: faults, scope: scratchRetireScope), faults)

@@ -378,7 +378,8 @@ extension RealtimeHandoffTests {
         }
 
         /// The box holds the only strong reference, so `box.value = nil` on the test thread is the teardown.
-        private static func prepare(capacity: Int, _ ledger: RetireLedger) throws -> (ExchangeBox, FaultLatch) {
+        private static func prepare(capacity: Int, _ ledger: RetireLedger) throws
+            -> (ExchangeBox, FaultChainAuthority) {
             let fixture = try RetiringExchanging.make(capacity: capacity, initial: RetireProbe(0, ledger))
             return (ExchangeBox(fixture.exchange), fixture.faults)
         }
