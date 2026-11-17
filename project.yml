@@ -646,6 +646,8 @@ targets:
       - path: FluxKlangTests/UMPFlexDataTests+Text.swift
       - path: FluxKlangTests/ProjectLegacyAdoptionTests.swift
       - path: FluxKlangTests/ProjectLegacyAdoptionTests+Refusals.swift
+      - path: FluxKlangTests/ProjectMigrationTests.swift
+      - path: FluxKlangTests/ProjectMigrationTests+Draft.swift
       - path: FluxKlangTests/PeerReconnectTests.swift
       - path: FluxKlangTests/PeerReconnectTests+Epochs.swift
       - path: FluxKlangTests/ParameterAutomationTests.swift
