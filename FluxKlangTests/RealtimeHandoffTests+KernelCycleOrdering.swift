@@ -5,19 +5,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
-private typealias Root = RealtimeHandoffTests
-
 private func noteOn(_ note: UInt8) -> KernelEventPayload { .noteOn(channel: 0, note: note, velocity: 100) }
 private func noteOff(_ note: UInt8) -> KernelEventPayload { .noteOff(channel: 0, note: note) }
 private func control(_ value: UInt32) -> KernelEventPayload { .control(channel: 0, controller: 7, value: value) }
-
-/// Render → control telemetry slots for one `KernelCycle`. Shared with
-/// `RealtimeHandoffTests+KernelCycleOrderingStress.swift`.
-func kernelCycleTelemetrySlots() throws -> TelemetrySlots<KernelCycleTelemetry> {
-    try TelemetrySlots(policy: Root.policy(purpose: .telemetry, producer: .render, consumer: .control, capacity: 2,
-                                           ordering: .latestOnly, deadline: .none, overflow: .overwriteLatest),
-                       slotCount: 2)
-}
 
 /// Thrown when a ticket the test expected was never requested.
 private struct CycleOrderingTicketMissing: Error {}
@@ -276,22 +266,6 @@ extension RealtimeHandoffTests {
             #expect(rig.cycle.telemetry.refusedNonMonotonic == 2 && rig.cycle.telemetry.refusedBeyondLookahead == 1)
         }
 
-        /// Kills: a slot outside the telemetry slots accepted at preparation.
-        @Test func telemetrySlotOutOfRangeRefusedAtPreparation() throws {
-            let rig = try CycleRig()
-            let slots = try kernelCycleTelemetrySlots()
-            let gate = try ClockPulseGate(maximumPulsesPerBlock: 4, staleTolerance: 0)
-            for slot in [-1, 2, Int.max] {
-                let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
-                                             safety: rig.safety, ramps: rig.ramps,
-                                             telemetry: KernelCycleTelemetryOutput(slots: slots, slot: slot,
-                                                                                   clockGeneration: 0))
-                #expect(throws: KernelCycle.PreparationError.telemetrySlotOutOfRange(slot)) {
-                    try KernelCycle(parts, pulses: gate, blockCapacity: 4, perLaneQuota: 4)
-                }
-            }
-        }
-
         /// (a) A stale sample never approves: neither a never-published read nor a cached front sample (no publish
         /// since, so `latest` keeps it on its relaxed path) with many faulted cycles. (c) Liveness: the next faulted
         /// cycle publishes the requested epoch and approves. Kills: acknowledging on cycle counts, on the epoch of
@@ -385,42 +359,6 @@ extension RealtimeHandoffTests {
                 }
                 #expect(sounded == oldCriterion && rig.ownership.isOwned(scope: 0, channel: 0, note: 9) == oldCriterion)
             }
-        }
-
-        /// A replacement cycle on the same telemetry slots restarts its epochs at 0; its faulted cycle at epoch 1
-        /// approves its own ticket only, never the replaced cycle's epoch-1 ticket. Kills: ignoring the identity.
-        @Test func replacementCycleOnTheSameSlotsNeverApprovesAnOldTicket() throws {
-            let slots = try kernelCycleTelemetrySlots()
-            let output = KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0)
-            let replaced = try CycleRig(telemetry: output)
-            #expect(replaced.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
-            let oldTicket = try replaced.cycle.ackRequests.request(
-                for: try #require(replaced.faults.observe(CycleRig.criticalScope)))
-            let replacement = try CycleRig(telemetry: output)
-            #expect(replacement.cycle.ackRequests.identity != replaced.cycle.ackRequests.identity)
-            #expect(replacement.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
-            let newTicket = try replacement.cycle.ackRequests.request(
-                for: try #require(replacement.faults.observe(CycleRig.criticalScope)))
-            #expect(oldTicket.epoch == newTicket.epoch && oldTicket.cycle != newTicket.cycle)
-            #expect(replacement.run(0, 64).0.status == .silenced(.scopeFaulted))
-            let sample = try #require(replacement.cycle.latestTelemetry()).value
-            #expect(sample.ackCycle == replacement.cycle.ackRequests.identity && sample.lastFaultedAckEpoch == 1)
-            #expect(sample.permitsAcknowledgement(newTicket) && !sample.permitsAcknowledgement(oldTicket))
-        }
-
-        /// Kills: an epoch that wraps instead of refusing once `UInt64.max` was requested.
-        @Test func exhaustedAckEpochRefusesWithoutWrapping() throws {
-            let rig = try CycleRig()
-            let requests = try #require(KernelAckRequests(
-                faults: rig.faults, criticalScope: CycleRig.criticalScope, lastRequestedForTesting: .max - 1))
-            #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
-            let observation = try #require(rig.faults.observe(CycleRig.criticalScope))
-            let last = try requests.request(for: observation)
-            #expect(last.epoch == .max)
-            #expect(throws: KernelAckRequests.RequestError.epochExhausted) {
-                _ = try requests.request(for: observation)
-            }
-            #expect(requests.lastRequested == .max)
         }
 
         /// Kills: `lastAdmittedFrame` advanced by a refused or full push; admission skipped; lookahead not checked

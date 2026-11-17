@@ -92,14 +92,6 @@ private func runWorkers(_ workers: [@Sendable (StressRun) -> Void]) -> Bool {
     return true
 }
 
-/// Per-worker result slots, written by each worker before it signals `joined`.
-private final class Slots<Value: Sendable>: Sendable {
-    private let values: Mutex<[Value?]>
-    init(_ count: Int) { values = Mutex(Array(repeating: nil, count: count)) }
-    func set(_ index: Int, _ value: Value) { values.withLock { $0[index] = value } }
-    func get(_ index: Int) -> Value? { values.withLock { $0[index] } }
-}
-
 private struct ProducerReport: Sendable {
     var lane: UInt8?
     var refusedGeneral: UInt64 = 0
@@ -291,8 +283,8 @@ extension RealtimeHandoffTests {
                 policy: Root.fanInPolicy(lanes: producers, laneCapacity: 32), laneCapacity: 32, reserved: 16,
                 faults: faults, claimFaults: Root.fanInClaims(), criticalScope: Root.fanInCriticalScope,
                 producerSlotsScope: Root.fanInSlotsScope)
-            let produced = Slots<ProducerReport>(producers)
-            let consumed = Slots<ConsumerReport>(1)
+            let produced = CycleSlots<ProducerReport>(producers)
+            let consumed = CycleSlots<ConsumerReport>(1)
             var workers: [@Sendable (StressRun) -> Void] = (0..<producers).map { producer in
                 { run in
                     var report = ProducerReport()
@@ -368,8 +360,8 @@ extension RealtimeHandoffTests {
                 producerSlotsScope: Root.fanInSlotsScope)
             let flags = OwnerFlags(lanes)
             let notes = LaneNotes(lanes)
-            let churned = Slots<ChurnReport>(claimers)
-            let consumed = Slots<BlockReport>(1)
+            let churned = CycleSlots<ChurnReport>(claimers)
+            let consumed = CycleSlots<BlockReport>(1)
             var workers: [@Sendable (StressRun) -> Void] = (0..<claimers).map { claimer in
                 { run in
                     var report = ChurnReport()
@@ -446,8 +438,8 @@ extension RealtimeHandoffTests {
             let capacities = [64, 64, 2]
             let fanOut = try FanOutHandoff<UInt64>(policies: capacities.map { Root.policy(capacity: $0) })
             let publishedFlag = PublishedFlag()
-            let published = Slots<[FanOutResult]>(1)
-            let received = Slots<[UInt64]>(capacities.count)
+            let published = CycleSlots<[FanOutResult]>(1)
+            let received = CycleSlots<[UInt64]>(capacities.count)
             var workers: [@Sendable (StressRun) -> Void] = [{ run in
                 var results: [FanOutResult] = []
                 results.reserveCapacity(total)

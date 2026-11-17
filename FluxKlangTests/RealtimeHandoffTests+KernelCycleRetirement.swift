@@ -425,28 +425,5 @@ extension RealtimeHandoffTests {
             let next = try direct.claimForCycle(fresh: false, from: direct.cycleClaimState())
             #expect(next.inheritedCarry.count == 0)
         }
-
-        /// The body of `func retire(` in `KernelCycle.swift` records through `carry.record(` and mentions no array
-        /// growth, `events` getter, planner or lock token. A source scan, not an allocation proof.
-        @Test(.enabled(if: Self.sourcesAreReachable, "the kernel sources are not next to the tests"))
-        func retirementCarryHandoffRetireSourceHasNoArrayOrLockToken() throws {
-            let directory = try #require(Self.eventsDirectory())
-            let text = try String(contentsOf: directory.appendingPathComponent("KernelCycle.swift"), encoding: .utf8)
-            let body = try #require(KernelRetirementCarryTests.functionBody("func retire(", in: text))
-            #expect(body.contains("carry.record("))
-            #expect(KernelRetirementCarryTests.arrayMutations(in: body).isEmpty)
-            let banned = [".events", "Mutex", ".lock", "lock()", "plan("]
-            #expect(banned.filter { body.contains($0) }.isEmpty)
-        }
-
-        private static func eventsDirectory(from path: String = #filePath) -> URL? {
-            let here = URL(fileURLWithPath: path).deletingLastPathComponent()
-            let candidates = ["../Shared/Audio/Kernel/Events", "../../Sources/FluxKlang/Shared/Audio/Kernel/Events"]
-            return candidates
-                .map { here.appendingPathComponent($0).standardizedFileURL }
-                .first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("KernelCycle.swift").path) }
-        }
-
-        private static let sourcesAreReachable = eventsDirectory() != nil
     }
 }

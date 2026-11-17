@@ -41,6 +41,8 @@ test FluxKlangTests/RealtimeHandoffTests+RefusalCallerTransfer.swift
 test FluxKlangTests/RealtimeHandoffTests+Faults.swift
 test FluxKlangTests/RealtimeHandoffTests+FaultsStress.swift
 test FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCycleFixtures.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCyclePreparationEdges.swift
 test FluxKlangTests/RealtimeHandoffTests+KernelCycleOrdering.swift
 test FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingAcknowledge.swift
 test FluxKlangTests/RealtimeHandoffTests+AckHandshakeModel.swift

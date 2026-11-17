@@ -14,6 +14,37 @@ private func noteOns(_ emitted: [CycleEmission]) -> [KernelEventPayload] {
     emitted.map(\.event.payload).filter { if case .noteOn = $0 { true } else { false } }
 }
 
+extension RealtimeHandoffTests.CycleRecovery {
+    /// Review finding 1. Kills: ordering only the newly drained run, leaving late events behind a kept future
+    /// `noteOn` (nothing is decided, and the late `noteOn` would later sound after its `noteOff`).
+    @Test func lateDrainMergesAheadOfKeptFutureEvents() throws {
+        let rig = try CycleRig()
+        let token = try #require(rig.events.claimProducer())
+        #expect(rig.push(cycleEvent(1_000, noteOn(70)), token) == .ok)
+        #expect(rig.run(0, 64).0.pending == 1)
+        #expect(rig.push(cycleEvent(10, noteOn(60)), token) == .ok)
+        #expect(rig.push(cycleEvent(5, noteOff(61)), token) == .ok)
+        let (result, emitted) = rig.run(64, 64)
+        #expect(emitted == [CycleEmission(event: cycleEvent(5, noteOff(61)), frame: 64),
+                            CycleEmission(event: cycleEvent(10, noteOn(60)), frame: 64)])
+        #expect(result.drained == 2 && result.dispatched == 2 && result.pending == 1)
+        #expect(rig.run(1_000, 64).1 == [CycleEmission(event: cycleEvent(1_000, noteOn(70)), frame: 1_000)])
+    }
+
+    /// Review finding 6, pinned: the E2 key orders a same-frame `noteOff` (release lane) before its `noteOn`
+    /// (content lane); round 4b's tie rule treats the `noteOn` as a retrigger, so a zero-length note sounds and
+    /// stays owned. Producers must not send zero-length notes.
+    @Test func zeroLengthNoteFromOneProducerIsReleaseFirst() throws {
+        let rig = try CycleRig()
+        let token = try #require(rig.events.claimProducer())
+        #expect(rig.push(cycleEvent(100, noteOn(60), sequence: 0), token) == .ok)
+        #expect(rig.push(cycleEvent(100, noteOff(60), sequence: 1), token) == .ok)
+        let (result, emitted) = rig.run(64, 64)
+        #expect(emitted.map(\.event.sequence) == [1, 0] && result.discardedSuperseded == 0)
+        #expect(rig.ownership.isOwned(scope: 0, channel: 0, note: 60))
+    }
+}
+
 extension RealtimeHandoffTests {
     /// #64 E5a round 4: release tombstones make "release wins" deterministic across lanes. Each partial drain
     /// below delivers a `noteOff` from lane 0 or 1 before an earlier-stamped `noteOn` of the same key from the

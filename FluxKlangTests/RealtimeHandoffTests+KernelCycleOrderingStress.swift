@@ -268,13 +268,6 @@ private struct AdmittingSource {
     return violations
 }
 
-/// Control's `.predecessorNotRetired` refusal count, which render waits on before it retires.
-private final class RetryProof: Sendable {
-    /// Most spins either side takes: a count, not a clock, so a stuck peer fails the test instead of hanging it.
-    static let spinLimit = 1_000_000
-    let refusals = Atomic<Int>(0)
-}
-
 extension RealtimeHandoffTests {
     @Suite(.serialized) struct CycleOrderingStress {
         /// AC1/AC2 under contention. Kills: a block that leaves (frame, lane, producer, sequence) order; a lost or
@@ -363,6 +356,11 @@ extension RealtimeHandoffTests {
             #expect(producers.allSatisfy { $0.resets > 0 }, "\(producers.map(\.resets))")
             #expect(producers.reduce(0) { $0 + $1.beyondLookahead } > 0 && observed.flushingCycles > 0)
 
+            try Self.expectTelemetryAndOwnership(rig, observed: observed, producers: producers, blockStart: blockStart)
+        }
+
+        private static func expectTelemetryAndOwnership(_ rig: CycleRig, observed: OrderingModel,
+                                                        producers: [AdmittingOutcome], blockStart: Int64) throws {
             let final = try #require(rig.cycle.latestTelemetry())
             #expect(final.stamp == TelemetryStamp(clockGeneration: 3, frame: blockStart &- 512))
             let nonMonotonic = producers.reduce(0) { $0 + $1.refusedNonMonotonic }
@@ -394,92 +392,6 @@ extension RealtimeHandoffTests {
                     #expect(rig.ownership.isOwned(scope: scope, channel: 0, note: note) == sounding)
                 }
             }
-        }
-
-        /// Round 2h (delta review), #360 MINOR 2: render runs the old cycle (its `noteOff(60)` at 1100 pending), then
-        /// waits until control has recorded at least one `.predecessorNotRetired` refusal, and only then retires it,
-        /// so the refused-then-claimed path always runs. Both waits are bounded by a spin count (1,000,000, yielding,
-        /// no clock) and fail with a recorded note rather than hanging. The replacement then runs, and a late
-        /// `noteOn(60)` at 1050 is superseded by the retired cycle's tombstone. A `run` after `retire()` on render
-        /// reports `retired`. Kills: a race TSan can see across the hand-back; a retire that never hands the claim
-        /// back (control records its refusals, then no claim within the bound).
-        /// Round 2i: the `program` pending at 1110 is dropped, counted by render's `retire()` and inherited by
-        /// control's replacement across the hand-back.
-        @Test func controlRetriesReplacementWhileRenderRetires() throws {
-            let rig = try CycleRig()
-            let first = try #require(rig.events.claimProducer()), second = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(1_100, .noteOff(channel: 0, note: 60)), second) == .ok)
-            #expect(rig.push(cycleEvent(1_110, .program(channel: 0, program: 5, bank: 0)), second) == .ok)
-            let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
-                                         safety: rig.safety, ramps: rig.ramps,
-                                         admissionRefusals: rig.cycle.admissionRefusals)
-            let run = CycleStressRun()
-            let proof = RetryProof()
-            let replaced = CycleSlots<KernelCycle>(1)
-            let notes = CycleSlots<[String]>(2)
-            let seenBeforeRetire = CycleSlots<Int>(1)
-            let workers: [@Sendable (CycleStressRun) -> Void] = [
-                { run in
-                    guard run.arriveAndWait() else { return }
-                    let pending = rig.cycle.run(blockStart: 1_000, frames: 64) { _, _ in }.pending
-                    var spins = 0
-                    while proof.refusals.load(ordering: .acquiring) == 0, spins < RetryProof.spinLimit,
-                          !run.shouldStop {
-                        spins &+= 1
-                        _ = sched_yield()
-                    }
-                    let seen = proof.refusals.load(ordering: .acquiring)
-                    seenBeforeRetire.set(0, seen)
-                    let loss = rig.cycle.retire()
-                    let stray = rig.cycle.run(blockStart: 1_064, frames: 64) { _, _ in }
-                    let held = pending == 2 && stray.retired && loss.programs == 1 && loss.stateful == 1
-                    let waited = seen > 0 ? [] : ["render: no refusal within \(RetryProof.spinLimit) spins"]
-                    notes.set(0, held ? waited : ["render: pending \(pending), \(stray), \(loss)"] + waited)
-                },
-                { run in
-                    guard run.arriveAndWait() else { return }
-                    var attempts = 0
-                    while !run.shouldStop, attempts < RetryProof.spinLimit {
-                        attempts &+= 1
-                        do {
-                            let gate = try ClockPulseGate(maximumPulsesPerBlock: 4, staleTolerance: 48)
-                            replaced.set(0, try KernelCycle(parts, pulses: gate, blockCapacity: 64, perLaneQuota: 64))
-                            break
-                        } catch KernelCycle.PreparationError.ownershipClaim(.predecessorNotRetired) {
-                            proof.refusals.add(1, ordering: .releasing)
-                            _ = sched_yield()
-                        } catch {
-                            notes.set(1, ["control: \(error)"])
-                            return
-                        }
-                    }
-                    let refused = proof.refusals.load(ordering: .acquiring)
-                    notes.set(1, replaced.get(0) == nil ? ["control: no claim after \(refused) refusals"] : [])
-                }
-            ]
-            try #require(runCycleWorkers(run, workers))
-            #expect(notes.get(0) == [] && notes.get(1) == [])
-            #expect(try #require(seenBeforeRetire.get(0)) >= 1 && proof.refusals.load(ordering: .acquiring) >= 1)
-            let replacement = try #require(replaced.get(0))
-            let inherited = replacement.inheritedRetirementLoss
-            #expect(inherited.programs == 1 && inherited.stateful == 1 && inherited.receiverStateMayBeStale)
-            let inheritedCarry = replacement.inheritedRetirementCarry
-            #expect(inheritedCarry.count == 1 && inheritedCarry.droppedForCapacity == 0)
-            #expect(inheritedCarry.event(at: 0) == cycleEvent(1_110, .program(channel: 0, program: 5, bank: 0)))
-            var readmitted: [CycleEmission] = []
-            let firstRun = replacement.run(blockStart: 1_064, frames: 64) {
-                readmitted.append(CycleEmission(event: $0, frame: $1))
-            }
-            #expect(firstRun.status == .ok && firstRun.dispatched == 0)
-            // KCR1: the carried `program` is re-admitted at its own frame and is no longer unresolved.
-            #expect(readmitted == [CycleEmission(event: cycleEvent(1_110, .program(channel: 0, program: 5, bank: 0)),
-                                                 frame: 1_110)])
-            #expect(!replacement.unresolvedRetirementLoss.receiverStateMayBeStale)
-            #expect(rig.push(cycleEvent(1_050, .noteOn(channel: 0, note: 60, velocity: 90)), first) == .ok)
-            var emitted = 0
-            let late = replacement.run(blockStart: 1_128, frames: 64) { _, _ in emitted += 1 }
-            #expect(emitted == 0 && late.discardedSuperseded == 1)
-            #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: 60))
         }
     }
 }
