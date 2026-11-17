@@ -9,21 +9,44 @@
 
 import Foundation
 
-/// A Launch Control XL MIDI 1 byte source. `CoreMIDIInput` is production. Each element of a batch's `packets` is the
-/// raw bytes of one non-empty packet from the one connection named by the batch's `source`. Batches arrive on the
+/// A Launch Control XL input, legacy bytes by default, optionally MIDI 1.0 UMP. `CoreMIDIInput` is production.
+/// Each typed payload element is one non-empty packet from the connection named by `source`. Batches arrive on the
 /// main actor, one at a time, in admitted order, and none from a start arrives after `stop()` returns. `afterGap` says
 /// batches were dropped just before this one, so framing must not carry into it. `onSourcesChanged` reports every
 /// connected source, resolved or not (#81), and `stop()` reports none.
 /// Native callbacks refuse whole batches on overlap, over 1,024 entries / 65,536 bytes, or exhausted session
 /// capacity (1,024 batches / 1 MiB bytes / 4,096 lengths). Callback arrival order is not a serialization guarantee.
+/// UMP packets are at most 16,383 words; non-SysEx groups merge and simultaneous SysEx groups are not independent.
 @MainActor
 protocol LaunchControlXLInput: AnyObject {
+    func start(
+        backend: LaunchControlXLInputBackend,
+        sourceNameContains: [String],
+        onPackets: @escaping @MainActor (MIDIPacketBatch) -> Void,
+        onSourcesChanged: @escaping ([MIDIConnectedSource]) -> Void
+    )
     func start(
         sourceNameContains: [String],
         onPackets: @escaping @MainActor (MIDIPacketBatch) -> Void,
         onSourcesChanged: @escaping ([MIDIConnectedSource]) -> Void
     )
     func stop()
+}
+
+extension LaunchControlXLInput {
+    /// Existing byte-only inputs remain compatible, but must never silently claim experimental support.
+    func start(
+        backend: LaunchControlXLInputBackend,
+        sourceNameContains: [String],
+        onPackets: @escaping @MainActor (MIDIPacketBatch) -> Void,
+        onSourcesChanged: @escaping ([MIDIConnectedSource]) -> Void
+    ) {
+        guard backend == .legacyBytes else {
+            onSourcesChanged([])
+            return
+        }
+        start(sourceNameContains: sourceNameContains, onPackets: onPackets, onSourcesChanged: onSourcesChanged)
+    }
 }
 
 /// Never creates a MIDI client or port, so it reports no connected sources.

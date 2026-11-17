@@ -62,6 +62,17 @@ struct SettingsContentView: View {
                         Text(mode.label).tag(mode)
                     }
                 }
+                .accessibilityIdentifier("settings-lcxl-mode")
+                Picker("Input backend", selection: launchControlInputBackend) {
+                    ForEach(LaunchControlXLInputBackend.allCases) { backend in
+                        Text(backend.label).tag(backend)
+                    }
+                }
+                .accessibilityIdentifier("settings-lcxl-input-backend")
+                Text("Experimental UMP merges non-SysEx groups; simultaneous SysEx groups are not independent. "
+                    + "Legacy equivalence and hardware behavior remain unqualified.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 LabeledContent("MIDI source", value: appModel.launchControlXL.status.label)
                 LabeledContent("Fader bank", value: String(appModel.launchControlXL.bank + 1))
                 if let action = appModel.launchControlXL.lastAction {
@@ -157,6 +168,15 @@ struct SettingsContentView: View {
             get: { appModel.launchControlXL.configuration.mode },
             set: { mode in
                 Task { await appModel.launchControlXL.setMode(mode) }
+            }
+        )
+    }
+
+    private var launchControlInputBackend: Binding<LaunchControlXLInputBackend> {
+        Binding(
+            get: { appModel.launchControlXL.configuration.inputBackend },
+            set: { backend in
+                Task { await appModel.launchControlXL.setInputBackend(backend) }
             }
         )
     }

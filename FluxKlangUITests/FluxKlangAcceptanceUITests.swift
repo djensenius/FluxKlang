@@ -84,6 +84,62 @@ final class FluxKlangAcceptanceUITests: XCTestCase {
         XCTAssertTrue(demoStatus.waitForExistence(timeout: 10))
     }
 
+    // View reopening checks in-session retention, NOT a disk round trip: isolated relaunches use a new store.
+    func testLaunchControlSelectorsAreIndependentAndRetainSelectionWhenReopened() throws {
+        try launchIsolatedUITestApplication(
+            app, appArguments: ["-ui-testing", "-ui-test-force-fallback"], testCase: self
+        )
+        openLaunchControlSettings()
+        let mode = element("settings-lcxl-mode")
+        let backend = element("settings-lcxl-input-backend")
+        XCTAssertTrue(mode.isHittable, "USB mode must be an independent settings row")
+        XCTAssertTrue(backend.isHittable, "Backend must be accessible without opening USB mode")
+        let disclosure = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "simultaneous SysEx groups are not independent")
+        ).firstMatch
+        XCTAssertTrue(disclosure.exists, "Qualification must be visible outside either picker")
+
+        mode.tap()
+        app.buttons["Disabled"].tap()
+        waitForSelection("Disabled", on: mode)
+        waitForSelection("Legacy MIDI bytes", on: backend)
+        backend.tap()
+        app.buttons["Experimental MIDI 1.0 UMP"].tap()
+        waitForSelection("Experimental MIDI 1.0 UMP", on: backend)
+        waitForSelection("Disabled", on: mode)
+
+        app.navigationBars["Settings"].buttons["More"].tap()
+        openLaunchControlSettings()
+        waitForSelection("Experimental MIDI 1.0 UMP", on: backend)
+        waitForSelection("Disabled", on: mode)
+        backend.tap()
+        app.buttons["Legacy MIDI bytes"].tap()
+        waitForSelection("Legacy MIDI bytes", on: backend)
+    }
+
+    private func openLaunchControlSettings() {
+        let more = app.tabBars.buttons["More"]
+        XCTAssertTrue(more.waitForExistence(timeout: 10))
+        more.tap()
+        let settings = app.buttons["more.settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        let backend = element("settings-lcxl-input-backend")
+        for _ in 0..<4 {
+            if backend.exists && backend.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(backend.exists)
+    }
+
+    private func waitForSelection(_ selection: String, on picker: XCUIElement) {
+        let selected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", selection), object: picker
+        )
+        wait(for: [selected], timeout: 5)
+    }
+
     private func launchSeededDemo() throws {
         continueAfterFailure = false
         let appArguments = [

@@ -21,6 +21,23 @@ enum LaunchControlXLMode: String, CaseIterable, Codable, Identifiable, Sendable 
     }
 }
 
+enum LaunchControlXLInputBackend: String, CaseIterable, Codable, Identifiable, Sendable {
+    case legacyBytes
+    case experimentalMIDI1UMP
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .legacyBytes: "Legacy MIDI bytes"
+        case .experimentalMIDI1UMP: "Experimental MIDI 1.0 UMP"
+        }
+    }
+
+    var format: MIDIPacketBatch.Format {
+        self == .legacyBytes ? .bytes : .midi1UMP
+    }
+}
+
 struct LaunchControlXLMapping: Codable, Equatable, Sendable {
     var sourceNameContains: [String]
     var channel: Int
@@ -60,6 +77,30 @@ struct LaunchControlXLConfiguration: Codable, Equatable, Sendable {
     var version: Int
     var mode: LaunchControlXLMode
     var mapping: LaunchControlXLMapping
+    var inputBackend: LaunchControlXLInputBackend = .legacyBytes
+
+    private enum CodingKeys: String, CodingKey {
+        case version, mode, mapping, inputBackend
+    }
+
+    init(
+        version: Int, mode: LaunchControlXLMode, mapping: LaunchControlXLMapping,
+        inputBackend: LaunchControlXLInputBackend = .legacyBytes
+    ) {
+        self.version = version
+        self.mode = mode
+        self.mapping = mapping
+        self.inputBackend = inputBackend
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        mode = try container.decode(LaunchControlXLMode.self, forKey: .mode)
+        mapping = try container.decode(LaunchControlXLMapping.self, forKey: .mapping)
+        let backend = try container.decodeIfPresent(String.self, forKey: .inputBackend)
+        inputBackend = backend.flatMap(LaunchControlXLInputBackend.init(rawValue:)) ?? .legacyBytes
+    }
 
     static func bundled() -> LaunchControlXLConfiguration? {
         let bundles = [Bundle.main, Bundle(for: BundleToken.self)]

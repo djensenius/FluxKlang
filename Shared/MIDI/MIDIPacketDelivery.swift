@@ -5,14 +5,54 @@
 
 import Synchronization
 
-/// One delivered batch: the raw bytes of each packet, in order. `afterGap` marks the first batch accepted after the
+/// One delivered batch: owned bytes or UMP words, in packet order. `afterGap` marks the first batch accepted after the
 /// delivery dropped one or more batches, so framing must not carry into it. `source` is the connection the batch came
 /// from (one read callback is one connection); nil only for a batch not tied to a connection, which feeds the shared
 /// legacy source.
 struct MIDIPacketBatch: Equatable, Sendable {
-    var packets: [[UInt8]]
+    enum Format: Equatable, Sendable {
+        case bytes, midi1UMP
+    }
+
+    enum Payload: Equatable, Sendable {
+        case bytes([[UInt8]])
+        case midi1UMP([[UInt32]])
+
+        var format: Format {
+            switch self {
+            case .bytes: .bytes
+            case .midi1UMP: .midi1UMP
+            }
+        }
+    }
+
+    var payload: Payload
     var afterGap = false
     var source: MIDIConnectionToken?
+
+    /// Compatibility for byte-only callers. UMP must be handled through the typed payload.
+    var packets: [[UInt8]] {
+        get {
+            guard case .bytes(let packets) = payload else {
+                preconditionFailure("UMP words are not MIDI 1 bytes")
+            }
+            return packets
+        }
+        set {
+            precondition(payload.format == .bytes, "UMP words are not MIDI 1 bytes")
+            payload = .bytes(newValue)
+        }
+    }
+
+    init(packets: [[UInt8]], afterGap: Bool = false, source: MIDIConnectionToken? = nil) {
+        self.init(payload: .bytes(packets), afterGap: afterGap, source: source)
+    }
+
+    init(payload: Payload, afterGap: Bool = false, source: MIDIConnectionToken? = nil) {
+        self.payload = payload
+        self.afterGap = afterGap
+        self.source = source
+    }
 }
 
 /// Legacy copied-packet delivery API (including its waiting contention contract), not the native callback path.
