@@ -256,6 +256,7 @@ targets:
       - path: FluxKlangTests/ProjectStagingTests+DiskPrimitives.swift
       - path: FluxKlangTests/Fixtures/Persistence/InMemoryStagingFileSystem.swift
       - path: FluxKlangTests/MIDIProtocolTests.swift
+      - path: FluxKlangTests/MIDIProtocolTests+State.swift
       - path: FluxKlangTests/RealtimeHandoffTests.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Policy.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Faults.swift
