@@ -190,7 +190,7 @@ during #62 rather than treating this snapshot as final.
 |---|---|---|---|
 | `Shared/MIDI/CoreMIDIInput.swift:18` | `start(` creates the CoreMIDI client and input port (input only) | adapt; isolate from startup | #51, then #81 |
 | `Shared/MIDI/LaunchControlXLController.swift:87` | `restart()`, which calls `midiInput.start` | adapt | #51, then #87 |
-| `Shared/Models/LaunchControlXLConfiguration.swift:86` | `decode(_:)` → `[MIDIControlChange]` (CC only) | reuse as a controller profile; replace general parsing | #80 / #87 |
+| `Shared/MIDI/LaunchControlXLStream.swift:33` | `feed(packets:)` → `[MIDISourceOutput]` through `MIDISourceRegistry` (the `decode(_:)` CC shim was retired in #80, slice MU6) | controller profile on the general MIDI 1 parser and state | #80 / #87 |
 | `Shared/Views/App/LaunchControlXLAppModel.swift:9` | `handleLaunchControlXL(_:)` | adapt to bindings | #87 |
 
 ### Spatial (keep DBAP, default and stereo goldens)
