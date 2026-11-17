@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Issue | #190 (slice FLP3); roadmap #48, parent #64 |
-| Status | Reference model and tests. S1 (`SysExAssembler`) migrated in FLP4, S3 (`DeferredReleaseQueue.retire`) in FLP5, S2 (`FanInHandoff.claimProducer`) in FLP6; S4 not yet. #190 remains open |
+| Status | Reference model and tests. S1 (`SysExAssembler`) migrated in FLP4, S3 (`DeferredReleaseQueue.retire`) in FLP5, S2 (`FanInHandoff.claimProducer`) in FLP6, S4 (`ReservedCapacityRing` critical refusal) and the kernel cycle's move onto the authority in FLP7b. #190 remains open |
 | Source baseline | main at `66d15f01` |
 | Code | `Shared/Audio/Kernel/Memory/FaultLatch+Chains.swift` |
 | Tests | `FluxKlangTests/RealtimeHandoffTests+FaultChains.swift`, `FluxKlangTests/RealtimeHandoffTests+FaultChainsStress.swift` |
@@ -183,10 +183,27 @@ mint left, or its chain's token was lost) has no counted path and must fall back
 
 ## 6. What this does not prove
 
-- No real caller is identified. S1, S3 and S2 are migrated (FLP4, FLP5 and FLP6,
-  section 7) but still have no real caller (#81; a render caller; the producers
-  that claim fan-in lanes); S4 still calls `FaultLatch.raise` directly on the
-  latch it is given, outside this model.
+- No real caller is identified. S1, S3, S2 and S4 are migrated (FLP4, FLP5,
+  FLP6 and FLP7b, section 7) but still have no real caller (#81; a render
+  caller; the producers that claim fan-in lanes and push to them).
+- R1: `FanInHandoff.init` spends one claim-authority unit before the lane mint;
+  a refused lane mint (`.laneChainBudgetExhausted`) keeps that unit (the claim
+  authority has no un-mint). R2: the `faults` authority must budget one unit
+  per lane of every handoff built on it. R3: a lane refusal that finds its
+  token held latches the sticky contended fault, which latches every scope of
+  `faults`, `criticalScope` and so the cycle included; it never clears. D9
+  (wiring check that every raiser goes through the authority) is FLP7c.
+- The cycle's `FaultChainAuthority` (`KernelCycleParts.faults`) must be the one
+  the fan-in's lanes were minted from, used only by those lanes: the cycle only
+  reads it (`isLatched`, `isObservation`, `acknowledge`) and must never mint
+  chains from it or raise through it, and nothing else may share it (FLP7c
+  checks the wiring; until then it is a caller contract).
+- Recovery: a contended lane fault never clears, so the cycle stays silenced;
+  continuing needs a rebuilt `FanInHandoff`, a fresh `faults` authority and a
+  fresh `NoteOwnership`. A refused lane mint (`.laneChainBudgetExhausted`)
+  builds no fan-in and takes no identity; minted units are never refunded, so
+  a retry needs a `faults` authority with enough budget (in practice a fresh
+  one, R2), and the claim unit already spent stays spent (R1).
 - `FaultLatch.raise` is still callable on any latch not built by an authority.
   Nothing yet stops new code from doing that; a lint tripwire is a follow-up.
 - Unsafe escapes of a token (`nonisolated(unsafe)`, `@unchecked Sendable`
@@ -221,7 +238,7 @@ token back.
 | S1 `SysExAssembler` | **Migrated (FLP4)**: `init` takes a `FaultChainAuthority` and mints one chain per assembler, last, after every pure check and the output claim (`.chainBudgetExhausted`); `accept` takes the token after its pure guards, holds it for the whole call (two raises in one call stay on one token) and puts it back on every path; a failed take changes no assembler state, calls `raiseContended()`, counts `contendedChunkCount` and returns `.refused(.notOwner)`. K <= `chainBudget` per authority by construction; per-assembler happens-before edge via the slot. Tests: `RealtimeHandoffTests+SysExChains.swift`, `SysExChainingStress` | Real caller still #81. Successive calling contexts share the assembler's one chain, ordered by its slot, so no per-generation minting is needed. A SysEx authority cannot share the kernel cycle's latch (the authority never hands its latch out), so SysEx faults live on their own authority |
 | S2 `claimProducer` | **Migrated (FLP6)**: `FanInHandoff.init` takes a separate claim `FaultChainAuthority` (`claimFaults`) for `producerSlotsScope` and mints one chain per handoff after every other check that can throw, before the identity is reserved (`.chainBudgetExhausted`). The lanes keep `faults` for S4. The claim authority is separate because its sticky contended fault latches every scope and would latch `criticalScope` on `faults`. Unlike the common steps above, only a refused claim takes the token: it raises `.producerSlotsExhausted` once and puts the token back. A successful claim never touches it. A failed take (refused claims overlapping, legal because any thread may claim) calls `raiseContended()` and counts `contendedClaimCount`. The claim still returns `nil` and still counts in `refusedClaimCount`. K <= `chainBudget` per claim authority by construction; per-handoff happens-before edge between refused claims via the slot. Tests: `RealtimeHandoffTests+FanInClaimChains.swift`, `FanInClaimChainingStress` | Real callers of `claimProducer`. Every producer context shares the handoff's one claim chain, so no per-context minting is needed; the refusal counter's own bound (C) is unchanged |
 | S3 `retire` via `beginCycle` | **Migrated (FLP5)**: `DeferredReleaseQueue.init` takes a `FaultChainAuthority` and mints one chain per queue, last, after the policy checks and the ring (`.chainBudgetExhausted`); `retire` takes the token first, holds it across the push and the `.retireBacklog` raise and puts it back on every path; a failed take pushes nothing, calls `raiseContended()`, counts `contendedRetireCount` and returns `.refused(.notOwner)` with the +1 left with the caller. `RetiringExchange` and `PreparedPlanSlot` treat it as a refused retire (stall, retry next cycle; fail closed at the cost of a stall). K <= `chainBudget` per authority by construction; per-queue happens-before edge via the slot. Tests: `RealtimeHandoffTests+RetireChains.swift`, `RetireChainingStress` | A real render caller (FLP2: one chain per render block and generation). Every exchange or slot sharing a queue shares its one chain, so the token is held per `retire`, not per cycle |
-| S4 `ReservedCapacityRing.refuse` | Mechanism only | One chain per lane, taken by each lane holder, so the slot's edge orders successive holders' raises; whether that can replace the "stop pushing before release" caller contract is for that slice to show |
+| S4 `ReservedCapacityRing.refuse` | **Migrated (FLP7b)**: `FanInHandoff.init` mints one chain per lane from `faults` in one all-or-nothing batch (`mintChains(count:)`, `.laneChainBudgetExhausted`) after the pure checks, the lane policy check (`validateLanes`) and the claim chain, before the identity. Each ring holds its chain (`ReservedRingChain`); the standalone ring `init` takes a chain (`.foreignChain` if another authority minted it) and a convenience `init` mints its own (`.chainBudgetExhausted`). Only a critical refusal takes the token: it raises `.criticalExhausted` and puts the token back; a general refusal and every successful push never touch it. A failed take (refusals overlapping, legal because a lane's holders may change) calls `raiseContended()`, counts `contendedCount`, still returns `.refused(.criticalExhausted)` and still counts in `refusedCriticalCount`. `KernelCycle`, `KernelCycleParts` and `KernelAckRequests` now hold the `FaultChainAuthority`. Per-lane happens-before edge via the slot. Tests: `RealtimeHandoffTests+LaneChains.swift`, `LaneChainingStress` | Real lane holders and a render caller. Whether the slot edge can replace the "stop pushing before release" caller contract is not shown; that contract stays. K <= `chainBudget` holds only while every handoff's lanes fit the budget (R2) |
 | Global K over one latch, incl. unknown scopes | **Discharged by construction for raises through one authority**: K <= `chainBudget` <= 2^16 | Holds for the app only once every raiser on that latch goes through the authority, and each site's chains fit its budget |
 | C counters | Not discharged | A bound per counter lifetime, through a similar authority or a site proof |
 | A real caller per item | Not discharged | Each site slice, with FLP2's platform evidence |
@@ -264,3 +281,11 @@ overshoot the budget, and the grants are exactly ids `1...mintedChains`).
 `ReservedRingValidation.validateRefusesExactlyWhatInitRefuses` pins
 `ReservedCapacityRing.validate(_:)`, the ring init's pure policy checks that
 FLP7b can run before minting, to the init's refusals.
+
+FLP7b adds `RealtimeHandoffTests+LaneChains.swift` (`LaneChaining`,
+`LaneChainingStress`): one chain per lane; a spent lane budget spends only the
+claim unit (R1); pure and lane-policy refusals mint nothing; a foreign chain is
+refused; the convenience init; parity with a plain `FaultLatch`; only a critical
+refusal takes the token; a contended refusal latches the contended fault and
+silences the cycle (R3); lanes do not contend each other; and a `Thread` stress
+of overlapping refusals where counted plus contended equals refused.

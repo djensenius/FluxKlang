@@ -42,7 +42,7 @@ extension RealtimeHandoffTests {
 
         /// The handoff, or why `init` refused it.
         fileprivate static func preparation(
-            _ faults: FaultLatch, _ claims: FaultChainAuthority, lanes: Int = 4,
+            _ faults: FaultChainAuthority, _ claims: FaultChainAuthority, lanes: Int = 4,
             slots: FaultScope = Root.fanInSlotsScope
         ) -> Result<FanIn, FanIn.PreparationError> {
             do {
@@ -55,14 +55,15 @@ extension RealtimeHandoffTests {
         }
 
         /// A one-lane handoff whose only lane the returned token already holds, so every further claim is refused.
-        fileprivate static func full(_ faults: FaultLatch, _ claims: FaultChainAuthority,
+        fileprivate static func full(_ faults: FaultChainAuthority, _ claims: FaultChainAuthority,
                                      slots: FaultScope = Root.fanInSlotsScope) throws -> (FanIn, ProducerToken) {
             let handoff = try preparation(faults, claims, lanes: 1, slots: slots).get()
             return (handoff, try #require(handoff.claimProducer()))
         }
 
         /// Nothing counted on the lanes' latch: the claim path never raises there.
-        static func expectLanesLatchUntouched(_ faults: FaultLatch, sourceLocation: SourceLocation = #_sourceLocation) {
+        static func expectLanesLatchUntouched(_ faults: FaultChainAuthority,
+                                              sourceLocation: SourceLocation = #_sourceLocation) {
             #expect(faults.pending { _ in } == 0 && faults.unknownScopeFaults == 0, sourceLocation: sourceLocation)
         }
 
@@ -103,7 +104,8 @@ extension RealtimeHandoffTests {
                     Issue.record("a spent claim budget did not refuse init")
                     return
                 }
-                let accepted = try Self.preparation(faults, Root.fanInClaims()).get()
+                // A fresh lane authority per attempt: each accepted handoff spends one lane chain per lane of it.
+                let accepted = try Self.preparation(Root.fanInLatch(), Root.fanInClaims()).get()
                 let after = FanIn.lastIssuedIdentity
                 quiet = after == before &+ 1 && accepted.identity == after
             }

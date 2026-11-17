@@ -11,7 +11,7 @@ private typealias FanOutError = FanOutHandoff<UInt64>.PreparationError
 
 /// Why `FanInHandoff.init` refuses, or `nil` when it accepts. A refusal mints no claim chain; an acceptance mints one.
 private func fanInRefusal(_ policy: HandoffPolicy, laneCapacity: Int = 20, reserved: Int = 16,
-                          _ faults: FaultLatch) throws -> FanInError? {
+                          _ faults: FaultChainAuthority) throws -> FanInError? {
     let claims = try Root.fanInClaims()
     do {
         _ = try FanInHandoff<UInt64>(policy: policy, laneCapacity: laneCapacity, reserved: reserved, faults: faults,
@@ -66,11 +66,11 @@ extension RealtimeHandoffTests {
                overflow: .reservedCritical(reserved: reserved &* lanes))
     }
 
-    static func fanInLatch() throws -> FaultLatch {
-        try FaultLatch(scopes: [fanInCriticalScope, fanInSlotsScope, fanInNeighbourScope])
+    static func fanInLatch() throws -> FaultChainAuthority {
+        try FaultChainAuthority.testing(scopes: [fanInCriticalScope, fanInSlotsScope, fanInNeighbourScope])
     }
 
-    static func makeFanIn(_ faults: FaultLatch, claims: FaultChainAuthority? = nil, lanes: Int = 4,
+    static func makeFanIn(_ faults: FaultChainAuthority, claims: FaultChainAuthority? = nil, lanes: Int = 4,
                           laneCapacity: Int = 20, reserved: Int = 16) throws -> FanInHandoff<UInt64> {
         try FanInHandoff<UInt64>(policy: fanInPolicy(lanes: lanes, laneCapacity: laneCapacity, reserved: reserved),
                                  laneCapacity: laneCapacity, reserved: reserved, faults: faults,
@@ -86,13 +86,6 @@ extension RealtimeHandoffTests {
         }
         #expect(count == deliveries.count)
         return deliveries
-    }
-
-    /// The latched record for `scope`, if any.
-    static func fanInRecord(_ faults: FaultLatch, _ scope: FaultScope) -> FaultRecord? {
-        var found: FaultRecord?
-        _ = faults.pending { if $0.scope == scope { found = $0 } }
-        return found
     }
 }
 

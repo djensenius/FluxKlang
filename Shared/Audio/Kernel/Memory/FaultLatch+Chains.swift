@@ -1,7 +1,8 @@
 // #190 chain tokens (FLP3): makes `FaultLatch`'s Raise-context contract hold by construction for raises routed
 // through a `FaultChainAuthority`, without relying on any platform callback guarantee. Model and argument:
 // docs/transformation/fault-latch-chain-tokens.md. Migrated so far: S1 `SysExAssembler` (FLP4), S3
-// `DeferredReleaseQueue.retire` (FLP5) and S2 `FanInHandoff.claimProducer` (FLP6); S4 still raises directly.
+// `DeferredReleaseQueue.retire` (FLP5), S2 `FanInHandoff.claimProducer` (FLP6) and S4 `ReservedCapacityRing`'s
+// critical refusal (FLP7b, one chain per lane); no site raises on `FaultLatch` directly.
 // Reference model; not RT-certified.
 import Synchronization
 

@@ -166,12 +166,16 @@ struct FanInRefusalCounter: ~Copyable, Sendable {
 /// Faults. The handoff raises on two distinct scopes: every lane raises `.criticalExhausted` (from M4) on
 /// `criticalScope`, which the caller prepares in `faults`, and a refused claim raises `.producerSlotsExhausted` on
 /// `producerSlotsScope`, which the caller prepares in `claimFaults`. Since #190 FLP6 that claim raise goes only
-/// through the token of the one chain `init` mints from `claimFaults` (`FanInClaimChain`), never through
-/// `FaultLatch.raise`; observers read `claimFaults.isLatched` (which includes its contended fault) and
-/// `hasContendedFault`. The claim authority is separate because its contended fault is sticky and latches every
-/// scope: on `faults` it would also latch `criticalScope`. `init` still refuses equal scopes, so each scope names
-/// one kind. E5 keys critical loss on `criticalScope`; a `producerSlotsScope` fault means a producer was refused
-/// before it pushed anything.
+/// through the token of the one chain `init` mints from `claimFaults` (`FanInClaimChain`), and since FLP7b each
+/// lane raises only through the token of its own chain, one per lane minted from `faults` (`ReservedRingChain`);
+/// neither calls `FaultLatch.raise` directly. Observers read `claimFaults.isLatched` and `faults.isLatched` (each
+/// includes its contended fault) and `hasContendedFault`. The authorities are separate because a contended fault is
+/// sticky and latches every scope: the claim authority's would also latch `criticalScope`. A lane's contended
+/// fault means two contexts refused on one lane at once, a broken single-producer contract; it latches
+/// `criticalScope`, so a `KernelCycle` over `faults` silences for good (fail-safe; it never clears, so recovery needs
+/// a rebuilt fan-in, a fresh authority and `NoteOwnership`). Only the lanes may use `faults`. `init` still
+/// refuses equal scopes, so each scope names one kind. E5 keys critical loss on `criticalScope`; a
+/// `producerSlotsScope` fault means a producer was refused before it pushed anything.
 ///
 /// Claims. A lane's state word (`FanInLaneWord`) is `free(g)`, `claimed(g)` or `retiring(g)`, where `g` is the
 /// lane's generation.
@@ -224,14 +228,16 @@ struct FanInRefusalCounter: ~Copyable, Sendable {
 ///
 /// Progress (source level only). Claims scan at most `laneCount` slots; a refused one adds one token take, at most
 /// one raise and one put, or one contended store and one add (`FanInClaimChain.refuse`). Release and push use
-/// bounded atomic/M4 work. `drain` is bounded by `total` and `laneCount`. Atomic lowering and target progress,
-/// including `FaultLatch.raise`, remain unqualified. Nothing allocates after `init`; hot paths use unretained
-/// references and retain/release nothing in the inspected configurations (see Reference counting).
+/// bounded atomic/M4 work, and a critical lane refusal the same take, raise and put (`ReservedRingChain.refuse`).
+/// `drain` is bounded by `total` and `laneCount`. Atomic lowering and target progress, including the raises,
+/// remain unqualified. Nothing allocates after `init`; hot paths use unretained references and retain/release
+/// nothing in the inspected configurations (see Reference counting).
 ///
-/// Reference counting. `owners` and `faults` are strong `let`s that keep every lane and the latch alive for this
-/// object's lifetime, and `claimChain` keeps the claim authority and its chain alive; hot paths use the unretained
-/// `lanes` buffer and `claimChain`'s unretained aliases with `_withUnsafeGuaranteedRef`, valid because each call
-/// runs inside a method of `self`, which the caller keeps alive. Refused claims also retain/release nothing (FLP6).
+/// Reference counting. `owners` and `faults` are strong `let`s that keep every lane and the authority alive for this
+/// object's lifetime (each lane keeps its own chain), and `claimChain` keeps the claim authority and its chain alive;
+/// hot paths use the unretained `lanes` buffer and the chains' unretained aliases with `_withUnsafeGuaranteedRef`,
+/// valid because each call runs inside a method of `self`, which the caller keeps alive. Refused lane pushes are
+/// not yet inspected for retain/release (FLP6 inspected only the claim path).
 ///
 /// Contracts. One producer thread uses a token, counting every copy of it, at a time and stops pushing before it
 /// (or a thread ordered after it) releases the token; a copied token used concurrently breaks the lane's
@@ -251,11 +257,15 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
         case unsupportedPolicy(Unsupported)
         /// `laneCapacity` and `reserved` times the producer count do not give the policy's capacity and reserve.
         case laneShapeMismatch(laneCapacity: Int, reserved: Int)
-        /// A lane refused its derived policy; in practice only `.reserveBelowMinimum`.
+        /// A lane refused its derived policy; in practice only `.reserveBelowMinimum`, checked before any mint.
         case lane(ReservedCapacityRing<Element>.PreparationError)
-        /// `claimFaults` has minted its whole chain budget. Checked after every other preparation check and before
-        /// the identity, so no other refusal consumes a budget unit and this one takes no identity.
+        /// `claimFaults` has minted its whole chain budget. Checked after every pure check and the lane policy
+        /// check, before the lane mint and the identity: no pure refusal consumes a budget unit, and this one takes
+        /// no identity.
         case chainBudgetExhausted
+        /// `faults` has fewer than one chain per lane left. The claim chain is already minted, so this refusal
+        /// spends exactly one claim unit and no lane chain, and takes no identity.
+        case laneChainBudgetExhausted
         /// Every handoff identity has been issued; identities are never reused.
         case identitiesExhausted
     }
@@ -285,10 +295,10 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
     /// Faults). Internal only so `FanInHandoff+Chains.swift` can read it.
     let claimChain: FanInClaimChain
 
-    /// Owns the lanes; hot paths use `lanes`.
-    private let owners: [ReservedCapacityRing<Element>]
-    /// Keeps the lanes' latch alive; only the lanes raise on it.
-    private let faults: FaultLatch
+    /// Owns the lanes; hot paths use `lanes`. Internal only so `FanInHandoff+LaneChains.swift` can reach the seams.
+    let owners: [ReservedCapacityRing<Element>]
+    /// Keeps the lanes' authority alive; only the lanes raise on it, each through its own chain.
+    private let faults: FaultChainAuthority
     private let lanes: UnsafeMutablePointer<Unmanaged<ReservedCapacityRing<Element>>>
     private let states: UnsafeMutablePointer<Atomic<UInt64>>
     private let refusedNotOwner = FanInRefusalCounter()
@@ -298,9 +308,11 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
 
     /// Validates `policy` against the lane shape and allocates every lane. Control-side only. `criticalScope` should
     /// be prepared in `faults` and `producerSlotsScope` in `claimFaults` (an unprepared scope is still counted in
-    /// that latch's `unknownScopeFaults`); they must differ (see Faults). After every other check it mints the claim
-    /// chain, then takes the identity last, so a refused `init` takes no identity.
-    init(policy: HandoffPolicy, laneCapacity: Int, reserved: Int, faults: FaultLatch,
+    /// that authority's `unknownScopeFaults`); they must differ (see Faults). Order: the pure checks, the lane policy
+    /// check, the claim chain mint, one lane chain per lane in a single all-or-nothing mint from `faults`
+    /// (`.laneChainBudgetExhausted`), the lanes, then the identity, so a refused `init` takes no identity and a
+    /// refused lane mint spends exactly one claim unit. The two authorities cannot mint atomically together (R1).
+    init(policy: HandoffPolicy, laneCapacity: Int, reserved: Int, faults: FaultChainAuthority,
          claimFaults: FaultChainAuthority, criticalScope: FaultScope,
          producerSlotsScope: FaultScope) throws(PreparationError) {
         do {
@@ -320,19 +332,12 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
             throw .laneShapeMismatch(laneCapacity: laneCapacity, reserved: reserved)
         }
         let lanePolicy = Self.lanePolicy(policy, laneCapacity: laneCapacity, reserved: reserved)
-        var built: [ReservedCapacityRing<Element>] = []
-        built.reserveCapacity(count)
-        for _ in 0..<count {
-            do {
-                built.append(try ReservedCapacityRing<Element>(policy: lanePolicy, faults: faults,
-                                                               scope: criticalScope))
-            } catch {
-                throw .lane(error)
-            }
-        }
-        // After every check that can throw except the identity's, so no other refusal spends a budget unit. Only
-        // `.identitiesExhausted` (after 2^64 − 1 handoffs) can follow it, and that would spend one.
+        try Self.validateLanes(lanePolicy)
+        // After every check that can throw except the lane mint and the identity, so no other refusal spends a
+        // budget unit. A refused lane mint spends exactly this one; only `.identitiesExhausted` (after 2^64 − 1
+        // handoffs) can follow the lane mint, and that would spend `count` units of `faults`.
         guard let claims = FanInClaimChain(minting: claimFaults) else { throw .chainBudgetExhausted }
+        let built = try Self.makeLanes(lanePolicy, count: count, faults: faults, scope: criticalScope)
         // Last, so a refused `init` takes no identity.
         guard let identity = handoffIdentities.reserve() else { throw .identitiesExhausted }
         self.identity = identity
@@ -485,7 +490,7 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
     }
 
     /// The lane policy: the handoff policy with one verified producer and the lane's capacity and reserve.
-    private static func lanePolicy(_ policy: HandoffPolicy, laneCapacity: Int, reserved: Int) -> HandoffPolicy {
+    static func lanePolicy(_ policy: HandoffPolicy, laneCapacity: Int, reserved: Int) -> HandoffPolicy {
         HandoffPolicy(
             purpose: policy.purpose, producer: policy.producer,
             producers: ProducerCardinality(maximum: 1, evidence: .verified), consumer: policy.consumer,

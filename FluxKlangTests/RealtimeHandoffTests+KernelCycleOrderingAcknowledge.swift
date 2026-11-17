@@ -206,7 +206,8 @@ extension RealtimeHandoffTests {
         @Test func acknowledgeRefusesATwinLatchObservation() throws {
             let slots = try kernelCycleTelemetrySlots()
             let rig = try CycleRig(telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
-            let twin = try FaultLatch(scopes: [CycleRig.criticalScope, CycleRig.slotsScope, CycleRig.sysexScope])
+            let twin = try FaultChainAuthority.testing(
+                scopes: [CycleRig.criticalScope, CycleRig.slotsScope, CycleRig.sysexScope])
             for latch in [rig.faults, twin] {
                 #expect(latch.raise(CycleRig.criticalScope, .criticalExhausted, frame: 7) == .ok)
             }
@@ -234,7 +235,8 @@ extension RealtimeHandoffTests {
         /// the epoch moves. Kills: the latch or the scope check skipped.
         @Test func requestRefusesAForeignLatchOrScopeObservation() throws {
             let rig = try CycleRig()
-            let twin = try FaultLatch(scopes: [CycleRig.criticalScope, CycleRig.slotsScope, CycleRig.sysexScope])
+            let twin = try FaultChainAuthority.testing(
+                scopes: [CycleRig.criticalScope, CycleRig.slotsScope, CycleRig.sysexScope])
             for latch in [rig.faults, twin] {
                 #expect(latch.raise(CycleRig.criticalScope, .criticalExhausted, frame: 7) == .ok)
             }
