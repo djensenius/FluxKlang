@@ -68,7 +68,7 @@ final class KernelAckRequests: Sendable {
         /// `UInt64.max` epochs were requested; the epoch never wraps, so no acknowledgement can be requested again
         /// until the cycle is replaced while quiescent.
         case epochExhausted
-        /// The observation is not of this cycle's `FaultLatch` (`FaultObservation.isObservation(of:)`) or not of its
+        /// The observation is not of this cycle's authority (`FaultChainAuthority.isObservation`) or not of its
         /// critical scope. Checked before the epoch moves, so nothing changes.
         case foreignObservation
     }
@@ -80,19 +80,19 @@ final class KernelAckRequests: Sendable {
     private let epoch: Atomic<UInt64>
     /// The cycle's latch and critical scope: `request(for:)` accepts only their observations. Control-side only;
     /// render never touches them.
-    private let faults: FaultLatch
+    private let faults: FaultChainAuthority
     private let criticalScope: FaultScope
 
     /// Control-side preparation for `faults`' `criticalScope`, with no epoch requested yet; `nil` once every
     /// identity was issued.
-    convenience init?(faults: FaultLatch, criticalScope: FaultScope) {
+    convenience init?(faults: FaultChainAuthority, criticalScope: FaultScope) {
         self.init(faults: faults, criticalScope: criticalScope, lastRequestedForTesting: 0)
     }
 
     /// Test-only (SwiftLint source policy, not compiler isolation): seeds the epoch at `lastRequestedForTesting`,
     /// for exhaustion tests. Production prepares through `init(faults:criticalScope:)`. `nil` once every identity
     /// was issued.
-    init?(faults: FaultLatch, criticalScope: FaultScope, lastRequestedForTesting lastRequested: UInt64) {
+    init?(faults: FaultChainAuthority, criticalScope: FaultScope, lastRequestedForTesting lastRequested: UInt64) {
         var current = ackRequestIdentities.load(ordering: .relaxed)
         var issued: UInt64?
         while issued == nil, current < .max {
@@ -115,7 +115,7 @@ final class KernelAckRequests: Sendable {
     /// scope's observation, and (never wraps) once `UInt64.max` was requested, changing nothing. Lock-free,
     /// allocation-free; retries only when another requester raced it.
     func request(for observation: FaultObservation) throws(RequestError) -> KernelAckTicket {
-        guard observation.isObservation(of: faults), observation.record.scope == criticalScope else {
+        guard faults.isObservation(observation), observation.record.scope == criticalScope else {
             throw .foreignObservation
         }
         var current = epoch.load(ordering: .relaxed)

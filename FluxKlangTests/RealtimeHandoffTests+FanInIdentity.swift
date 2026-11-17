@@ -17,10 +17,11 @@ private struct Attempt {
     var reserved = 16
     var slots = Root.fanInSlotsScope
 
-    func run(_ faults: FaultLatch) -> Result<FanIn, FanIn.PreparationError> {
+    func run(_ faults: FaultChainAuthority, _ claims: FaultChainAuthority) -> Result<FanIn, FanIn.PreparationError> {
         do {
             return .success(try FanIn(policy: policy, laneCapacity: laneCapacity, reserved: reserved, faults: faults,
-                                      criticalScope: Root.fanInCriticalScope, producerSlotsScope: slots))
+                                      claimFaults: claims, criticalScope: Root.fanInCriticalScope,
+                                      producerSlotsScope: slots))
         } catch {
             return .failure(error)
         }
@@ -119,24 +120,27 @@ private struct NarrowCounter: Hashable {
 }
 
 extension RealtimeHandoffTests {
-    /// Lane critical exhaustion and claim exhaustion latch on distinct scopes: `FaultLatch` keeps the first kind
-    /// per scope, so a shared scope would let one source hide the other's kind from E5.
+    /// Lane critical exhaustion latches on the lanes' `FaultLatch` and claim exhaustion on the claim authority, on
+    /// distinct scopes, so neither source hides the other from E5 and each is acknowledged on its own.
     struct FanInFaultScopes {
         @Test func initRejectsSharedScopeAndRoutesEachSource() throws {
             let faults = try Root.fanInLatch()
+            let claims = try Root.fanInClaims()
             for scope in [Root.fanInCriticalScope, Root.fanInSlotsScope, Root.fanInNeighbourScope] {
                 do {
                     _ = try FanInHandoff<UInt64>(policy: Root.fanInPolicy(), laneCapacity: 20, reserved: 16,
-                                                 faults: faults, criticalScope: scope, producerSlotsScope: scope)
+                                                 faults: faults, claimFaults: claims, criticalScope: scope,
+                                                 producerSlotsScope: scope)
                     Issue.record("a shared scope was accepted")
                 } catch {
                     #expect(error == .sharedFaultScope(scope))
                 }
             }
-            let handoff = try Root.makeFanIn(faults)
+            #expect(claims.mintedChains == 0)
+            let handoff = try Root.makeFanIn(faults, claims: claims)
             #expect(handoff.criticalScope == Root.fanInCriticalScope)
             #expect(handoff.producerSlotsScope == Root.fanInSlotsScope)
-            #expect(!faults.isLatched(Root.fanInCriticalScope) && !faults.isLatched(Root.fanInSlotsScope))
+            #expect(!faults.isLatched(Root.fanInCriticalScope) && !claims.isLatched(Root.fanInSlotsScope))
         }
 
         /// Fills the single lane's general room and reserve, then refuses one critical event at `frame`.
@@ -150,35 +154,37 @@ extension RealtimeHandoffTests {
 
         @Test func claimExhaustionFirstLeavesCriticalExhaustionObservable() throws {
             let faults = try Root.fanInLatch()
-            let handoff = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 17)
+            let claims = try Root.fanInClaims()
+            let handoff = try Root.makeFanIn(faults, claims: claims, lanes: 1, laneCapacity: 17)
             let token = try #require(handoff.claimProducer(frame: 1))
             #expect(handoff.claimProducer(frame: 3) == nil)
             Self.exhaustCritical(handoff, token, frame: 9)
-            #expect(Root.fanInRecord(faults, Root.fanInSlotsScope)
+            #expect(Root.fanInRecord(claims, Root.fanInSlotsScope)
                     == FaultRecord(scope: Root.fanInSlotsScope, kind: .producerSlotsExhausted, count: 1, firstFrame: 3))
             #expect(Root.fanInRecord(faults, Root.fanInCriticalScope)
                     == FaultRecord(scope: Root.fanInCriticalScope, kind: .criticalExhausted, count: 1, firstFrame: 9))
-            // E5 acknowledges the critical scope on its own; the claim record stays latched.
+            // E5 acknowledges the critical scope on its own; the claim record stays latched on the claim authority.
             let critical = try #require(faults.observe(Root.fanInCriticalScope))
             #expect(faults.acknowledge(critical)?.kind == .criticalExhausted)
-            #expect(!faults.isLatched(Root.fanInCriticalScope) && faults.isLatched(Root.fanInSlotsScope))
-            #expect(!faults.isLatched(Root.fanInNeighbourScope))
+            #expect(!faults.isLatched(Root.fanInCriticalScope) && claims.isLatched(Root.fanInSlotsScope))
+            #expect(!faults.isLatched(Root.fanInSlotsScope) && !faults.isLatched(Root.fanInNeighbourScope))
         }
 
         @Test func criticalExhaustionFirstLeavesClaimExhaustionObservable() throws {
             let faults = try Root.fanInLatch()
-            let handoff = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 17)
+            let claims = try Root.fanInClaims()
+            let handoff = try Root.makeFanIn(faults, claims: claims, lanes: 1, laneCapacity: 17)
             let token = try #require(handoff.claimProducer(frame: 1))
             Self.exhaustCritical(handoff, token, frame: 4)
             #expect(handoff.claimProducer(frame: 6) == nil && handoff.claimProducer(frame: 7) == nil)
             #expect(Root.fanInRecord(faults, Root.fanInCriticalScope)
                     == FaultRecord(scope: Root.fanInCriticalScope, kind: .criticalExhausted, count: 1, firstFrame: 4))
-            #expect(Root.fanInRecord(faults, Root.fanInSlotsScope)
+            #expect(Root.fanInRecord(claims, Root.fanInSlotsScope)
                     == FaultRecord(scope: Root.fanInSlotsScope, kind: .producerSlotsExhausted, count: 2, firstFrame: 6))
-            let slots = try #require(faults.observe(Root.fanInSlotsScope))
-            #expect(faults.acknowledge(slots)?.kind == .producerSlotsExhausted)
-            #expect(faults.isLatched(Root.fanInCriticalScope) && !faults.isLatched(Root.fanInSlotsScope))
-            #expect(!faults.isLatched(Root.fanInNeighbourScope))
+            let slots = try #require(claims.observe(Root.fanInSlotsScope))
+            #expect(claims.acknowledge(slots)?.kind == .producerSlotsExhausted)
+            #expect(faults.isLatched(Root.fanInCriticalScope) && !claims.isLatched(Root.fanInSlotsScope))
+            #expect(!faults.isLatched(Root.fanInSlotsScope) && !faults.isLatched(Root.fanInNeighbourScope))
         }
     }
 
@@ -275,8 +281,12 @@ extension RealtimeHandoffTests {
 
         /// `init` takes its identity last, so each refusal kind takes none and one accepted `init` takes exactly
         /// one. Other suites prepare handoffs concurrently, so this retries until a window sees no other `init`.
+        /// The refusals run on a spent claim authority: each still reports its own error, so every other check
+        /// comes before the claim chain is minted.
         @Test func refusedInitTakesNoIdentity() throws {
             let faults = try Root.fanInLatch()
+            let spent = try Root.fanInClaims()
+            _ = try #require(spent.mintChain())
             let appOwnedMIDI = Root.policy(producer: .midiReceive, capacity: 20, ordering: .fifoPerProducer,
                                            overflow: .reservedCritical(reserved: 16))
             let refusing = Root.policy(producer: .midiReceive, producers: .conservativeDefault(for: .midiReceive),
@@ -287,7 +297,8 @@ extension RealtimeHandoffTests {
                 (Attempt(policy: Root.fanInPolicy(ordering: .fifo)), .unsupportedPolicy(.ordering(.fifo))),
                 (Attempt(policy: refusing), .unsupportedPolicy(.overflow(.refuseProducer))),
                 (Attempt(laneCapacity: 21), .laneShapeMismatch(laneCapacity: 21, reserved: 16)),
-                (Attempt(policy: Root.fanInPolicy(reserved: 8), reserved: 8), .lane(.reserveBelowMinimum(8)))
+                (Attempt(policy: Root.fanInPolicy(reserved: 8), reserved: 8), .lane(.reserveBelowMinimum(8))),
+                (Attempt(), .chainBudgetExhausted)
             ]
             let isolated = FanInIdentityAllocator()
             let deadline = ContinuousClock.now + .seconds(10)
@@ -297,17 +308,19 @@ extension RealtimeHandoffTests {
                 attempts += 1
                 let before = FanIn.lastIssuedIdentity
                 for (attempt, expected) in refusals {
-                    guard case .failure(let error) = attempt.run(faults), error == expected else {
+                    guard case .failure(let error) = attempt.run(faults, spent), error == expected else {
                         Issue.record("expected \(expected)")
                         return
                     }
                 }
                 _ = isolated.reserve()  // Its own sequence: handoff identities do not move.
-                let accepted = try Attempt().run(faults).get()
+                // A fresh lane authority per attempt: each accepted handoff spends one lane chain per lane of it.
+                let accepted = try Attempt().run(Root.fanInLatch(), Root.fanInClaims()).get()
                 let after = FanIn.lastIssuedIdentity
                 quiet = after == before &+ 1 && accepted.identity == after
             }
             #expect(quiet, "no window without another init in \(attempts) attempts")
+            #expect(spent.mintedChains == 1)
             #expect(!faults.isLatched(Root.fanInCriticalScope) && !faults.isLatched(Root.fanInSlotsScope))
         }
 
