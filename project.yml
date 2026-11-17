@@ -655,6 +655,7 @@ targets:
       - path: FluxKlangTests/ProjectMigrationTests+Retire.swift
       - path: FluxKlangTests/ProjectMigrationTests+RetireCrash.swift
       - path: FluxKlangTests/ProjectMigrationTests+RetireRace.swift
+      - path: FluxKlangTests/ProjectMigrationTests+Review.swift
       - path: FluxKlangTests/PeerReconnectTests.swift
       - path: FluxKlangTests/PeerReconnectTests+Epochs.swift
       - path: FluxKlangTests/ParameterAutomationTests.swift
