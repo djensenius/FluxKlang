@@ -323,6 +323,29 @@ struct ProjectMigrationTests {
     }
 
     @Test
+    func eachUSBMapFieldIsCheckedOnItsOwn() throws {
+        let limits = try Fixture.limits()
+        for mode in LaunchControlXLMode.allCases {
+            let data = Fixture.text(#"{"version":-2,"mode":"\#(mode.rawValue)","mapping":{"later":null}}"#)
+            let split = Fixture.split(.usbMap, data, limits: limits)
+            #expect(Fixture.success(split.hostLocal).map { Array($0.original) } == Array(data), "\(mode)")
+        }
+        let refused = [
+            #"{"mode":"control","mapping":{}}"#, #"{"version":null,"mode":"control","mapping":{}}"#,
+            #"{"version":"1","mode":"control","mapping":{}}"#, #"{"version":1.5,"mode":"control","mapping":{}}"#,
+            #"{"version":18446744073709551615,"mode":"control","mapping":{}}"#,
+            #"{"version":1,"mapping":{}}"#, #"{"version":1,"mode":null,"mapping":{}}"#,
+            #"{"version":1,"mode":"Control","mapping":{}}"#,
+            #"{"version":1,"mode":"control"}"#, #"{"version":1,"mode":"control","mapping":null}"#,
+            #"{"version":1,"mode":"control","mapping":[]}"#, #"{"version":1,"mode":"control","mapping":"all"}"#
+        ]
+        for text in refused {
+            let refusal = Fixture.refusal(.usbMap, Fixture.text(text), limits: limits)
+            #expect(refusal == ProjectMigrationRefusal(source: .usbMap, kind: .unsupportedShape), "\(text)")
+        }
+    }
+
+    @Test
     func strictDecodingRefusesWhatAPlainDecoderWouldKeep() throws {
         let limits = try Fixture.limits()
         let bomPrefix: [UInt8] = [0xEF, 0xBB, 0xBF]
