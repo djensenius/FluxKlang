@@ -277,6 +277,54 @@ extension ProjectMigrationTests {
         #expect(disk.hostLocal == .refused(.io(.hardLinked)))
     }
 
+    /// Two or more defects at once: the earlier check wins (kind, then links, then volume, then size) and none reads.
+    @Test
+    func earlierCheckWinsWhenDefectsCombine() throws {
+        let limits = try Fixture.limits(entryBytes: 2000, totalBytes: 10_000)
+        var store = InMemoryStagingFileSystem()
+        let over = { (source: ProjectMigrationSource) in Fixture.padded(Fixture.valid(source), to: 2001) }
+        store.seedFile(Legacy.connections, over(.connections), linkCount: 2, volume: 2)
+        store.seedFile(Legacy.usbMap, over(.usbMap), volume: 2)
+        store.seedFile(Legacy.draft, over(.pendingDraft), linkCount: 2, volume: 2)
+        // Retype the draft in place: an empty read past its end turns it into a link that keeps its links and volume.
+        store.arm(InMemoryStagingFileSystem.Script(mutateOnRead: [Legacy.draft: .changeKind]))
+        _ = try store.read(at: Legacy.draft, offset: 2001, count: 1)
+        let retyped = try #require(try store.status(at: Legacy.draft))
+        #expect(retyped.kind == .symbolicLink && retyped.linkCount == 2 && retyped.volume == 2)
+        #expect(retyped.byteCount == 2001)
+        store.arm()
+        let mark = store.log.count
+
+        let report = LegacySourceReader.read(in: &store, limits: limits)
+        #expect(report.homeWiring == .refused(.io(.hardLinked)))
+        #expect(report.hostLocal == .refused(.io(.otherVolume)))
+        #expect(report.draft == .refused(.io(.notRegularFile)))
+        for entry in store.log.dropFirst(mark) {
+            if case .read = entry.operation { Issue.record("unexpected \(entry.operation)") }
+        }
+    }
+
+    /// A positive status followed by a vanished, relinked or swapped file is `changed`, never a plain failure.
+    @Test
+    func faultAfterPositiveStatusIsChanged() throws {
+        let limits = try Fixture.limits()
+        // Log indexes: 0 the root status, 1 the first status, 2 the read, 3 the second status (of connections).
+        let cases: [(StagingIOFault, Int)] = [
+            (.notFound, 2), (.notFound, 3), (.changed, 1), (.changed, 2), (.changed, 3)
+        ]
+        let read = InMemoryStagingFileSystem.FileOp.read(Legacy.connections, 0, ProjectMigration.entryLimit(limits) + 1)
+        for (fault, index) in cases {
+            var store = Legacy.volume()
+            store.arm(.fault(fault, at: index))
+            let report = LegacySourceReader.read(in: &store, limits: limits)
+            #expect(report.homeWiring == .refused(.io(.changed)), "\(fault) at \(index)")
+            #expect(store.log[index].outcome == .fault(fault))
+            #expect((store.log[index].operation == read) == (index == 2))
+            #expect(Legacy.adopted(report, .usbMap) == Fixture.usbMapBytes)
+            #expect(Legacy.adopted(report, .pendingDraft) == Fixture.draftBytes)
+        }
+    }
+
     @Test
     func changedDuringReadIsRefused() throws {
         let limits = try Fixture.limits()
@@ -337,6 +385,20 @@ extension ProjectMigrationTests {
                 #expect(Legacy.adopted(report, other) == nil)
                 #expect(Legacy.refusal(report, other) == nil)
             }
+        }
+    }
+
+    /// The reader's sources name no store, cloud type or link-following file API; it reads only through the protocol.
+    @Test
+    func readerSourcesNameNoStoreOrCloudType() {
+        let sources = Legacy.readerSources()
+        #expect(sources.count == 2)
+        let banned = [
+            "JSONFileStore", "CloudKeyValueStore", "CloudStore", "Ubiquitous", "AppPersistence", "contentsOf",
+            "FileManager", "FileHandle", "NSData", "fopen", "Data(contentsOf"
+        ]
+        for text in sources {
+            for word in banned { #expect(!text.contains(word), "\(word)") }
         }
     }
 }

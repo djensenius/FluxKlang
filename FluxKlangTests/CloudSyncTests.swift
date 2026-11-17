@@ -473,12 +473,5 @@ extension CloudSyncTests {
         #expect(Array(part.original) == Array(local))
         #expect(cloud.readCount == reads && cloud.writeCount == writes && cloud.synchronizeCount == 0)
         #expect(cloud.data(forKey: "store.studio-connections_json") == synced)
-
-        let sources = ProjectMigrationTests.Legacy.readerSources()
-        #expect(sources.count == 2)
-        let banned = ["JSONFileStore", "CloudKeyValueStore", "CloudStore", "Ubiquitous", "AppPersistence", "contentsOf"]
-        for text in sources {
-            for word in banned { #expect(!text.contains(word), "\(word)") }
-        }
     }
 }

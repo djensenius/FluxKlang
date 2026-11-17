@@ -73,8 +73,8 @@ enum LegacySourceReader {
                 return .failure(.io(.changed))
             }
             return .success(data)
-        } catch .notFound {
-            // The regular file it was a moment ago is gone or became a link.
+        } catch .notFound, .changed {
+            // The regular file it was a moment ago is gone, became a link or was swapped.
             return .failure(.io(.changed))
         } catch {
             return .failure(.io(.failed(error)))
@@ -84,15 +84,13 @@ enum LegacySourceReader {
     private static func outcome<Value: Sendable & Equatable>(
         _ gathered: Result<Data, LegacySourceRefusal>?, _ split: Result<Value, ProjectMigrationRefusal>?
     ) -> LegacySourceOutcome<Value> {
-        switch gathered {
-        case nil: return .missing
-        case .failure(let refusal)?: return .refused(refusal)
-        case .success?: break
-        }
-        switch split {
-        case .success(let value)?: return .adopted(value)
-        case .failure(let refusal)?: return .refused(.migration(refusal))
-        case nil: return .missing  // Unreachable: the split answers every source it was given.
+        switch (gathered, split) {
+        case (nil, _): .missing
+        case (.failure(let refusal)?, _): .refused(refusal)
+        case (.success?, .success(let value)?): .adopted(value)
+        case (.success?, .failure(let refusal)?): .refused(.migration(refusal))
+        // Unreachable: the split answers every source it was given. Fail safe: a file that was read is never missing.
+        case (.success?, nil): .refused(.io(.failed(.ioError)))
         }
     }
 
