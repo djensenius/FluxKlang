@@ -111,7 +111,8 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
     /// Validates `policy` and allocates `policy.capacity` slots, raising through `chain`, which `faults` must have
     /// minted (else `.foreignChain`, after the policy checks). Control-side only. `scope` should be prepared in
     /// `faults`; an unprepared scope is still counted in its `unknownScopeFaults`. Use one chain per ring: the
-    /// token's slot is the single-producer check. The convenience `init` mints the chain.
+    /// token's slot guards the fault raise only, so callers must still serialize all pushes. The convenience `init`
+    /// mints the chain.
     ///
     /// Test seam: starts every index at `startingIndex` so tests can cross the `UInt64` wrap, and both refusal
     /// counters at `startingRefusals` so tests can reach saturation.
