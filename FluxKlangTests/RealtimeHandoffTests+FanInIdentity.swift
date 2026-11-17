@@ -17,7 +17,7 @@ private struct Attempt {
     var reserved = 16
     var slots = Root.fanInSlotsScope
 
-    func run(_ faults: FaultLatch, _ claims: FaultChainAuthority) -> Result<FanIn, FanIn.PreparationError> {
+    func run(_ faults: FaultChainAuthority, _ claims: FaultChainAuthority) -> Result<FanIn, FanIn.PreparationError> {
         do {
             return .success(try FanIn(policy: policy, laneCapacity: laneCapacity, reserved: reserved, faults: faults,
                                       claimFaults: claims, criticalScope: Root.fanInCriticalScope,
@@ -314,7 +314,8 @@ extension RealtimeHandoffTests {
                     }
                 }
                 _ = isolated.reserve()  // Its own sequence: handoff identities do not move.
-                let accepted = try Attempt().run(faults, Root.fanInClaims()).get()
+                // A fresh lane authority per attempt: each accepted handoff spends one lane chain per lane of it.
+                let accepted = try Attempt().run(Root.fanInLatch(), Root.fanInClaims()).get()
                 let after = FanIn.lastIssuedIdentity
                 quiet = after == before &+ 1 && accepted.identity == after
             }

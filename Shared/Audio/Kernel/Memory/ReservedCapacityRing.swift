@@ -7,8 +7,11 @@ import Synchronization
 ///
 /// General events are refused with `.refused(.full)` once occupancy reaches `generalLimit`
 /// (`capacity − reserved`). Critical events may fill the ring to `capacity`; beyond that they are refused with
-/// `.refused(.criticalExhausted)` and `FaultLatch.raise(scope, .criticalExhausted, frame:)` is called, so an
-/// exhausted reserve is never a silent discard. Nothing is merged, replaced or reordered: an event is admitted
+/// `.refused(.criticalExhausted)` and `.criticalExhausted` is raised on `scope` through the token of the ring's own
+/// `FaultChainAuthority` lane chain (`ReservedRingChain`, #190 FLP7b; never `FaultLatch.raise` directly), so an
+/// exhausted reserve is never a silent discard. If the token is held (two contexts refused on one lane, which the
+/// single-producer contract forbids) the authority's sticky contended fault latches instead and the push is still
+/// refused with `.refused(.criticalExhausted)`. Nothing is merged, replaced or reordered: an event is admitted
 /// whole or refused whole, and admitted events leave in FIFO order regardless of class. The type is meant to be
 /// reused as one M5 fan-in lane.
 ///
@@ -35,20 +38,21 @@ import Synchronization
 /// release/acquire publishes elements to the consumer. Sequential consistency is not needed.
 ///
 /// Progress (source level only). `tryPush`, `tryPop` and `producerOccupancy` have no source-level retry loops.
-/// They perform bounded source-level work; atomic lowering and target progress, including `FaultLatch.raise`,
-/// remain unqualified. `popAll` is bounded by `limit` and `capacity`. Nothing allocates after `init`.
+/// They perform bounded source-level work; atomic lowering and target progress, including a critical refusal's
+/// token take, raise and put (`ReservedRingChain.refuse`), remain unqualified. `popAll` is bounded by `limit` and
+/// `capacity`. Nothing allocates after `init`; a successful push and a general refusal never touch the token.
 ///
-/// Reference counting. `ring` and `faults` are strong `let`s that own the inner ring and the latch for this
-/// object's lifetime. Hot-path calls go through unretained copies (`ringRef`, `faultsRef`) with
+/// Reference counting. `ring` and `laneChain` are strong `let`s that own the inner ring, and the authority and chain,
+/// for this object's lifetime. Hot-path calls go through unretained copies (`ringRef`, the chain's aliases) with
 /// `_withUnsafeGuaranteedRef`, so they perform no retain or release: every call runs inside a method of `self`,
-/// which the caller keeps alive, and `self` keeps both objects alive through the strong `let`s, which are never
+/// which the caller keeps alive, and `self` keeps those objects alive through the strong `let`s, which are never
 /// reassigned. Evidence today is scratch-only (not part of this repository): a `@_noAllocation @_noLocks` compile
 /// probe of specialized wrappers, and an assembly call-graph probe that also roots at the unannotated,
 /// unspecialized methods. X1 is to enforce such probes in CI. Neither is an RT certification.
 ///
 /// Lifetime. Create and destroy a ring on the control side, only once both endpoints are quiescent (no producer
 /// or consumer call in flight or still to come). `deinit` frees `popScratch` and may drop the last references to
-/// the inner ring and the latch, so a render thread must never release the last reference. An owner such as M5
+/// the inner ring and the authority, so a render thread must never release the last reference. An owner such as M5
 /// must hold that reference and implement the ownership and deferred-release contract on the control side.
 ///
 /// `@unchecked Sendable`: `pushed` is touched only by the producer, `popScratch` only by the consumer, and the
@@ -66,6 +70,10 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
         /// Defensive: the inner ring refused the derived `.refuseProducer` policy. Unreachable, because that
         /// policy differs from a validated reserved-critical policy only in an overflow that R4 and R8 accept.
         case innerRing(SPSCRing<Element>.PreparationError)
+        /// `chain` was not minted by `faults`. Checked after the policy, before anything is built.
+        case foreignChain
+        /// The convenience `init` found `faults`' chain budget spent. Checked after the policy checks.
+        case chainBudgetExhausted
     }
 
     /// Valid overflow policies that this ring does not serve.
@@ -82,11 +90,11 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
 
     /// Owns the inner ring; hot paths use `ringRef`.
     private let ring: SPSCRing<Element>
-    /// Keeps the latch alive; hot paths use `faultsRef`.
-    private let faults: FaultLatch
-    /// Unretained views of `ring` and `faults`, valid while `self` is alive (see Reference counting).
+    /// Unretained view of `ring`, valid while `self` is alive (see Reference counting).
     private let ringRef: Unmanaged<SPSCRing<Element>>
-    private let faultsRef: Unmanaged<FaultLatch>
+    /// The authority and this lane's chain; a critical refusal raises only through it. Internal only so
+    /// `ReservedCapacityRing+Chains.swift` can read it.
+    let laneChain: ReservedRingChain
     private let scope: FaultScope
     private let generalAdmission: UInt64
     private let criticalAdmission: UInt64
@@ -100,17 +108,18 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
     /// after every throw, and freed in `deinit`; `Element` is trivial, so it needs no deinitialization.
     private let popScratch: UnsafeMutablePointer<Element>
 
-    /// Validates `policy` and allocates `policy.capacity` slots. Control-side only. `scope` should be prepared
-    /// in `faults`; an unprepared scope is still counted in `FaultLatch.unknownScopeFaults`.
-    convenience init(policy: HandoffPolicy, faults: FaultLatch, scope: FaultScope) throws(PreparationError) {
-        try self.init(policy: policy, faults: faults, scope: scope, startingIndex: 0)
-    }
-
+    /// Validates `policy` and allocates `policy.capacity` slots, raising through `chain`, which `faults` must have
+    /// minted (else `.foreignChain`, after the policy checks). Control-side only. `scope` should be prepared in
+    /// `faults`; an unprepared scope is still counted in its `unknownScopeFaults`. Use one chain per ring: the
+    /// token's slot guards the fault raise only, so callers must still serialize all pushes. The convenience `init`
+    /// mints the chain.
+    ///
     /// Test seam: starts every index at `startingIndex` so tests can cross the `UInt64` wrap, and both refusal
     /// counters at `startingRefusals` so tests can reach saturation.
-    init(policy: HandoffPolicy, faults: FaultLatch, scope: FaultScope, startingIndex: UInt64,
-         startingRefusals: UInt64 = 0) throws(PreparationError) {
+    init(policy: HandoffPolicy, faults: FaultChainAuthority, chain: FaultChain, scope: FaultScope,
+         startingIndex: UInt64, startingRefusals: UInt64 = 0) throws(PreparationError) {
         let reserved = try Self.validate(policy)
+        guard faults.issued(chain) else { throw .foreignChain }
         let innerPolicy = HandoffPolicy(
             purpose: policy.purpose, producer: policy.producer, producers: policy.producers,
             consumer: policy.consumer, consumers: policy.consumers, capacity: policy.capacity,
@@ -124,8 +133,7 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
         ring = inner
         ringRef = .passUnretained(inner)
         self.policy = policy
-        self.faults = faults
-        faultsRef = .passUnretained(faults)
+        laneChain = ReservedRingChain(authority: faults, chain: chain)
         self.scope = scope
         self.reserved = reserved
         capacity = policy.capacity
@@ -233,7 +241,8 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
         return overflow ? .max : sum
     }
 
-    /// Producer only: counts the refusal and, for a critical event, latches the scoped fault.
+    /// Producer only: counts the refusal and, for a critical event, raises the scoped fault through the lane chain
+    /// (or latches the contended fault; see `ReservedRingChain`). The general refusal never touches the token.
     private func refuse(_ eventClass: EventClass, frame: Int64) -> KernelStatus {
         switch eventClass {
         case .general:
@@ -241,9 +250,7 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
             return .refused(.full)
         case .critical:
             bump(refusedCritical)
-            // A refused raise (unprepared scope) is still visible through `unknownScopeFaults`.
-            let scope = scope  // A local copy, so the closure does not capture (and retain) `self`.
-            _ = faultsRef._withUnsafeGuaranteedRef { $0.raise(scope, .criticalExhausted, frame: frame) }
+            laneChain.refuse(scope, frame: frame)
             return .refused(.criticalExhausted)
         }
     }

@@ -276,6 +276,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Retire.swift
       - path: FluxKlangTests/RealtimeHandoffTests+RetireStress.swift
       - path: FluxKlangTests/RealtimeHandoffTests+RetireChains.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+LaneChains.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Scratch.swift
       - path: FluxKlangTests/RealtimeHandoffTests+ScratchStress.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift

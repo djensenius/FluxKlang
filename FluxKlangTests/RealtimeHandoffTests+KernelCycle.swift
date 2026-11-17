@@ -21,7 +21,7 @@ struct CycleRig {
     /// A neighbouring scope on the same latch, as a SysEx assembler would use.
     static let sysexScope = FaultScope(handoff: 65, target: 0)
 
-    let faults: FaultLatch
+    let faults: FaultChainAuthority
     let claims: FaultChainAuthority
     let events: FanInHandoff<KernelEvent>
     let ownership: NoteOwnership
@@ -31,7 +31,7 @@ struct CycleRig {
 
     init(lanes: Int = 2, laneCapacity: Int = 20, blockCapacity: Int = 64, pulsesPerBlock: Int = 4,
          staleTolerance: Int64 = 48, perLaneQuota: Int = 64, telemetry: KernelCycleTelemetryOutput? = nil) throws {
-        faults = try FaultLatch(scopes: [Self.criticalScope, Self.slotsScope, Self.sysexScope])
+        faults = try FaultChainAuthority.testing(scopes: [Self.criticalScope, Self.slotsScope, Self.sysexScope])
         claims = try FaultChainAuthority(scopes: [Self.slotsScope], chainBudget: 1)
         events = try FanInHandoff(policy: Self.policy(lanes: lanes, laneCapacity: laneCapacity),
                                   laneCapacity: laneCapacity, reserved: 16, faults: faults, claimFaults: claims,

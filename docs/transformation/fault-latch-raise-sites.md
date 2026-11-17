@@ -73,15 +73,15 @@ each through `faultsRef._withUnsafeGuaranteedRef`, and one doc-comment mention a
 | # | Call | Component |
 |---|---|---|
 | S1 | `Shared/Audio/Kernel/Events/SysExAssembler.swift:339` | `SysExAssembler.raise`, reached from `discard` and `extend`. Since FLP4 it raises through a `FaultChainAuthority` chain token, not `FaultLatch.raise` (section 3.1) |
-| S2 | `Shared/Audio/Kernel/Memory/FanInHandoff.swift:365` | `FanInHandoff.claimProducer`. Since FLP6 it raises through a chain token of its own claim `FaultChainAuthority`, not `FaultLatch.raise` (section 3.2) |
+| S2 | `Shared/Audio/Kernel/Memory/FanInHandoff.swift:372` | `FanInHandoff.claimProducer`. Since FLP6 it raises through a chain token of its own claim `FaultChainAuthority`, not `FaultLatch.raise` (section 3.2) |
 | S3 | `Shared/Audio/Kernel/Memory/DeferredRelease.swift:122` | `DeferredReleaseQueue.retire`. Since FLP5 it raises through a `FaultChainAuthority` chain token, not `FaultLatch.raise` (section 3.3) |
-| S4 | `Shared/Audio/Kernel/Memory/ReservedCapacityRing.swift:238` | `ReservedCapacityRing.refuse` |
+| S4 | `Shared/Audio/Kernel/Memory/ReservedCapacityRing+Chains.swift:48` (`ReservedRingChain.refuse`, from `ReservedCapacityRing.swift:252`) | `ReservedCapacityRing.refuse`. Since FLP7b it raises through a chain token of its lane's own chain, minted from the handoff's `faults` `FaultChainAuthority`, not `FaultLatch.raise` (section 3.4) |
 
 Common to all four: none of them checks that its scope is prepared. The scope is
 a constructor argument, the doc comment says it "should" be prepared in the
 latch, and an unprepared scope lands in `unknownScopeFaults`
-(`SysExAssembler.swift:39` to `:41`, `FanInHandoff.swift:288` to `:290`,
-`DeferredRelease.swift:76` to `:78`, `ReservedCapacityRing.swift:103` to `:104`).
+(`SysExAssembler.swift:39` to `:41`, `FanInHandoff.swift:309` to `:314`,
+`DeferredRelease.swift:76` to `:78`, `ReservedCapacityRing.swift:112` to `:113`).
 Who prepares the scopes is the code that builds the `FaultLatch` and its
 components; no production code does (section 6), so "who prepares it" is not
 established beyond the doc comments naming "the caller".
@@ -127,7 +127,7 @@ before the next context's `accept`. The authority never hands out its latch, so 
 faults no longer share a latch with the kernel cycle. Still **UNPROVEN**: a real caller
 (#81) and whether its scopes are prepared.
 
-### 3.2 S2: `FanInHandoff.claimProducer` (`FanInHandoff.swift:365`)
+### 3.2 S2: `FanInHandoff.claimProducer` (`FanInHandoff.swift:372`)
 
 | Item | Finding |
 |---|---|
@@ -145,9 +145,9 @@ faults no longer share a latch with the kernel cycle. Still **UNPROVEN**: a real
 
 **Since FLP6** (#190; model in [fault-latch-chain-tokens.md](fault-latch-chain-tokens.md)
 section 7). The citations above are against this document's baseline; after FLP6
-`claimProducer` (`FanInHandoff.swift:367`) counts the refusal (`:380`) and calls
-`FanInClaimChain.refuse` (`:381`, `FanInHandoff+Chains.swift:37`), which holds the
-only raise (`FanInHandoff+Chains.swift:47`). `FanInHandoff.init` (`:303`) now takes a
+`claimProducer` (`FanInHandoff.swift:372`) counts the refusal (`:385`) and calls
+`FanInClaimChain.refuse` (`:386`, `FanInHandoff+Chains.swift:37`), which holds the
+only raise (`FanInHandoff+Chains.swift:47`). `FanInHandoff.init` (`:315`) now takes a
 separate `claimFaults: FaultChainAuthority` for `producerSlotsScope` and mints one
 chain from it after every other check that can throw, before the identity is
 reserved (`:335`; a refusal is `.chainBudgetExhausted`). The lanes keep raising
@@ -202,21 +202,22 @@ acquire/release orders one context's completed raise before the next context's
 `retire`. Still **UNPROVEN**: a real render caller (FLP2: one chain per render block
 and generation) and whether its scope is prepared.
 
-### 3.4 S4: `ReservedCapacityRing.refuse` (`ReservedCapacityRing.swift:238`)
+### 3.4 S4: `ReservedCapacityRing.refuse` (`ReservedCapacityRing+Chains.swift:48`; the findings below cite the pre-FLP7b lines unless marked current)
 
 | Item | Finding |
 |---|---|
-| Type and method | `ReservedCapacityRing.refuse` (`:229`), from `tryPush` (`:159`) when a critical event meets full capacity |
-| Scope | `scope`, an init argument "should be prepared in `faults`" (`:103` to `:104`). Inside `FanInHandoff` every lane gets the handoff's `criticalScope` (`FanInHandoff.swift:314` to `:315`), so all lanes of one handoff raise on one scope |
+| Type and method | `ReservedCapacityRing.refuse` (`ReservedCapacityRing.swift:245`), from `tryPush` (`:174`) when a critical event meets full capacity |
+| Scope | `scope`, an init argument "should be prepared in `faults`" (`ReservedCapacityRing.swift:112` to `:113`). Inside `FanInHandoff` every lane gets the handoff's `criticalScope` (`FanInHandoff.swift:340`, `FanInHandoff+LaneChains.swift`), so all lanes of one handoff raise on one scope |
 | Who prepares the scope | Not established; no production caller exists |
-| Kind | `.criticalExhausted` (`:238`) |
-| Calling role | "Producer only" (`:156`, `:228`); inside a handoff, "The token's producer only" (`FanInHandoff.swift:388`). Which thread: not established |
-| One chain is | One producer's sequence of critical `tryPush` calls on its lane. Under `FanInHandoff`, each lane has its own producer, so the chain count follows the producer contexts over the latch's life. A stale or foreign token holder is refused by the token check before it reaches the ring (`FanInHandoff.swift:395` to `:398`), so it adds no S4 chain |
-| Chains over the latch's lifetime | **none** established by code. The warning at `FanInHandoff.swift:195` to `:196` is about the refusal counters' callers; it does not cover these valid-token pushes. Candidate bound for one fixed handoff: one chain per lane (the handoff's lane count), because the lane handover (next row) lets successive holders of a lane continue one chain. It holds only if every holder stops pushing before it releases its token and no copy of the token is used concurrently (`FanInHandoff.swift:230` to `:233`). The code states that as a caller contract: a push that starts after the release is refused by the token check (`:395` to `:398`), but a push already past that check, or a concurrent copy of the token, is not stopped. A bound across several handoffs, or other raise sites, on one latch is not established |
-| Edge, completed raise to next admission | Within one token: **none** established. The `refuse` path returns `.refused(.criticalExhausted)` after the raise; the order to the producer's next push is the producer's own. Between successive holders of one lane the code has a handover edge (`FanInHandoff.swift:207` to `:213`): A's pushes happen before its releasing compare-exchange `claimed` to `retiring`, the consumer's acquiring load sees `retiring` before it pops, and its releasing store of `free` is read by B's acquiring claim, so A's producer-side writes happen before B's first push. That orders A's last raise before B's first push only if A stopped pushing before it released the token (`:230` to `:233`). A push that starts after the release is refused (`:395` to `:398`), but a push already past the token check is not stopped |
+| Kind | `.criticalExhausted` (`ReservedCapacityRing+Chains.swift:48`) |
+| Calling role | "Producer only" (`ReservedCapacityRing.swift:171`, `:243`); inside a handoff, "The token's producer only" (`FanInHandoff.swift:409`). Which thread: not established |
+| One chain is | One producer's sequence of critical `tryPush` calls on its lane. Under `FanInHandoff`, each lane has its own producer, so the chain count follows the producer contexts over the latch's life. A stale or foreign token holder is refused by the token check before it reaches the ring (`FanInHandoff.swift:416` to `:419`), so it adds no S4 chain |
+| Chains over the latch's lifetime | **none** established by code. The warning at `FanInHandoff.swift:200` to `:204` is about the refusal counters' callers; it does not cover these valid-token pushes. Candidate bound for one fixed handoff: one chain per lane (the handoff's lane count), because the lane handover (next row) lets successive holders of a lane continue one chain. It holds only if every holder stops pushing before it releases its token and no copy of the token is used concurrently (`FanInHandoff.swift:242` to `:243`). The code states that as a caller contract: a push that starts after the release is refused by the token check (`:416` to `:419`), but a push already past that check, or a concurrent copy of the token, is not stopped. A bound across several handoffs, or other raise sites, on one latch is not established |
+| Edge, completed raise to next admission | Within one token: **none** established. The `refuse` path returns `.refused(.criticalExhausted)` after the raise; the order to the producer's next push is the producer's own. Between successive holders of one lane the code has a handover edge (`FanInHandoff.swift:216` to `:223`): A's pushes happen before its releasing compare-exchange `claimed` to `retiring`, the consumer's acquiring load sees `retiring` before it pops, and its releasing store of `free` is read by B's acquiring claim, so A's producer-side writes happen before B's first push. That orders A's last raise before B's first push only if A stopped pushing before it released the token (`:242` to `:243`). A push that starts after the release is refused (`:416` to `:419`), but a push already past the token check is not stopped |
 | Can the scope be unprepared | Yes (`:103` to `:104`, `:236`) |
 | Verdict | **UNPROVEN** |
 | Evidence a proof needs | The set of producers that can ever hold a lane, over the latch's life, with ordering between a token's successive pushes and between successive holders of one lane |
+| Since FLP7b | The rows above describe the code before FLP7b; the chain count is now by construction. `FanInHandoff.init` mints one chain per lane from `faults` (`mintChains(count:)`, all or nothing); only a critical refusal takes the lane's token, raises `.criticalExhausted` and puts it back; a failed take latches the contended fault (R3), counts `contendedCount` and still returns `.refused(.criticalExhausted)`. The slot orders successive refusals on one lane. R1: a refused lane mint keeps the claim unit already spent. R2: `faults` must budget one unit per lane of every handoff on it. The "stop pushing before release" caller contract is unchanged and the code does not rely on the slot to replace it. Real lane holders: still none |
 
 ## 4. Bounded counters under the same contract, not `raise` calls
 
@@ -227,7 +228,7 @@ migration only through happens-before. Its `bump` (`:148`) is not a `raise`.
 `FaultLatch` does not report it, and the doc comment says so: "The invalid-token
 paths raise no `FaultLatch` fault, so the latch neither limits nor reports them;
 a failed claim does raise `.producerSlotsExhausted`, but the count's bound does
-not rely on it" (`FanInHandoff.swift:197` to `:199`).
+not rely on it" (`FanInHandoff.swift:204` to `:206`).
 
 `FanInHandoff` owns two:
 
@@ -256,7 +257,7 @@ Other users found by grep for `FanInRefusalCounter` in `Shared/`:
 Other doc comments in `Shared/` that mention the contract (grep for
 `logical chains` and `chain bound`):
 
-- `FanInHandoff.swift:132`, `:195`, `:199`, `:233` (above);
+- `FanInHandoff.swift:132`, `:200`, `:204`, `:243` (above);
 - `FaultLatch.swift:124` (the contract itself);
 - `Shared/Audio/Kernel/Processors/OfflineAudioRoutingProcessor.swift:5` to `:7`:
   "No publication, retirement, FaultLatch or engine ACK is wired. Actual hot
@@ -264,8 +265,8 @@ Other doc comments in `Shared/` that mention the contract (grep for
   chains, including separate M5 refusal counters."
 
 `ReservedCapacityRing`'s own refusal counters (`refusedGeneral`, `refusedCritical`,
-`ReservedCapacityRing.swift:95` to `:96`) are not `FanInRefusalCounter`s: they are
-single-writer stores (`bump`, `:250`), under the ring's producer-only role, and are not part of
+`ReservedCapacityRing.swift:103` to `:104`) are not `FanInRefusalCounter`s: they are
+single-writer stores (`bump`, `:264`), under the ring's producer-only role, and are not part of
 the K contract. They are mentioned only so the inventory does not suggest a third
 counter family under it.
 
@@ -277,9 +278,9 @@ sequencing edge between a completed raise and that chain's next admission.
 
 | Path | Why it has no `raise` today | Source |
 |---|---|---|
-| Kernel-cycle recovery | The cycle reads the latch (`isLatched`) and acknowledges (`acknowledge`); it observes and acknowledges, and its comments say it adds no raise site | `KernelCycle.swift:331` (`isLatched`), `:372` (`acknowledge` inside `acknowledgeCritical`), `:179` ("the cycle adds no `FaultLatch.raise` site"); `KernelAckRequests.swift:53` to `:57` (control observes, then requests; render reads `isLatched`) |
-| Stale-clock reporting | Reported in `KernelCycleResult.resync` and telemetry, not on the latch. `FaultKind.staleClock` exists, but is not raised | `KernelCycle.swift:178` to `:179`; `KernelCycleTelemetry.swift:8` to `:10` |
-| Invalid-token paths in `FanInHandoff` | Refused with `.refused(.notOwner)` and counted; "no fault is raised" | `FanInHandoff.swift:369` to `:371`, `:392`, `:197` to `:199` |
+| Kernel-cycle recovery | The cycle reads the latch (`isLatched`) and acknowledges (`acknowledge`); it observes and acknowledges, and its comments say it adds no raise site | `KernelCycle.swift:350` (`isLatched`), `:391` (`acknowledge` inside `acknowledgeCritical`), `:198` ("the cycle adds no `FaultLatch.raise` site"); `KernelAckRequests.swift:53` to `:57` (control observes, then requests; render reads `isLatched`) |
+| Stale-clock reporting | Reported in `KernelCycleResult.resync` and telemetry, not on the latch. `FaultKind.staleClock` exists, but is not raised | `KernelCycle.swift:197` to `:198`; `KernelCycleTelemetry.swift:8` to `:10` |
+| Invalid-token paths in `FanInHandoff` | Refused with `.refused(.notOwner)` and counted; "no fault is raised" | `FanInHandoff.swift:392`, `:413`, `:204` to `:206` |
 | Invalid or unknown scope | `raise` itself returns `.refused(.slotOutOfRange)` and counts in `unknownScopeFaults`; this is a result of S1 to S4, not a separate caller | `FaultLatch.swift:235` to `:240` |
 | `PreparedPlanSlot` and `RetiringExchange` | They reach `raise` only through `DeferredReleaseQueue.retire` (S3) | `PreparedPlanSlot.swift:84` to `:90`; `RetiringExchange.swift:75` to `:76`, `:188`, and the `beginCycle` doc at `:141` to `:150` (post-FLP5 lines) |
 
@@ -289,9 +290,9 @@ Notes:
   through a ticket; whether the cycle's reads and the raisers' writes are ordered
   is the subject of the happens-before argument at `KernelAckRequests.swift:52`
   to `:65`, whose "formal model-check" is tracked in #190 (`:52`;
-  `KernelCycle.swift:165`). That argument orders an acknowledgement after a
+  `KernelCycle.swift:184`). That argument orders an acknowledgement after a
   raise; it is not a bound on raise chains, and this document does not rely on it.
-- `KernelCycle.swift:173` to `:174` records a residual for #190: `FaultLatch.acknowledge`
+- `KernelCycle.swift:193` records a residual for #190: `FaultLatch.acknowledge`
   is a shared API and is not type-restricted for critical scopes. That is an
   acknowledge-side obligation, not a raise-chain one, and is outside this
   inventory.
@@ -308,20 +309,20 @@ Which constructors take a scope "that should be prepared":
 - `SysExAssembler.init(... faults:scopeBase:)` (`SysExAssembler.swift:136`); the
   scopes are `(scopeBase, source)` for each source (`:39` to `:41`).
 - `FanInHandoff.init(... faults:criticalScope:producerSlotsScope:)`
-  (`FanInHandoff.swift:291`; doc `:288` to `:290`). Since FLP6:
+  (`FanInHandoff.swift:315`; doc `:309` to `:314`). Since FLP6:
   `init(... faults:claimFaults:criticalScope:producerSlotsScope:)`
-  (`FanInHandoff.swift:303`; doc `:299` to `:302`), with `producerSlotsScope`
+  (`FanInHandoff.swift:315`; doc `:309` to `:314`), with `producerSlotsScope`
   prepared in `claimFaults`.
 - `DeferredReleaseQueue.init(policy:faults:scope:)` (`DeferredRelease.swift:79`;
   doc `:76` to `:78`: not checked against `faults`).
-- `ReservedCapacityRing.init(policy:faults:scope:)` (`ReservedCapacityRing.swift:105`
-  and `:111`; doc `:103` to `:104`).
+- `ReservedCapacityRing.init(policy:faults:scope:)` (`ReservedCapacityRing+Chains.swift:61`
+  and `ReservedCapacityRing.swift:118`; doc `:112` to `:113`).
 
 What happens when the scope is not prepared: the raise is refused with
 `.refused(.slotOutOfRange)` (the return value is discarded at every site,
 `_ = faultsRef...`), nothing latches, and the count goes to the aggregate
 (`FaultLatch.swift:230` to `:240`). A critical fault that was meant to latch is
-therefore not latched. `ReservedCapacityRing.swift:236` notes that this stays
+therefore not latched. `ReservedCapacityRing.swift:112` to `:113` notes that this stays
 "visible through `unknownScopeFaults`"; nothing reads that counter in production
 (`grep -rn unknownScopeFaults Shared` finds only its definition and these doc
 comments).
@@ -337,12 +338,12 @@ call; the constructor calls are in tests (for example
 `FluxKlangTests/RealtimeHandoffTests+Faults.swift:21`, `:56`, `:78`). So no site
 shares a latch in production code today; the question is open for any later
 wiring. What the types allow: `FanInHandoff` hands one latch to every lane's
-`ReservedCapacityRing` (`FanInHandoff.swift:314`), so S2 and S4 share it inside
+`ReservedCapacityRing` (`FanInHandoff.swift:340`), so S2 and S4 share it inside
 one handoff (since FLP6 they do not: S2 raises on the handoff's separate claim
-authority, `FanInHandoff.swift:335`, and only the lanes' S4 raises share `faults`,
-`:327`); `DeferredReleaseQueue` may be shared by several exchanges
+authority, `FanInHandoff.swift:339`, and only the lanes' S4 raises share `faults`,
+`:340`); `DeferredReleaseQueue` may be shared by several exchanges
 (`DeferredRelease.swift:45`); and `KernelCycleParts.faults` is one latch
-(`KernelCycleTelemetry.swift:130`).
+(`KernelCycleTelemetry.swift:144`); since FLP7b `KernelCycleParts.faults`, `KernelCycle` and `KernelAckRequests` hold the handoff's `FaultChainAuthority`, which never hands its latch out.
 
 ## 7. Callers that do not exist yet
 
@@ -411,8 +412,10 @@ section 4):
   open until a real render caller exists.
 - [ ] S4: the set of producers that can hold a lane over the latch's life,
   their pushes ordered, and a hand-over ordering for successive holders of a lane
-  (the code's edge at `FanInHandoff.swift:207` to `:213` holds only if each holder
-  stops pushing before it releases its token).
+  (the code's edge at `FanInHandoff.swift:216` to `:223` holds only if each holder
+  stops pushing before it releases its token). FLP7b makes the chain count
+  one per lane by construction (R2) and orders refusals on a lane through its
+  chain slot; the real set of holders is still open.
 - [ ] Global: the sum over every raiser that shares one latch, including raisers
   on unprepared scopes (`unknownScopeFaults`), is below 2^39.
 - [ ] C: the same bound for each `FanInRefusalCounter` user (`refusedClaims`,
