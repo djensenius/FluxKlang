@@ -71,7 +71,8 @@ struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
     /// `ticket`'s epoch or a later one before reading the latch, so it began after control's `observe` and
     /// `request` and armed the flush watermark. A stale sample
     /// (published before render loaded the epoch, or never refreshed) only delays acknowledgement. The
-    /// happens-before chain is on `KernelAckRequests`; its formal model-check is tracked in #190. Epoch 0 (never
+    /// happens-before chain is on `KernelAckRequests`; it is checked by an exhaustive reduced interleaving model in
+    /// `RealtimeHandoffTests+AckHandshakeModel.swift`, not a weak-memory proof. Epoch 0 (never
     /// handed out) is refused as defence in depth: every sample has `lastFaultedAckEpoch >= 0`.
     func permitsAcknowledgement(_ ticket: borrowing KernelAckTicket) -> Bool {
         let (epoch, cycle) = (ticket.epoch, ticket.cycle)
