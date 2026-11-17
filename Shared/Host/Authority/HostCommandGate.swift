@@ -63,6 +63,9 @@ enum DirectWriteRefusal: Error, Hashable, Sendable {
     case tooManyOutstanding
     /// A send grant's targets are empty, repeat, or exceed `HostAuthority.directSendBatchLimit`.
     case invalidBinding
+    /// A send grant's target is not admitted by the authority's `DirectSendScopePolicy`
+    /// under the ticket's scope.
+    case outOfScope
     /// A send to a target the grant does not bind, or already sent; the grant is revoked.
     case notGranted
 }

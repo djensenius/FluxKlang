@@ -11,7 +11,8 @@ import Testing
 @testable import FluxKlang
 
 /// Mints direct-send grants on an `AuthorityBench` authority: a running-set `.set`
-/// of `liveParameter` admitted for project A (as in `HostAuthorityTests+DirectWrite.swift`).
+/// of `liveParameter`, or of a `ParameterCatalog.wing` parameter, admitted for
+/// project A (as in `HostAuthorityTests+DirectWrite.swift`).
 enum DirectSendBench {
     static let liveParameter = ParameterID(validated: "parameter.live")
 
@@ -19,41 +20,52 @@ enum DirectSendBench {
         HostEpoch(host: AuthorityBench.host, generation: try Generation.initial.next())
     }
 
-    static func admission() throws -> AdmissionContext {
+    /// `liveParameter` plus the WING parameters.
+    static func catalog() throws -> ParameterCatalog {
         let descriptor = try ParameterDescriptor(.init(
             id: liveParameter, unit: .normalized, lower: 0, upper: 1, defaultValue: 0.5, ceiling: 0.8, curve: .linear,
             ramp: ParameterRamp(.init(kind: .linear, minimumMilliseconds: 10, maximumMilliseconds: 100)),
             controlClass: .live, verification: .reported
         ))
-        return AdmissionContext(hostEpoch: AuthorityBench.hostEpoch, connectionEpoch: nil,
-                                revisions: CommandRevisions(), permission: AuthorityBench.permission,
-                                allowedScopes: [.parameter(liveParameter)], allowedClasses: Set(ControlClass.allCases),
-                                catalog: try ParameterCatalog([descriptor]))
+        return try ParameterCatalog([descriptor] + ParameterCatalog.wing.parameters)
     }
 
-    static func intent() throws -> CommandIntent {
-        try CommandIntent(.init(
+    static func admission(_ parameter: ParameterID = liveParameter) throws -> AdmissionContext {
+        AdmissionContext(hostEpoch: AuthorityBench.hostEpoch, connectionEpoch: nil,
+                         revisions: CommandRevisions(), permission: AuthorityBench.permission,
+                         allowedScopes: [.parameter(parameter)], allowedClasses: Set(ControlClass.allCases),
+                         catalog: try catalog())
+    }
+
+    /// Sets `parameter` to its default value.
+    static func intent(_ parameter: ParameterID = liveParameter) throws -> CommandIntent {
+        let descriptor = try #require(try catalog()[parameter])
+        return try CommandIntent(.init(
             id: CommandID(validated: "command.batch"), commandClass: .live, origin: .human,
             hostEpoch: AuthorityBench.hostEpoch, connectionEpoch: nil, revisions: CommandRevisions(),
-            operation: .set(liveParameter, ParameterValue(value: 0.5, unit: .normalized)),
+            operation: .set(parameter, ParameterValue(value: descriptor.defaultValue, unit: descriptor.unit)),
             permission: AuthorityBench.permission
         ))
     }
 
-    static func ticket(_ authority: HostAuthority) async throws -> DirectWriteTicket {
-        try #require(try await authority.admitDirect(try intent(), admission: try admission(),
+    /// A ticket whose scope is `.parameter(parameter)`.
+    static func ticket(_ authority: HostAuthority,
+                       parameter: ParameterID = liveParameter) async throws -> DirectWriteTicket {
+        try #require(try await authority.admitDirect(try intent(parameter), admission: try admission(parameter),
                                                      project: AuthorityBench.projectA,
                                                      window: AuthorityBench.windowA).get())
     }
 
-    static func grant(_ authority: HostAuthority,
-                      targets: [DirectSendTarget]) async throws -> DirectWriteAuthorization {
-        try await authority.authorizeDirectSend(try await ticket(authority), targets: targets).get()
+    static func grant(_ authority: HostAuthority, targets: [DirectSendTarget],
+                      parameter: ParameterID = liveParameter) async throws -> DirectWriteAuthorization {
+        try await authority.authorizeDirectSend(try await ticket(authority, parameter: parameter),
+                                                targets: targets).get()
     }
 
     /// A grant binding each setting's address.
-    static func grant(_ authority: HostAuthority, settings: [WingSetting]) async throws -> DirectWriteAuthorization {
-        try await grant(authority, targets: settings.map { DirectSendTarget($0.address) })
+    static func grant(_ authority: HostAuthority, settings: [WingSetting],
+                      parameter: ParameterID = liveParameter) async throws -> DirectWriteAuthorization {
+        try await grant(authority, targets: settings.map { DirectSendTarget($0.address) }, parameter: parameter)
     }
 
     static func refusal<Success>(_ result: Result<Success, DirectWriteRefusal>) -> DirectWriteRefusal? {
@@ -74,6 +86,12 @@ enum DirectSendBench {
         }
         return nil
     }
+}
+
+/// Test-only `DirectSendScopePolicy` admitting every target under every scope;
+/// `AuthorityBench.makeAuthority`'s default, so tests not about scope mint freely.
+struct AnyTargetScope: DirectSendScopePolicy {
+    func admits(_ target: DirectSendTarget, under scope: CommandScope) -> Bool { true }
 }
 
 /// No socket. Records direct SETs and legacy SETs; GETs are dropped. Its session

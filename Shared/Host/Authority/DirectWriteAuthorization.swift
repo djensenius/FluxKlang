@@ -114,18 +114,20 @@ extension HostAuthorityBook {
     /// Redeems `ticket` (always consuming it, as `redeemDirect` does) and mints a
     /// grant for one send to each of `targets`. Order: the redeem refusal,
     /// unchanged, minting nothing; `invalidBinding` for empty or duplicate
-    /// `targets`, or more than `HostAuthority.directSendBatchLimit`; grants no
+    /// `targets`, or more than `HostAuthority.directSendBatchLimit`; `outOfScope`
+    /// unless `policy` admits every target under `ticket.scope`; grants no
     /// longer armed are pruned; at `HostAuthority.directSendCapacity` armed grants
     /// (a batch holds one), `tooManyOutstanding`. Every refusal fails closed: the
     /// ticket is already spent and the write must be admitted again. Never changes
     /// the snapshot.
     mutating func authorizeDirectSend(
-        _ ticket: DirectWriteTicket, targets: [DirectSendTarget]
+        _ ticket: DirectWriteTicket, targets: [DirectSendTarget], policy: any DirectSendScopePolicy
     ) -> Result<DirectWriteAuthorization, DirectWriteRefusal> {
         if case .failure(let refusal) = redeemDirect(ticket) { return .failure(refusal) }
         let bound = Set(targets)
         guard !targets.isEmpty, targets.count <= HostAuthority.directSendBatchLimit,
               bound.count == targets.count else { return .failure(.invalidBinding) }
+        guard targets.allSatisfy({ policy.admits($0, under: ticket.scope) }) else { return .failure(.outOfScope) }
         // `isArmed` takes each grant's lock, so a pruned grant's send has finished.
         sendGrants.removeAll { !$0.isArmed }
         guard sendGrants.count < HostAuthority.directSendCapacity else { return .failure(.tooManyOutstanding) }
