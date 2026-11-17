@@ -14,6 +14,7 @@ struct MIDIIngressDescriptor: BitwiseCopyable, Sendable {
 /// One session's fixed storage. Producer access requires the ingress gate; consumer access is single-owner.
 /// Payload is reclaimed by post-copy acknowledgements, NOT by popping a descriptor from SPSCRing.
 final class MIDIIngressStorage: @unchecked Sendable {
+    let format: MIDIPacketBatch.Format
     let descriptors: SPSCRing<MIDIIngressDescriptor>
     let byteCapacity: Int
     let lengthCapacity: Int
@@ -28,10 +29,12 @@ final class MIDIIngressStorage: @unchecked Sendable {
 
     /// Smaller power-of-two capacities and a wrapping counter origin are pure-fixture seams.
     init(
-        batches: Int = 1_024, bytes: Int = 1_048_576, lengths: Int = 4_096, startingAt: UInt64 = 0
+        batches: Int = 1_024, bytes: Int = 1_048_576, lengths: Int = 4_096, startingAt: UInt64 = 0,
+        format: MIDIPacketBatch.Format = .bytes
     ) throws {
         precondition(bytes > 0 && bytes.nonzeroBitCount == 1)
         precondition(lengths > 0 && lengths.nonzeroBitCount == 1)
+        self.format = format
         descriptors = try SPSCRing(policy: HandoffPolicy(
             purpose: .events, producer: .midiReceive,
             producers: ProducerCardinality(maximum: 1, evidence: .verified),
@@ -104,12 +107,26 @@ final class MIDIIngressStorage: @unchecked Sendable {
             packets.append(packet)
             cursor &+= UInt64(count)
         }
+        let payload: MIDIPacketBatch.Payload
+        switch format {
+        case .bytes:
+            payload = .bytes(packets)
+        case .midi1UMP:
+            payload = .midi1UMP(packets.map { packet in
+                precondition(packet.count.isMultiple(of: 4))
+                return packet.withUnsafeBytes { raw in
+                    stride(from: 0, to: raw.count, by: 4).map {
+                        raw.loadUnaligned(fromByteOffset: $0, as: UInt32.self)
+                    }
+                }
+            })
+        }
         beforeAcknowledgement?()
         copiedBytes.store(descriptor.byteStart &+ UInt64(descriptor.byteCount), ordering: .releasing)
         copiedLengths.store(descriptor.lengthStart &+ UInt64(descriptor.packetCount), ordering: .releasing)
         copiedBatches.store(descriptor.batchEnd, ordering: .releasing)
         return MIDIPacketBatch(
-            packets: packets, afterGap: descriptor.afterGap,
+            payload: payload, afterGap: descriptor.afterGap,
             source: MIDIConnectionToken(rawValue: descriptor.rawToken)
         )
     }

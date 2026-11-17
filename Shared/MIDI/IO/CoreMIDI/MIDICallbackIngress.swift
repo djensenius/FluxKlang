@@ -3,7 +3,12 @@ import Synchronization
 /// Borrowed storage is valid only during `receive`. Each next() exposes one packet, including empty packets.
 protocol MIDIBorrowedPacketCursor {
     var packetCount: Int { get }
+    var isValid: Bool { get }
     mutating func next() -> UnsafeBufferPointer<UInt8>
+}
+
+extension MIDIBorrowedPacketCursor {
+    var isValid: Bool { true }
 }
 
 /// Application-enforced exclusive producer role; not a claim that Apple serializes read callbacks.
@@ -17,9 +22,12 @@ final class MIDICallbackIngress: @unchecked Sendable {
     let storage: MIDIIngressStorage
 
     init(
-        batches: Int = 1_024, bytes: Int = 1_048_576, lengths: Int = 4_096, startingAt: UInt64 = 0
+        batches: Int = 1_024, bytes: Int = 1_048_576, lengths: Int = 4_096, startingAt: UInt64 = 0,
+        format: MIDIPacketBatch.Format = .bytes
     ) throws {
-        storage = try MIDIIngressStorage(batches: batches, bytes: bytes, lengths: lengths, startingAt: startingAt)
+        storage = try MIDIIngressStorage(
+            batches: batches, bytes: bytes, lengths: lengths, startingAt: startingAt, format: format
+        )
     }
 
     /// Bits: busy = 1, permanently closed = 2. Exactly one strong CAS; no retry on overlap or reentry.
@@ -32,13 +40,14 @@ final class MIDICallbackIngress: @unchecked Sendable {
             return refuse()
         }
         defer { gate.bitwiseAnd(~UInt8(1), ordering: .releasing) }
-        guard cursor.packetCount <= Self.maximumEntries else { return refuse() }
+        guard cursor.isValid, (0...Self.maximumEntries).contains(cursor.packetCount) else { return refuse() }
         var byteCount = 0
         var packetCount = 0
         for _ in 0..<cursor.packetCount {
             let packet = cursor.next()
-            guard packet.count <= Int(UInt16.max),
+            guard cursor.isValid, packet.count <= Int(UInt16.max),
                   packet.count <= Self.maximumBytes - byteCount else { return refuse() }
+            if storage.format == .midi1UMP, !packet.count.isMultiple(of: 4) { return refuse() }
             if packet.isEmpty { continue }
             guard storage.hasRoom(bytes: byteCount + packet.count, lengths: packetCount + 1) else {
                 return refuse()

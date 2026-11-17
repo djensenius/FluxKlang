@@ -11,6 +11,13 @@
 struct LaunchControlXLStream: Sendable {
     /// CoreMIDI's `MIDIPacket.length` is a `UInt16`, so no real packet is longer; a longer one is refused whole.
     static let maximumPacketBytes = Int(UInt16.max)
+    static let umpSplitter: UMPStreamSplitter = {
+        do {
+            return try UMPStreamSplitter(maximumWords: CoreMIDIEventPacketCursor.maximumWords)
+        } catch {
+            preconditionFailure("Invalid MIDI 1 UMP input bound: \(error)")
+        }
+    }()
     /// The registry default: the legacy source plus 31 identified units, more surfaces than one person connects at
     /// once, while bounding the parsers (and their SysEx buffers) one stream can hold. A unit refused past it shares
     /// the legacy source and is reported unresolved; it is never dropped.
@@ -39,9 +46,13 @@ struct LaunchControlXLStream: Sendable {
     var snapshot: MIDISourceRegistrySnapshot { registry.snapshot }
 
     static func make(
-        profile: MIDISourceProfile = LaunchControlXLMapping.sourceProfile
+        profile: MIDISourceProfile = LaunchControlXLMapping.sourceProfile,
+        backend: LaunchControlXLInputBackend = .legacyBytes
     ) throws(MIDISourceRefusal) -> LaunchControlXLStream {
-        var registry = try MIDISourceRegistry.make(maximumSources: maximumSources, maximumFeedBytes: maximumPacketBytes)
+        var registry = try MIDISourceRegistry.make(
+            maximumSources: maximumSources, maximumFeedBytes: maximumPacketBytes,
+            umpSplitter: backend == .experimentalMIDI1UMP ? umpSplitter : .standard
+        )
         try registry.register(input, key: key, profile: profile)
         return LaunchControlXLStream(registry: registry, profile: profile)
     }
@@ -107,6 +118,27 @@ struct LaunchControlXLStream: Sendable {
                 outputs += try registry.feed(packet, from: input)
             } catch {
                 continue
+            }
+        }
+        return outputs
+    }
+
+    mutating func feedUMP(packets: [[UInt32]], from token: MIDIConnectionToken? = nil) -> [MIDISourceOutput] {
+        var input = Self.input
+        if let token {
+            guard let route = routes[token] else {
+                droppedBatches += 1
+                return []
+            }
+            input = route.input
+        }
+        var outputs: [MIDISourceOutput] = []
+        for packet in packets {
+            do throws(MIDIUMPSourceRefusal) {
+                outputs += try registry.feedUMP(packet, from: input)
+            } catch {
+                // Refused event packets lose input, unlike the retained legacy oversized-byte API.
+                _ = try? registry.resetSource(input)
             }
         }
         return outputs

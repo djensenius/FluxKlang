@@ -28,13 +28,13 @@ struct MIDI1UMPInputDecoding: Equatable, Sendable {
 }
 
 /// Turns MIDI 1.0-protocol UMP words (as `MIDIInputPortCreateWithProtocol(..., ._1_0, ...)` delivers them) back into
-/// the MIDI 1.0 byte stream that `MIDI1Parser` consumes (#81). Nothing calls it yet.
+/// the MIDI 1.0 byte stream that `MIDI1Parser` consumes (#81).
 ///
 /// The decoder keeps the group of the open SysEx, if any, so that its output is always well framed for one
 /// `MIDI1Parser` fed every byte it emits, across `decode` calls. Pair one decoder with one parser per source, and
 /// `reset()` both together.
 ///
-/// - The batch is framed by `UMPStreamSplitter.standard`. A batch that ends inside a packet, or holds more words
+/// - The batch is framed by the injected splitter (standard by default). A batch ending inside a packet, or more words
 ///   than the splitter's bound, is refused whole: no bytes, one `.malformed` skip.
 /// - MT 0x1 (System Common and Real Time) and MT 0x2 (MIDI 1.0 channel voice) are decoded by their UMP types and
 ///   written by `MIDI1Wire`, each message whole with its status byte (no running status).
@@ -54,10 +54,13 @@ struct MIDI1UMPInputDecoding: Equatable, Sendable {
 ///   dropped, never spliced into it; a start from another group replaces it (the later start wins). MIDI 1.0 devices
 ///   use group 0.
 struct MIDI1UMPInputDecoder: Equatable, Sendable {
+    let splitter: UMPStreamSplitter
     /// The group of the open SysEx; nil when none is open.
     private var sysExGroup: UMPGroup?
 
-    init() {}
+    init(splitter: UMPStreamSplitter = .standard) {
+        self.splitter = splitter
+    }
 
     /// Closes any open SysEx. Reset the paired `MIDI1Parser` at the same time.
     mutating func reset() {
@@ -67,7 +70,7 @@ struct MIDI1UMPInputDecoder: Equatable, Sendable {
     mutating func decode(_ words: [UInt32]) -> MIDI1UMPInputDecoding {
         let packets: [UMPPacket]
         do {
-            packets = try UMPStreamSplitter.standard.split(words)
+            packets = try splitter.split(words)
         } catch {
             sysExGroup = nil
             return MIDI1UMPInputDecoding(bytes: [], skipped: [.malformed(error)])

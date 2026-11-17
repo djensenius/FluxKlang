@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "d98f1363024b9e3917fc0a18ef1412f5aac0a956ec61930ab6134fe2543c5593",
+    "sha256": "121960b71d3eababe47c2fb77ec0e974083563e4b0d3b7ac48ce4001e06f2dae",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -728,6 +728,9 @@
         "FluxKlangTests/CoreMIDIAdapterTests+IngressConcurrency.swift",
         "FluxKlangTests/CoreMIDIAdapterTests+IngressDelivery.swift",
         "FluxKlangTests/CoreMIDIAdapterTests+IngressController.swift",
+        "FluxKlangTests/CoreMIDIAdapterTests+UMPSelection.swift",
+        "FluxKlangTests/CoreMIDIAdapterTests+UMPIngress.swift",
+        "FluxKlangTests/CoreMIDIAdapterTests+UMPSources.swift",
         "FluxKlangTests/PatchVariationTests.swift",
         "FluxKlangTests/PatchVariationTests+Recall.swift",
         "FluxKlangTests/PatchVariationTests+Editing.swift",

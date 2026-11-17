@@ -155,6 +155,26 @@ struct MIDI1UMPInputDecoderTests {
         #expect(aboveBound.skipped == [.malformed(.batchTooLarge(count: 4097, limit: 4096))])
     }
 
+    @Test func injectedSplitterSurvivesResetAndRefusal() throws {
+        let splitter = try UMPStreamSplitter(maximumWords: 16_383)
+        var decoder = MIDI1UMPInputDecoder(splitter: splitter)
+        let full = Array(repeating: Self.systemWord(0xF8), count: 16_383)
+        for _ in 0..<2 {
+            #expect(decoder.decode(full).bytes == Array(repeating: 0xF8, count: full.count))
+            let refused = decoder.decode(full + [Self.systemWord(0xF8)])
+            #expect(refused == MIDI1UMPInputDecoding(
+                bytes: [], skipped: [.malformed(.batchTooLarge(count: 16_384, limit: 16_383))]
+            ))
+            _ = decoder.decode([0x3011_0100, 0])
+            decoder.reset()
+            #expect(decoder.decode([0x3031_0200, 0]).skipped == [.orphanSysEx(.end)])
+        }
+        var standard = MIDI1UMPInputDecoder()
+        #expect(standard.decode(full).skipped == [
+            .malformed(.batchTooLarge(count: 16_383, limit: 4_096))
+        ])
+    }
+
     @Test func refusedPacketGivesNoBytesAndDecodingContinues() throws {
         let words: [UInt32] = [
             Self.channelWord(0x90, 0x3C, 0x64),

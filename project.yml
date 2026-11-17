@@ -830,6 +830,9 @@ targets:
       - path: FluxKlangTests/CoreMIDIAdapterTests+IngressConcurrency.swift
       - path: FluxKlangTests/CoreMIDIAdapterTests+IngressDelivery.swift
       - path: FluxKlangTests/CoreMIDIAdapterTests+IngressController.swift
+      - path: FluxKlangTests/CoreMIDIAdapterTests+UMPSelection.swift
+      - path: FluxKlangTests/CoreMIDIAdapterTests+UMPIngress.swift
+      - path: FluxKlangTests/CoreMIDIAdapterTests+UMPSources.swift
       - path: FluxKlangTests/PatchVariationTests.swift
       - path: FluxKlangTests/PatchVariationTests+Recall.swift
       - path: FluxKlangTests/PatchVariationTests+Editing.swift

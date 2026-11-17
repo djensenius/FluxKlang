@@ -36,6 +36,7 @@ struct MIDISourceRegistry: Sendable {
 
     let maximumSources: Int
     let maximumFeedBytes: Int
+    private let umpSplitter: UMPStreamSplitter
     private var bindings: [Source] = []
 
     var count: Int { bindings.count }
@@ -52,16 +53,20 @@ struct MIDISourceRegistry: Sendable {
     /// Refuses limits outside `sourceBounds` and `feedByteBounds` with `.invalidConfiguration`; sources are checked
     /// first.
     static func make(
-        maximumSources: Int = defaultMaximumSources, maximumFeedBytes: Int = defaultMaximumFeedBytes
+        maximumSources: Int = defaultMaximumSources, maximumFeedBytes: Int = defaultMaximumFeedBytes,
+        umpSplitter: UMPStreamSplitter = .standard
     ) throws(MIDISourceRefusal) -> MIDISourceRegistry {
         guard sourceBounds.contains(maximumSources) else { throw .invalidConfiguration(.maximumSources) }
         guard feedByteBounds.contains(maximumFeedBytes) else { throw .invalidConfiguration(.maximumFeedBytes) }
-        return MIDISourceRegistry(maximumSources: maximumSources, maximumFeedBytes: maximumFeedBytes)
+        return MIDISourceRegistry(
+            maximumSources: maximumSources, maximumFeedBytes: maximumFeedBytes, umpSplitter: umpSplitter
+        )
     }
 
-    private init(maximumSources: Int, maximumFeedBytes: Int) {
+    private init(maximumSources: Int, maximumFeedBytes: Int, umpSplitter: UMPStreamSplitter) {
         self.maximumSources = maximumSources
         self.maximumFeedBytes = maximumFeedBytes
+        self.umpSplitter = umpSplitter
     }
 
     /// Adds a source with fresh parser and state. Refusals, in this order: `.duplicateInput`, `.ambiguousEndpoint`
@@ -76,7 +81,7 @@ struct MIDISourceRegistry: Sendable {
             throw .ambiguousEndpoint(existing: existing.input)
         }
         guard bindings.count < maximumSources else { throw .registryFull(limit: maximumSources) }
-        guard let source = Source(input: input, key: key, profile: profile) else {
+        guard let source = Source(input: input, key: key, profile: profile, umpSplitter: umpSplitter) else {
             throw .invalidConfiguration(.maximumSysExPayloadBytes)
         }
         bindings.insert(source, at: position)
@@ -103,6 +108,17 @@ struct MIDISourceRegistry: Sendable {
             throw .feedTooLarge(count: bytes.count, limit: maximumFeedBytes)
         }
         return bindings[index].consume(bytes)
+    }
+
+    /// One complete event packet, transactionally. No outputs or framing/state prefix survives a refusal.
+    mutating func feedUMP(
+        _ words: [UInt32], from input: MIDIInputID
+    ) throws(MIDIUMPSourceRefusal) -> [MIDISourceOutput] {
+        guard let index = index(of: input) else { throw .source(.unknownInput(input)) }
+        var candidate = bindings[index]
+        let outputs = try candidate.consumeUMP(words, maximumBytes: maximumFeedBytes)
+        bindings[index] = candidate
+        return outputs
     }
 
     /// Binary search over the ascending bindings: the first position whose input is not below `input`.

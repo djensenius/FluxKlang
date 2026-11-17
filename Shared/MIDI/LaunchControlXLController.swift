@@ -90,8 +90,14 @@ final class LaunchControlXLController {
 
     func setMode(_ mode: LaunchControlXLMode) async {
         configuration.mode = mode
-        await persist()
         restart()
+        await persist()
+    }
+
+    func setInputBackend(_ backend: LaunchControlXLInputBackend) async {
+        configuration.inputBackend = backend
+        restart()
+        await persist()
     }
 
     func setActionHandler(_ handler: @escaping (LaunchControlXLAction) async -> Void) {
@@ -107,20 +113,22 @@ final class LaunchControlXLController {
         bank * 8 + slot
     }
 
-    nonisolated private static func freshStream(profile: MIDISourceProfile) -> LaunchControlXLStream {
+    nonisolated private static func freshStream(
+        profile: MIDISourceProfile, backend: LaunchControlXLInputBackend = .legacyBytes
+    ) -> LaunchControlXLStream {
         do throws(MIDISourceRefusal) {
-            return try LaunchControlXLStream.make(profile: profile)
+            return try LaunchControlXLStream.make(profile: profile, backend: backend)
         } catch {
             preconditionFailure("Invalid Launch Control XL source profile: \(error)")
         }
     }
 
     private func restart() {
-        midiInput?.stop()
-        stream = Self.freshStream(profile: sourcePolicy.profile)
-        unresolvedSourceNames = []  // Defensive: each input's stop() already reports [] through the current callback.
-        pendingActions = []
         generation += 1
+        pendingActions = []
+        midiInput?.stop()
+        stream = Self.freshStream(profile: sourcePolicy.profile, backend: configuration.inputBackend)
+        unresolvedSourceNames = []  // Defensive: each input's stop() already reports [] through the current callback.
         let generation = generation
         guard configuration.mode != .disabled else {
             status = .disabled
@@ -130,6 +138,7 @@ final class LaunchControlXLController {
         let midiInput = midiInput ?? makeMIDIInput()
         self.midiInput = midiInput
         midiInput.start(
+            backend: configuration.inputBackend,
             sourceNameContains: configuration.mapping.sourceNameContains,
             onPackets: { [weak self] batch in
                 self?.deliver(batch, generation: generation)
@@ -160,7 +169,16 @@ final class LaunchControlXLController {
     private func deliver(_ batch: MIDIPacketBatch, generation: Int) {
         guard generation == self.generation else { return }
         if batch.afterGap { stream.reset() }
-        enqueue(configuration.mapping.actions(for: stream.feed(packets: batch.packets, from: batch.source)))
+        guard batch.payload.format == configuration.inputBackend.format else {
+            stream.reset()
+            return
+        }
+        let outputs: [MIDISourceOutput]
+        switch batch.payload {
+        case .bytes(let packets): outputs = stream.feed(packets: packets, from: batch.source)
+        case .midi1UMP(let packets): outputs = stream.feedUMP(packets: packets, from: batch.source)
+        }
+        enqueue(configuration.mapping.actions(for: outputs))
         Task { [weak self] in await self?.dispatchPendingActions() }
     }
 
@@ -189,6 +207,7 @@ final class LaunchControlXLController {
         isDispatching = true
         defer { isDispatching = false }
         while let pending = pendingActions.popFirst() {
+            guard pending.generation == generation else { continue }
             lastAction = pending.action
             guard pending.shouldDispatch, pending.generation == generation, configuration.mode == .control,
                   let actionHandler else { continue }
