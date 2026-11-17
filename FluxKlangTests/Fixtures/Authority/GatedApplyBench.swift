@@ -10,24 +10,30 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
-/// Mints each phase's grant on an `AuthorityBench` authority through
-/// `DirectSendBench` (a fresh ticket per call) and records what it was asked for.
-/// It can refuse a phase without minting, or change the live state between a
-/// phase's admission and its grant, as a live update during verification would.
+/// Mints each grant on an `AuthorityBench` authority through `DirectSendBench`
+/// (a fresh ticket per call) and records what it was asked for. It can refuse a
+/// phase's mints by index, change the live state between a phase's admission and
+/// its grant, as a live update during verification would, or run a step after a
+/// phase's `n`th successful mint, before any send.
 actor GatedApplyMinter: WingDirectGrantMinting {
     struct Mint: Sendable {
         let phase: WingDirectApplyPhase
         let targets: Set<DirectSendTarget>
+        /// `targets` in the order the controller bound them.
+        let orderedTargets: [DirectSendTarget]
         /// Armed grants on the authority just before this mint.
         let outstandingBefore: Int
         let result: Result<DirectWriteAuthorization, DirectWriteRefusal>
     }
 
+    typealias Step = @MainActor @Sendable () async -> Void
+
     let authority: HostAuthority
     private let parameter: ParameterID
     private(set) var mints: [Mint] = []
-    private var refusing: [WingDirectApplyPhase: DirectWriteRefusal] = [:]
+    private var refusing: [WingDirectApplyPhase: (refusal: DirectWriteRefusal, mints: Range<Int>)] = [:]
     private var bumpingLive: Set<WingDirectApplyPhase> = []
+    private var steps: [WingDirectApplyPhase: (mint: Int, step: Step)] = [:]
 
     init(_ authority: HostAuthority, parameter: ParameterID = DirectSendBench.liveParameter) {
         self.authority = authority
@@ -37,23 +43,31 @@ actor GatedApplyMinter: WingDirectGrantMinting {
     var phases: [WingDirectApplyPhase] { mints.map(\.phase) }
     var grants: [DirectWriteAuthorization] { mints.compactMap { try? $0.result.get() } }
 
-    func refuse(_ phase: WingDirectApplyPhase, with refusal: DirectWriteRefusal = .notOutstanding) {
-        refusing[phase] = refusal
+    /// Refuses `phase`'s mints whose 0-based index, counted over this minter's life, is in `mints`.
+    func refuse(_ phase: WingDirectApplyPhase, with refusal: DirectWriteRefusal = .notOutstanding,
+                mints: Range<Int> = 0..<Int.max) {
+        refusing[phase] = (refusal, mints)
     }
 
     func bumpLive(before phase: WingDirectApplyPhase) { bumpingLive.insert(phase) }
 
+    /// Runs `step` after `phase`'s `mint`th (0-based) mint succeeds, before the grant is returned.
+    func after(_ phase: WingDirectApplyPhase, mint: Int, run step: @escaping Step) { steps[phase] = (mint, step) }
+
     func grant(for phase: WingDirectApplyPhase,
                targets: [DirectSendTarget]) async -> Result<DirectWriteAuthorization, DirectWriteRefusal> {
+        let index = mints.count { $0.phase == phase }
         let outstanding = await authority.outstandingDirectSendCount()
-        let result = await mint(phase, targets: targets)
-        mints.append(Mint(phase: phase, targets: Set(targets), outstandingBefore: outstanding, result: result))
+        let result = await mint(phase, index: index, targets: targets)
+        mints.append(Mint(phase: phase, targets: Set(targets), orderedTargets: targets,
+                          outstandingBefore: outstanding, result: result))
+        if case .success = result, let planned = steps[phase], planned.mint == index { await planned.step() }
         return result
     }
 
-    private func mint(_ phase: WingDirectApplyPhase,
+    private func mint(_ phase: WingDirectApplyPhase, index: Int,
                       targets: [DirectSendTarget]) async -> Result<DirectWriteAuthorization, DirectWriteRefusal> {
-        if let refusal = refusing[phase] { return .failure(refusal) }
+        if let refusal = refusing[phase], refusal.mints.contains(index) { return .failure(refusal.refusal) }
         do {
             let ticket = try await DirectSendBench.ticket(authority, parameter: parameter)
             if bumpingLive.contains(phase) {
@@ -107,6 +121,16 @@ actor EchoingDirectTransport: WingTransporting {
     func fail(_ address: String) { failing.insert(address) }
 
     func holdNextWrite() { holds = true }
+
+    /// Stores each value and answers it at once, as a live update from the console would.
+    func confirm(_ settings: [WingSetting]) {
+        guard let sessionID, let host = peerHosts.first else { return }
+        for setting in settings {
+            stored[setting.address] = setting.value
+            continuation.yield(WingIncoming(address: setting.address, value: setting.value, host: host,
+                                            port: WingNetwork.defaultPort, transportSessionID: sessionID))
+        }
+    }
 
     func send(_ address: String, _ value: WingValue?, to host: String?, port: UInt16?) {
         if let value {
