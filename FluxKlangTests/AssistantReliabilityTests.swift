@@ -392,8 +392,11 @@ struct AssistantReliabilityTests {
 private actor ReliabilityDraftStore: PendingStudioPatchPersisting {
     private var draft: StudioPatchDraft?
 
-    func load() -> StudioPatchDraft? { draft }
-    func save(_ draft: StudioPatchDraft?) { self.draft = draft }
+    func load() -> PendingStudioPatchLoadOutcome { draft.map { .loaded($0) } ?? .absent }
+    func save(_ draft: StudioPatchDraft?) -> PendingStudioPatchMutationOutcome {
+        self.draft = draft
+        return draft == nil ? .deleteCompleted : .writeCompleted
+    }
 }
 
 private struct ReplyGenerator: AssistantGenerating {

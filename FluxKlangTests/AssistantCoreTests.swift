@@ -67,7 +67,7 @@ struct AssistantCoreTests {
         let expectedID = try #require(first.pendingStudioDraft?.id)
         var unencodable = try #require(first.pendingStudioDraft)
         unencodable.fragment.nodes[0].node.position.x = .infinity
-        await PendingStudioPatchStore(fileURL: fileURL).save(unencodable)
+        #expect(await PendingStudioPatchStore(fileURL: fileURL).save(unencodable) == .encodingFailed)
         let reloaded = AssistantCoordinator(draftStore: PendingStudioPatchStore(fileURL: fileURL))
         await reloaded.load()
 
@@ -241,7 +241,7 @@ struct AssistantCoreTests {
 
         #expect(result == nil)
         #expect(refreshed.validation.contains { $0.code == "environment-changed" })
-        #expect(persisted == refreshed)
+        #expect(persisted == .loaded(refreshed))
     }
 
     private func makeContext(
@@ -272,6 +272,9 @@ struct AssistantCoreTests {
 private actor MemoryDraftStore: PendingStudioPatchPersisting {
     private var draft: StudioPatchDraft?
 
-    func load() async -> StudioPatchDraft? { draft }
-    func save(_ draft: StudioPatchDraft?) async { self.draft = draft }
+    func load() async -> PendingStudioPatchLoadOutcome { draft.map { .loaded($0) } ?? .absent }
+    func save(_ draft: StudioPatchDraft?) async -> PendingStudioPatchMutationOutcome {
+        self.draft = draft
+        return draft == nil ? .deleteCompleted : .writeCompleted
+    }
 }

@@ -180,8 +180,11 @@ actor InAppMemoryHistoryBackend: AssistantHistoryBackend {
 actor InAppMemoryDraftStore: PendingStudioPatchPersisting {
     private var draft: StudioPatchDraft?
 
-    func load() async -> StudioPatchDraft? { draft }
-    func save(_ draft: StudioPatchDraft?) async { self.draft = draft }
+    func load() async -> PendingStudioPatchLoadOutcome { draft.map { .loaded($0) } ?? .absent }
+    func save(_ draft: StudioPatchDraft?) async -> PendingStudioPatchMutationOutcome {
+        self.draft = draft
+        return draft == nil ? .deleteCompleted : .writeCompleted
+    }
 }
 
 struct InAppIsolationHTTPClient: AssistantHTTPClient {

@@ -63,7 +63,7 @@ struct AppModelStoreLifecycleTests {
             tombstone: startup.conversation.id, deletedAt: Date(timeIntervalSince1970: 1_800_000_000)))
         let records = try await fixture.history.loadRecords()
         #expect(records.compactMap(\.conversation) == [replacement.conversation])
-        #expect(await fixture.drafts.load() == replacement.draft)
+        #expect(await fixture.drafts.load() == .loaded(replacement.draft))
         let replacementLCXL = await fixture.launch.load(
             LaunchControlXLConfiguration.self, from: "launch-control-xl.json")
         #expect(replacementLCXL == replacement.launchConfiguration)
@@ -197,7 +197,7 @@ private final class StoreLifecycleFixture {
         await domain.save([payload.routing], to: "routing_snapshots.json")
         // This is deliberately separate from domainStore, including during replacement.
         await launch.save(payload.launchConfiguration, to: "launch-control-xl.json")
-        await drafts.save(payload.draft)
+        #expect(await drafts.save(payload.draft) == .writeCompleted)
         try await history.save(AssistantConversationRecord(conversation: payload.conversation))
     }
 

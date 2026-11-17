@@ -103,8 +103,8 @@ actor RoutingTestDraftStore: PendingStudioPatchPersisting {
         guard !gates.isEmpty else { return }
         gates.removeFirst().resume()
     }
-    func load() -> StudioPatchDraft? { draft }
-    func save(_ draft: StudioPatchDraft?) async {
+    func load() -> PendingStudioPatchLoadOutcome { draft.map { .loaded($0) } ?? .absent }
+    func save(_ draft: StudioPatchDraft?) async -> PendingStudioPatchMutationOutcome {
         saves += 1
         if pauseNext && !closed {
             pauseNext = false
@@ -112,6 +112,7 @@ actor RoutingTestDraftStore: PendingStudioPatchPersisting {
         }
         // Unlike the validation store, assignment remains AFTER suspension.
         self.draft = draft
+        return draft == nil ? .deleteCompleted : .writeCompleted
     }
     func finish() {
         closed = true
