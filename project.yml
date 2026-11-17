@@ -524,7 +524,6 @@ targets:
       - path: FluxKlangTests/UMPStreamMessageTests+Text.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+Fragments.swift
-      - path: FluxKlangTests/MIDIControlChangeDecodeTests+Legacy.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+RealTime.swift
       - path: FluxKlangTests/MIDICIMessageTests.swift
       - path: FluxKlangTests/MIDICIMessageTests+Decode.swift
