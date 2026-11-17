@@ -30,6 +30,10 @@ extension KernelCycle {
         case ackIdentitiesExhausted
         /// `parts.admissionRefusals` belongs to another fan-in (identity or lane count differ).
         case admissionRefusalsMismatch
+        /// `parts.faults` is not the authority `parts.events`' lanes raise on (`parts.events.lanesRaiseOn(faults)` is
+        /// false: some lane's chain was minted from another authority, whatever its scopes or budget). The cycle
+        /// would watch a latch no lane raises on, so a critical lane overflow could never silence it.
+        case faultsNotLaneAuthority
         /// `ownership` cannot be claimed for this start (see `KernelCycleStart`); checked after the wiring checks and
         /// before `.admissionRefusalsRequired`. A refusal from the final claim (only when another preparation raced
         /// this one) has used one `KernelAckRequests` identity.
@@ -42,9 +46,9 @@ extension KernelCycle {
 
     /// Checks, in this order: the shape (`.notRenderEvents`, `.deadline`, `.blockCapacityOutOfRange`,
     /// `.perLaneQuotaOutOfRange`), the wiring (`.scopeCountMismatch`, `.telemetrySlotOutOfRange`,
-    /// `.admissionRefusalsMismatch`), then the ownership (`.ownershipClaim`, `.admissionRefusalsRequired`). `init`
-    /// then issues the acknowledgement identity (`.ackIdentitiesExhausted`) and makes the claim itself. The first
-    /// defect found is the one reported; nothing is claimed or issued here.
+    /// `.admissionRefusalsMismatch`, `.faultsNotLaneAuthority`), then the ownership (`.ownershipClaim`,
+    /// `.admissionRefusalsRequired`). `init` then issues the acknowledgement identity (`.ackIdentitiesExhausted`) and
+    /// makes the claim itself. The first defect found is the one reported; nothing is claimed or issued here.
     static func prepare(_ parts: KernelCycleParts, blockCapacity: Int,
                         perLaneQuota: Int) throws(PreparationError) -> KernelCyclePreparation {
         let deadline = try checkShape(parts, blockCapacity: blockCapacity, perLaneQuota: perLaneQuota)
@@ -83,6 +87,7 @@ extension KernelCycle {
            refusals.handoff != parts.events.identity || refusals.laneCount != parts.events.laneCount {
             throw .admissionRefusalsMismatch
         }
+        guard parts.events.lanesRaiseOn(parts.faults) else { throw .faultsNotLaneAuthority }
     }
 
     /// The claim refusal comes first: an odd word (a live cycle) is `.predecessorNotRetired` and a used word under

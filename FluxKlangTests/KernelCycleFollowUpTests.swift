@@ -23,6 +23,8 @@ enum FollowUpDefect {
     case tableMismatch
     /// `.admissionRefusalsMismatch`: a table with the fan-in's lane count and another fan-in's identity.
     case tableForeign
+    /// `.faultsNotLaneAuthority`: parts built on a second authority with the lanes' scopes and budget, not theirs.
+    case foreignFaults
     /// `.ownershipClaim(.alreadyUsed)`: `.freshFanIn` over a word a retired cycle left.
     case usedClaim
     /// `.admissionRefusalsRequired`: no table for a replacement over a retired cycle.
@@ -47,8 +49,18 @@ struct FollowUpCase {
 
     /// Replaces the safety flags with ones of `scopes` scopes, keeping every other part (and so every other defect).
     private mutating func replaceSafety(scopes: Int) throws {
-        parts = KernelCycleParts(events: parts.events, faults: rig.faults, ownership: rig.ownership,
+        parts = KernelCycleParts(events: parts.events, faults: parts.faults, ownership: rig.ownership,
                                  safety: try SafetyFlags(scopes: scopes), ramps: rig.ramps, telemetry: parts.telemetry,
+                                 admissionRefusals: parts.admissionRefusals, start: parts.start)
+    }
+
+    /// Replaces the authority with a second one that has the lanes' scopes and budget but is not theirs, keeping
+    /// every other part (and so every other defect).
+    private mutating func replaceFaults() throws {
+        let other = try FaultChainAuthority.testing(
+            scopes: [CycleRig.criticalScope, CycleRig.slotsScope, CycleRig.sysexScope])
+        parts = KernelCycleParts(events: parts.events, faults: other, ownership: rig.ownership, safety: parts.safety,
+                                 ramps: rig.ramps, telemetry: parts.telemetry,
                                  admissionRefusals: parts.admissionRefusals, start: parts.start)
     }
 
@@ -69,15 +81,20 @@ struct FollowUpCase {
         case .telemetrySlot(let slot):
             parts.telemetry = KernelCycleTelemetryOutput(slots: try kernelCycleTelemetrySlots(), slot: slot,
                                                          clockGeneration: 0)
-        case .tableMismatch:
-            parts.admissionRefusals = KernelAdmissionRefusals(laneCount: rig.events.laneCount + 1,
-                                                              handoff: rig.events.identity)
-        case .tableForeign:
-            parts.admissionRefusals = KernelAdmissionRefusals(laneCount: rig.events.laneCount,
-                                                              handoff: rig.events.identity &+ 1)
+        case .tableMismatch, .tableForeign: parts.admissionRefusals = table(for: defect)
         case .usedClaim: parts.start = .freshFanIn
+        case .foreignFaults: try replaceFaults()
         case .tableMissing: parts.admissionRefusals = nil
         }
+    }
+
+    /// The table a table defect carries: one lane too many (`.tableMismatch`), or the fan-in's lane count under
+    /// another fan-in's identity (any other defect, in practice `.tableForeign`).
+    private func table(for defect: FollowUpDefect) -> KernelAdmissionRefusals {
+        if case .tableMismatch = defect {
+            return KernelAdmissionRefusals(laneCount: rig.events.laneCount + 1, handoff: rig.events.identity)
+        }
+        return KernelAdmissionRefusals(laneCount: rig.events.laneCount, handoff: rig.events.identity &+ 1)
     }
 
     /// What `KernelCycle.init` reports for these parts; `nil` when it succeeds (and then the claim is taken).
@@ -112,6 +129,7 @@ struct FollowUpCase {
             (.safetyFewer, .scopeCountMismatch(ownership: 2, safety: 1)),
             (.telemetrySlot(2), .telemetrySlotOutOfRange(2)), (.telemetrySlot(-1), .telemetrySlotOutOfRange(-1)),
             (.tableMismatch, .admissionRefusalsMismatch), (.tableForeign, .admissionRefusalsMismatch),
+            (.foreignFaults, .faultsNotLaneAuthority),
             (.usedClaim, .ownershipClaim(.alreadyUsed)), (.tableMissing, .admissionRefusalsRequired)
         ]
         for (defect, error) in expected {
@@ -183,6 +201,28 @@ struct FollowUpCase {
         let result = try Self.refusal([.usedClaim, .tableMismatch])
         #expect(result.error == .admissionRefusalsMismatch)
         #expect(result.claimKept)
+    }
+
+    /// Kills: the lane authority check before any earlier wiring check (scope count, telemetry slot, table).
+    @Test func followUpForeignFaultsIsReportedAfterEveryEarlierWiringDefect() throws {
+        let earlier: [(FollowUpDefect, KernelCycle.PreparationError)] = [
+            (.scopes, .scopeCountMismatch(ownership: 2, safety: 3)), (.telemetrySlot(2), .telemetrySlotOutOfRange(2)),
+            (.tableMismatch, .admissionRefusalsMismatch)
+        ]
+        for (defect, error) in earlier {
+            let result = try Self.refusal([.foreignFaults, defect])
+            #expect(result.error == error)
+            #expect(result.claimKept)
+        }
+    }
+
+    /// Kills: the lane authority check after the ownership checks (a used word, or no table over a retired cycle).
+    @Test func followUpForeignFaultsIsReportedBeforeOwnership() throws {
+        for ownershipDefect in [FollowUpDefect.usedClaim, .tableMissing] {
+            let result = try Self.refusal([ownershipDefect, .foreignFaults])
+            #expect(result.error == .faultsNotLaneAuthority)
+            #expect(result.claimKept)
+        }
     }
 
     /// Kills: the missing-table check before the ownership claim check (a used word with no table is `.alreadyUsed`).
