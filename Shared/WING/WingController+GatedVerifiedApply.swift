@@ -9,9 +9,11 @@ enum WingDirectApplyPhase: Hashable, Sendable, CaseIterable {
     case retry
 }
 
-/// Mints one direct-send grant for one apply phase, bound to exactly `targets`.
-/// The controller cannot admit commands itself; the composition root does. Each
-/// call spends its own ticket, refused or not.
+/// Mints one direct-send grant for one chunk of at most
+/// `HostAuthority.directSendBatchLimit` targets of an apply phase, bound to
+/// exactly `targets`, so a phase mints once per chunk. The controller cannot
+/// admit commands itself; the composition root does. Each call spends its own
+/// ticket, refused or not.
 protocol WingDirectGrantMinting: Sendable {
     func grant(for phase: WingDirectApplyPhase,
                targets: [DirectSendTarget]) async -> Result<DirectWriteAuthorization, DirectWriteRefusal>
@@ -27,10 +29,11 @@ private enum DirectPhaseOutcome {
 
 extension WingController {
     /// Grant-gated `applyAndVerify` (#62 AU6; no app callers yet). Same phases,
-    /// pacing and verdicts, but each send phase mints a fresh grant just before it
-    /// sends, binding only that phase's addresses, and spends it before verifying.
-    /// A phase with nothing to send mints nothing. A refused mint sends nothing in
-    /// that phase or any later one, and the verdict is `.failed`.
+    /// pacing and verdicts, but each send phase mints a fresh grant per chunk of at
+    /// most `HostAuthority.directSendBatchLimit` addresses, just before sending that
+    /// chunk, and spends it before the next chunk mints or verification starts. A
+    /// phase with nothing to send mints nothing. A refused mint sends nothing more
+    /// in that phase or any later one, and the verdict is `.failed`.
     func applyAndVerify(
         _ settings: [WingSetting],
         safetySettings: [WingSetting] = [],
@@ -76,7 +79,7 @@ extension WingController {
         var retried: [String] = []
         let sent = await sendDirectPhase(retry, session: session, minting: minting) {
             WingApplyVerifier.pendingSettings(expected: expected, confirmedValues: confirmedValues)
-        } didSend: { retried = $0.map(\.address) }
+        } didSend: { retried += $0.map(\.address) }
         guard sent != .refused else { return directRefusal(expected) }
         if !retried.isEmpty {
             await refreshForVerification(retried)
@@ -89,11 +92,14 @@ extension WingController {
         )
     }
 
-    /// One gated, paced phase. `pending` is read once to bind the grant and again
-    /// after the mint, since confirmations can arrive meanwhile; only bound
-    /// settings still pending are sent, and `didSend` receives them. Stops at the
-    /// first failed entry and always relinquishes the grant, so none stays armed
-    /// once the phase returns.
+    /// One gated, paced phase. `pending` is read once and split, in order, into
+    /// consecutive chunks of at most `HostAuthority.directSendBatchLimit`, the most
+    /// one grant may bind. Each chunk mints its own grant, then re-reads `pending`,
+    /// since confirmations can arrive meanwhile; only settings of that chunk still
+    /// pending are sent, and `didSend` receives them. Writes are paced across
+    /// chunks. Each chunk's grant is relinquished before the next chunk mints, so at
+    /// most one is armed and none stays armed once the phase returns. Stops at a
+    /// refused mint or the first failed entry; no later chunk mints.
     private func sendDirectPhase(
         _ phase: WingDirectApplyPhase,
         session: UUID,
@@ -102,16 +108,21 @@ extension WingController {
         didSend: ([WingSetting]) -> Void = { _ in }
     ) async -> DirectPhaseOutcome {
         let planned = pending()
-        guard !planned.isEmpty else { return .sent }
-        let minted = await minting.grant(for: phase, targets: planned.map { DirectSendTarget($0.address) })
-        guard case .success(let grant) = minted else { return .refused }
-        defer { grant.relinquish() }
-        let bound = Set(planned.map(\.address))
-        let settings = pending().filter { bound.contains($0.address) }
-        didSend(settings)
-        for (index, setting) in settings.enumerated() {
-            if index > 0 { try? await Task.sleep(for: WingNetwork.applyWriteDelay) }
-            guard await sendDirectEntry(setting, session: session, authorization: grant) else { return .failed }
+        let limit = HostAuthority.directSendBatchLimit
+        var paced = false
+        for start in stride(from: 0, to: planned.count, by: limit) {
+            let chunk = planned[start..<min(start + limit, planned.count)]
+            let minted = await minting.grant(for: phase, targets: chunk.map { DirectSendTarget($0.address) })
+            guard case .success(let grant) = minted else { return .refused }
+            defer { grant.relinquish() }
+            let bound = Set(chunk.map(\.address))
+            let settings = pending().filter { bound.contains($0.address) }
+            didSend(settings)
+            for setting in settings {
+                if paced { try? await Task.sleep(for: WingNetwork.applyWriteDelay) }
+                paced = true
+                guard await sendDirectEntry(setting, session: session, authorization: grant) else { return .failed }
+            }
         }
         return .sent
     }

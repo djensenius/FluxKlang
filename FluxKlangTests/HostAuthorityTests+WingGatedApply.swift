@@ -15,10 +15,22 @@ private func targets(_ settings: [WingSetting]) -> Set<DirectSendTarget> {
     Set(settings.map { DirectSendTarget($0.address) })
 }
 
+private func orderedTargets(_ settings: some Sequence<WingSetting>) -> [DirectSendTarget] {
+    settings.map { DirectSendTarget($0.address) }
+}
+
+/// The first `count` distinct WING query addresses, each set to 1.
+private func plan(_ count: Int) throws -> [WingSetting] {
+    let addresses = Array(WingAddress.allQueryAddresses().prefix(count))
+    try #require(Set(addresses).count == count)
+    return addresses.map { WingSetting(address: $0, value: .int(1)) }
+}
+
 extension HostAuthorityTests {
     /// AU6: the grant-gated `WingController.applyAndVerify` mints a fresh grant for
-    /// each send phase, binding only that phase's addresses, and spends it before
-    /// verifying. Fakes only; nothing reaches a socket.
+    /// each chunk of at most `HostAuthority.directSendBatchLimit` addresses of each
+    /// send phase, binding only that chunk, and spends it before the next chunk
+    /// mints or verification starts. Fakes only; nothing reaches a socket.
     @MainActor
     struct WingGatedApply {
         private func connected(_ transport: EchoingDirectTransport) async throws -> (WingController, UUID) {
@@ -224,6 +236,141 @@ extension HostAuthorityTests {
             #expect(await controller.applyAndVerify([], session: session, minting: minter).state == .verified)
             #expect(await minter.phases == [.safety, .remaining])
             #expect(await transport.directWrites == [safeMute] + routing)
+            #expect(await authority.outstandingDirectSendCount() == 0)
+            await controller.disconnect()
+        }
+
+        /// Chunks are consecutive, disjoint and in order, and each is spent before
+        /// the next mints; every entry is sent once, in the original order.
+        @Test(arguments: [(256, [256]), (257, [256, 1]), (600, [256, 256, 88])])
+        func aLargePhaseMintsOneGrantPerChunk(_ count: Int, _ chunks: [Int]) async throws {
+            let authority = try await AuthorityBench.makeAuthority()
+            let minter = GatedApplyMinter(authority)
+            let transport = EchoingDirectTransport()
+            let (controller, session) = try await connected(transport)
+            let settings = try plan(count)
+
+            let result = await controller.applyAndVerify(settings, session: session, minting: minter)
+            #expect(result.state == .verified)
+            #expect(result.confirmedCount == count)
+            let mints = await minter.mints
+            #expect(mints.map(\.phase) == Array(repeating: .remaining, count: chunks.count))
+            #expect(mints.map(\.orderedTargets.count) == chunks)
+            #expect(mints.flatMap(\.orderedTargets) == orderedTargets(settings))
+            #expect(mints.allSatisfy { $0.outstandingBefore == 0 })
+            #expect(await minter.grants.count == chunks.count)
+            #expect(await minter.grants.allSatisfy { !$0.isArmed })
+            #expect(await authority.outstandingDirectSendCount() == 0)
+            #expect(await transport.directWrites == settings)
+            await controller.disconnect()
+        }
+
+        /// The first chunk's writes stand; the refused second chunk confirms nothing,
+        /// and the third chunk, which would be granted, is never asked for.
+        @Test func aRefusedSecondChunkSendsNothingMore() async throws {
+            let authority = try await AuthorityBench.makeAuthority()
+            let minter = GatedApplyMinter(authority)
+            await minter.refuse(.remaining, mints: 1..<2)
+            let transport = EchoingDirectTransport()
+            let (controller, session) = try await connected(transport)
+            let settings = try plan(600)
+
+            let result = await controller.applyAndVerify(settings, session: session, minting: minter)
+            #expect(result.state == .failed)
+            #expect(result.confirmedCount == 0)
+            #expect(result.details == "The host did not authorize the WING write. Nothing more was sent.")
+            let mints = await minter.mints
+            #expect(mints.map(\.phase) == [.remaining, .remaining])
+            #expect(mints.map(\.orderedTargets) == [orderedTargets(settings[..<256]),
+                                                    orderedTargets(settings[256..<512])])
+            let grants = await minter.grants
+            #expect(grants.count == 1)
+            #expect(grants.allSatisfy { !$0.isArmed })
+            #expect(await transport.directCalls == 256)
+            #expect(await transport.directWrites == Array(settings[..<256]))
+            #expect(await authority.outstandingDirectSendCount() == 0)
+            await controller.disconnect()
+        }
+
+        /// A failed entry stops its phase: no later chunk of that phase mints.
+        @Test func aFailedEntryInTheFirstChunkMintsNoSecond() async throws {
+            let authority = try await AuthorityBench.makeAuthority()
+            let minter = GatedApplyMinter(authority)
+            let transport = EchoingDirectTransport()
+            let (controller, session) = try await connected(transport)
+            let settings = try plan(300)
+            await transport.fail(settings[10].address)
+
+            let result = await controller.applyAndVerify(settings, session: session, minting: minter)
+            #expect(result.state == .failed)
+            let mints = await minter.mints
+            #expect(mints.map(\.phase) == [.remaining, .retry])
+            #expect(mints.map(\.orderedTargets) == [orderedTargets(settings[..<256]),
+                                                    orderedTargets(settings[10..<266])])
+            #expect(await minter.grants.allSatisfy { !$0.isArmed })
+            #expect(await transport.directCalls == 12)
+            #expect(await transport.directWrites == Array(settings[..<10]))
+            #expect(await authority.outstandingDirectSendCount() == 0)
+            await controller.disconnect()
+        }
+
+        /// The largest Studio plan the allocator produces, 32 safety and 964
+        /// remaining settings, mints 1 + 4 grants on the real authority book.
+        @Test func theLargestStudioPlanVerifiesInChunks() async throws {
+            let authority = try await AuthorityBench.makeAuthority()
+            let minter = GatedApplyMinter(authority)
+            let transport = EchoingDirectTransport()
+            let (controller, session) = try await connected(transport)
+            let settings = try plan(996)
+
+            let result = await controller.applyAndVerify(settings, safetySettings: Array(settings[..<32]),
+                                                         session: session, minting: minter)
+            #expect(result.state == .verified)
+            #expect(result.confirmedCount == 996)
+            let mints = await minter.mints
+            #expect(mints.map(\.phase) == [.safety] + Array(repeating: .remaining, count: 4))
+            #expect(mints.map(\.orderedTargets.count) == [32, 256, 256, 256, 196])
+            #expect(mints.flatMap(\.orderedTargets) == orderedTargets(settings))
+            #expect(mints.allSatisfy { $0.outstandingBefore == 0 })
+            #expect(await minter.grants.count == 5)
+            #expect(await minter.grants.allSatisfy { !$0.isArmed })
+            #expect(await authority.outstandingDirectSendCount() == 0)
+            #expect(await transport.directWrites == settings)
+            await controller.disconnect()
+        }
+
+        /// Entries confirmed between a chunk's mint and its sends are skipped, the
+        /// chunk's unspent targets are relinquished before the next chunk mints, and
+        /// nothing outside the chunk's own grant is sent.
+        @Test func pendingShrinkingAfterAChunkMintSkipsConfirmedEntries() async throws {
+            let authority = try await AuthorityBench.makeAuthority()
+            let minter = GatedApplyMinter(authority)
+            let transport = EchoingDirectTransport()
+            let (controller, session) = try await connected(transport)
+            let settings = try plan(300)
+            for setting in settings { await transport.drop(setting.address, times: 1) }
+            let confirmed = Array(settings[..<5] + settings[260..<265])
+            await minter.after(.retry, mint: 0) {
+                await transport.confirm(confirmed)
+                let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+                while ContinuousClock.now < deadline,
+                      !confirmed.allSatisfy({ controller.confirmedValues[$0.address] == $0.value }) {
+                    try? await Task.sleep(for: .milliseconds(10))
+                }
+            }
+
+            let result = await controller.applyAndVerify(settings, session: session, minting: minter)
+            #expect(result.state == .verified)
+            let mints = await minter.mints
+            #expect(mints.map(\.phase) == [.remaining, .remaining, .retry, .retry])
+            #expect(mints.map(\.orderedTargets) == [orderedTargets(settings[..<256]),
+                                                    orderedTargets(settings[256...]),
+                                                    orderedTargets(settings[..<256]),
+                                                    orderedTargets(settings[256...])])
+            #expect(mints.allSatisfy { $0.outstandingBefore == 0 })
+            #expect(await minter.grants.allSatisfy { !$0.isArmed })
+            let retried = settings[5..<260] + settings[265...]
+            #expect(await transport.directWrites == settings + retried)
             #expect(await authority.outstandingDirectSendCount() == 0)
             await controller.disconnect()
         }

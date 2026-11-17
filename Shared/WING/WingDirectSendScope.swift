@@ -17,8 +17,16 @@
 enum WingAddressClass: Hashable, Sendable {
     case fader, mute, pan, colour, sendLevel
 
+    /// UTF-8 length of the longest valid address: the send-level shape with each
+    /// kind's widest index and the widest bus (19, `/main/4/send/16/lvl`).
+    static let maxAddressBytes = WingNodeKind.allCases.map { kind in
+        "/\(kind.rawValue)/\(kind.count)/send/\(WingNodeKind.bus.count)/lvl".utf8.count
+    }.max() ?? 0
+
     init?(address: String) {
-        // Six splits cover the longest shape; any remainder lands in a seventh segment the switch refuses.
+        // Overlong targets are refused before any scan, so parsing work stays bounded on the authority
+        // actor. Six splits cover the longest shape; any remainder lands in a seventh segment the switch refuses.
+        guard address.utf8.count <= Self.maxAddressBytes else { return nil }
         let segments = address.split(separator: "/", maxSplits: 6, omittingEmptySubsequences: false)
         guard segments.count >= 4, segments[0].isEmpty,
               let kind = WingNodeKind(rawValue: String(segments[1])),
