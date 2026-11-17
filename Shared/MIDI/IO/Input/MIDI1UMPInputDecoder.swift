@@ -12,8 +12,12 @@ enum MIDI1UMPInputSkip: Equatable, Sendable {
     /// A SysEx7 continue or end with no SysEx open: its bytes are dropped so they cannot be read as data under
     /// running status or as part of another message.
     case orphanSysEx(UMPSysEx7Status)
-    /// An open SysEx was cut off by a start, a complete SysEx, a channel voice message or a System Common message.
-    /// The parser discards the partial payload at that status byte; the interrupting message itself is emitted.
+    /// A SysEx7 continue or end from a group other than the one whose SysEx is open: dropped so it cannot be
+    /// spliced into that payload. The open SysEx stays open for its own group.
+    case foreignGroupSysEx(UMPSysEx7Status)
+    /// An open SysEx was cut off by a start, a complete SysEx, a channel voice message or a System Common message,
+    /// from any group. The parser discards the partial payload at that status byte; the interrupting message itself
+    /// is emitted.
     case sysExInterrupted
 }
 
@@ -26,7 +30,7 @@ struct MIDI1UMPInputDecoding: Equatable, Sendable {
 /// Turns MIDI 1.0-protocol UMP words (as `MIDIInputPortCreateWithProtocol(..., ._1_0, ...)` delivers them) back into
 /// the MIDI 1.0 byte stream that `MIDI1Parser` consumes (#81). Nothing calls it yet.
 ///
-/// The decoder keeps one bit of state, whether a SysEx is open, so that its output is always well framed for one
+/// The decoder keeps the group of the open SysEx, if any, so that its output is always well framed for one
 /// `MIDI1Parser` fed every byte it emits, across `decode` calls. Pair one decoder with one parser per source, and
 /// `reset()` both together.
 ///
@@ -34,24 +38,30 @@ struct MIDI1UMPInputDecoding: Equatable, Sendable {
 ///   than the splitter's bound, is refused whole: no bytes, one `.malformed` skip.
 /// - MT 0x1 (System Common and Real Time) and MT 0x2 (MIDI 1.0 channel voice) are decoded by their UMP types and
 ///   written by `MIDI1Wire`, each message whole with its status byte (no running status).
-/// - MT 0x3 (SysEx7): start gives F0 payload and opens; continue gives payload and end gives payload F7 only while
-///   open (end closes), otherwise they are skipped as `.orphanSysEx`; complete gives F0 payload F7. `MIDI1Parser`
-///   joins the parts and bounds the payload.
-/// - A SysEx closes, with a `.sysExInterrupted` skip, on a start or complete, a channel voice message or a System
-///   Common message, because the parser discards the partial at that status byte. Real Time never closes it.
+/// - MT 0x3 (SysEx7): start gives F0 payload and opens a SysEx for its group; continue gives payload and end gives
+///   payload F7 only while a SysEx of the same group is open (end closes). With none open they are skipped as
+///   `.orphanSysEx`; from another group than the open one, as `.foreignGroupSysEx`, with the open SysEx left as it
+///   is. Complete gives F0 payload F7. `MIDI1Parser` joins the parts and bounds the payload.
+/// - An open SysEx closes, with a `.sysExInterrupted` skip, on a start or complete, a channel voice message or a
+///   System Common message of any group, because the parser discards the partial at that status byte. Real Time
+///   never closes it.
 /// - A packet a typed decoder refuses is skipped as `.malformed` and gives no bytes; a refused batch or packet also
 ///   closes an open SysEx (fail closed), so its later parts become orphans and no F7 completes the partial.
 /// - MT 0x4 is skipped as `.protocolMismatch`; every other type is skipped as `.notMIDI1`, whatever its content.
 ///   These skips leave the SysEx state unchanged.
-/// - The Group is ignored: every group is merged into one byte stream, in input order. MIDI 1.0 devices use group 0.
+/// - Groups: the non-SysEx messages of every group are merged into one byte stream, in input order. Only one SysEx
+///   is tracked at a time, by group. While one is open, the continue and end fragments of another group's SysEx are
+///   dropped, never spliced into it; a start from another group replaces it (the later start wins). MIDI 1.0 devices
+///   use group 0.
 struct MIDI1UMPInputDecoder: Equatable, Sendable {
-    private var sysExOpen = false
+    /// The group of the open SysEx; nil when none is open.
+    private var sysExGroup: UMPGroup?
 
     init() {}
 
     /// Closes any open SysEx. Reset the paired `MIDI1Parser` at the same time.
     mutating func reset() {
-        sysExOpen = false
+        sysExGroup = nil
     }
 
     mutating func decode(_ words: [UInt32]) -> MIDI1UMPInputDecoding {
@@ -59,7 +69,7 @@ struct MIDI1UMPInputDecoder: Equatable, Sendable {
         do {
             packets = try UMPStreamSplitter.standard.split(words)
         } catch {
-            sysExOpen = false
+            sysExGroup = nil
             return MIDI1UMPInputDecoding(bytes: [], skipped: [.malformed(error)])
         }
         var bytes: [UInt8] = []
@@ -89,7 +99,7 @@ struct MIDI1UMPInputDecoder: Equatable, Sendable {
                 return
             }
         } catch {
-            sysExOpen = false
+            sysExGroup = nil
             skipped.append(.malformed(error))
             return
         }
@@ -97,14 +107,14 @@ struct MIDI1UMPInputDecoder: Equatable, Sendable {
         do {
             wire = try MIDI1Wire.bytes(event: event)
         } catch {
-            sysExOpen = false
+            sysExGroup = nil
             skipped.append(.wireRefused(error))
             return
         }
         var isRealTime = false
         if case .realTime = event { isRealTime = true }
-        if sysExOpen, !isRealTime {
-            sysExOpen = false
+        if sysExGroup != nil, !isRealTime {
+            sysExGroup = nil
             skipped.append(.sysExInterrupted)
         }
         bytes += wire
@@ -113,18 +123,22 @@ struct MIDI1UMPInputDecoder: Equatable, Sendable {
     private mutating func sysEx7(_ sysEx: UMPSysEx7Packet, bytes: inout [UInt8], skipped: inout [MIDI1UMPInputSkip]) {
         switch sysEx.status {
         case .start, .complete:
-            if sysExOpen { skipped.append(.sysExInterrupted) }
+            if sysExGroup != nil { skipped.append(.sysExInterrupted) }
             let isComplete = sysEx.status == .complete
             bytes += [0xF0] + sysEx.bytes + (isComplete ? [0xF7] : [])
-            sysExOpen = !isComplete
+            sysExGroup = isComplete ? nil : sysEx.group
         case .continue, .end:
-            guard sysExOpen else {
+            guard let openGroup = sysExGroup else {
                 skipped.append(.orphanSysEx(sysEx.status))
+                return
+            }
+            guard sysEx.group == openGroup else {
+                skipped.append(.foreignGroupSysEx(sysEx.status))
                 return
             }
             let isEnd = sysEx.status == .end
             bytes += sysEx.bytes + (isEnd ? [0xF7] : [])
-            sysExOpen = !isEnd
+            sysExGroup = isEnd ? nil : openGroup
         }
     }
 }
