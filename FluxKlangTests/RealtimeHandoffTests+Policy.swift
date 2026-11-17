@@ -279,7 +279,7 @@ extension RealtimeHandoffTests {
         }
 
         @Test func validateRefusesExactlyWhatInitRefuses() throws {
-            let faults = try FaultLatch(scopes: [FaultScope(handoff: 4, target: 2)])
+            let faults = try FaultChainAuthority.testing(scopes: [FaultScope(handoff: 4, target: 2)])
             for (policy, expected) in Self.table {
                 var validated: Int?
                 var validateError: Ring.PreparationError?

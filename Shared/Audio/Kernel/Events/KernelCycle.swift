@@ -231,7 +231,7 @@ final class KernelCycle: @unchecked Sendable {
     enum AcknowledgeRefusal: Error, Equatable, Sendable {
         /// Another cycle's `ackRequests` issued the ticket.
         case foreignTicket
-        /// `observation` was made by another `FaultLatch` (even one whose words match); checked before the slot is
+        /// `observation` was made by another authority's latch (even one whose words match); checked before the slot is
         /// read.
         case foreignObservation
         /// `observation` is not of this cycle's critical scope.
@@ -275,7 +275,7 @@ final class KernelCycle: @unchecked Sendable {
 
     // Render-owned components and parts; private, so only this file can reach them.
     private let events: FanInHandoff<KernelEvent>
-    private let faults: FaultLatch
+    private let faults: FaultChainAuthority
     private let ownership: NoteOwnership
     private let safety: SafetyFlags
     private let criticalScope: FaultScope
@@ -383,7 +383,7 @@ final class KernelCycle: @unchecked Sendable {
     func acknowledgeCritical(_ observation: FaultObservation,
                              _ ticket: consuming KernelAckTicket) throws(AcknowledgeRefusal) -> FaultRecord {
         guard ticket.cycle == ackRequests.identity else { throw .foreignTicket }
-        guard observation.isObservation(of: faults) else { throw .foreignObservation }
+        guard faults.isObservation(observation) else { throw .foreignObservation }
         guard observation.record.scope == criticalScope else { throw .notCriticalScope }
         guard ticket.isBound(to: observation) else { throw .ticketObservationMismatch }
         guard let sample = latestTelemetry(), sample.value.permitsAcknowledgement(ticket),
