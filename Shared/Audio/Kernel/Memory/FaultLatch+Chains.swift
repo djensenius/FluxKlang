@@ -110,6 +110,7 @@ final class FaultChainAuthority: Sendable {
     /// authority is refused with `.refused(.notOwner)` and changes nothing.
     func raise(_ token: inout FaultChainToken, _ scope: FaultScope, _ kind: FaultKind, frame: Int64) -> KernelStatus {
         guard token.authority == identity else { return .refused(.notOwner) }
+        // swiftlint:disable:next fault_latch_raw_raise - the one plain call: the authority raising on its own latch
         return latch.raise(scope, kind, frame: frame)
     }
 

@@ -1,2 +1,4 @@
 disabled_rules:
   - fault_latch_test_seams
+  - fault_latch_raw_raise
+  - fault_latch_authority_raise

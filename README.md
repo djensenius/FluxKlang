@@ -231,7 +231,26 @@ SwiftLint configuration discovery: explicit `--config` ignores the nested
 `FluxKlangTests/.swiftlint.yml` exemption. The `fault_latch_test_seams` ERROR rule
 rejects calls and references to the eight named FaultLatch test seams outside root
 `FluxKlangTests/`, including uses inside FaultLatch itself; only declaration-name
-tokens are exempt. Other lint rules remain enabled in tests.
+tokens are exempt. Other lint rules remain enabled in tests. A second ERROR rule,
+`fault_latch_raw_raise`, rejects the plain `FaultLatch.raise(scope, kind, frame:)`
+call form (a `.raise(` whose first argument is not `&token`) in every Swift source
+outside root `FluxKlangTests/`; authority raises and `raiseContended()` do not
+match. Its one
+production call, in `FaultLatch+Chains.swift`, has an inline
+`swiftlint:disable:next` with a reason, and the self-check asserts that the real
+file is clean and a copy without the comment is not. It cannot tell whose latch
+it is, and the same suppression and configuration caveats apply. Known gaps:
+`latch . raise(` and an unqualified `raise(` inside `extension FaultLatch` are
+missed; a comment before the `&` of an authority call is a false positive that
+fails closed (put the `&` first). A third ERROR rule,
+`fault_latch_authority_raise`, rejects the authority form `.raise(&token, ...)`
+outside the four lane-owner files named in its `excluded:` allowlist
+(`DeferredRelease.swift`, `ReservedCapacityRing+Chains.swift`,
+`FanInHandoff+Chains.swift`, `SysExAssembler.swift`); adding a caller means
+editing that list. It is equally type-blind (it cannot prove the authority is
+the lane's own; FLP7c checks that at preparation), a suppression comment or
+config edit defeats it, and whitespace or a newline between `.` and `raise` is
+missed.
 
 This is type-blind source policy, not compiler access control or an adversarial
 boundary: the seams remain compiled into app modules. Same-name unrelated
