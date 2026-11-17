@@ -109,12 +109,14 @@ extension LaunchControlXLTests {
         #expect(mapping.actions(for: outputs) == [.fader(slot: 0, value: 100 / 127)])
     }
 
-    /// T8: one source, bounded at CoreMIDI's `UInt16` length; a longer packet is refused whole, the longest consumed.
+    /// T8: bounded at 32 sources and CoreMIDI's `UInt16` length, with only the legacy source until a unit connects; a
+    /// longer packet is refused whole, the longest consumed.
     @Test func oversizePacketConsumesNothing() throws {
         let mapping = try Self.bundledMapping()
         #expect(LaunchControlXLStream.maximumPacketBytes == 65_535)
         var stream = try LaunchControlXLStream.make()
-        #expect(stream.snapshot.maximumSources == 1)
+        #expect(LaunchControlXLStream.maximumSources == 32)
+        #expect(stream.snapshot.maximumSources == 32)
         #expect(stream.snapshot.maximumFeedBytes == 65_535)
         #expect(stream.snapshot.sources.count == 1)
         let source = try #require(stream.snapshot.sources.first)

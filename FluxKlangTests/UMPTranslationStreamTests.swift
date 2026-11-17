@@ -282,6 +282,39 @@ struct UMPTranslationStreamTests {
         #expect(stream.lastAcceptedTime == 12 * Self.msec)
     }
 
+    /// A caller whose timer polls may run late admits an event later than its stamp: the admission time orders the
+    /// calls, while the stamp alone meets and sets deadlines.
+    @Test func anEventAdmittedAfterItsStampKeepsItsStampForDeadlines() throws {
+        var stream = UMPTranslationStream()
+        try Self.selectMPE(&stream, at: 0)
+        #expect(try stream.poll(at: 20 * Self.msec).isEmpty)
+        // Stamped 10 ms, admitted at 20 ms: held until 15 ms, before the admission time.
+        #expect(try stream.receive(Self.cc(0, 6, 15), at: 10 * Self.msec, admittedAt: 20 * Self.msec) == Self.empty)
+        #expect(stream.deadline == 15 * Self.msec)
+        #expect(stream.lastAcceptedTime == 20 * Self.msec)
+        // Messages stamped before the deadline do not reach it, though admitted after it: the CC 38 completes the pair.
+        let clock = try Self.system(0x10F8_0000)
+        #expect(try stream.receive(system: clock, at: 12 * Self.msec, admittedAt: 20 * Self.msec) == [.system(clock)])
+        #expect(try stream.receive(Self.cc(0, 38, 3), at: 14 * Self.msec, admittedAt: 20 * Self.msec).messages
+            == [try Self.mpe(15, lsb: 3)])
+        #expect(stream.idleFlushes == 0)
+        // The next poll sends a CC 6 whose deadline is already at or before the admission time.
+        #expect(try stream.receive(Self.cc(0, 6, 16), at: 14 * Self.msec, admittedAt: 20 * Self.msec) == Self.empty)
+        #expect(stream.deadline == 19 * Self.msec)
+        #expect(try stream.poll(at: 20 * Self.msec) == [try Self.mpe(16)])
+        #expect(stream.idleFlushes == 1)
+        // The admission time is the one refused, and a refusal changes nothing; one earlier than the stamp is raised
+        // to the stamp.
+        let before = stream
+        #expect(throws: UMPTranslationStreamRefusal.timeWentBackward(previous: 20 * Self.msec, got: 19 * Self.msec)) {
+            try stream.receive(system: clock, at: 15 * Self.msec, admittedAt: 19 * Self.msec)
+        }
+        #expect(stream == before)
+        #expect(try stream.receive(Self.noteOn(0, 60), at: 30 * Self.msec, admittedAt: 0).messages
+            == [try Self.noteOnMT4(0, 60)])
+        #expect(stream.lastAcceptedTime == 30 * Self.msec)
+    }
+
     @Test func pollWithNothingHeldSendsNothing() throws {
         var stream = UMPTranslationStream()
         #expect(try stream.poll(at: 0).isEmpty)
