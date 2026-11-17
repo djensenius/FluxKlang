@@ -67,10 +67,12 @@ enum AuthorityBench {
     static func makeAuthority(_ engine: inout ScriptedActivationEngine, holding window: WindowID? = windowA,
                               lifecycleA: EngineLifecycle? = nil,
                               recoveryBaseA: RunningSetState? = nil,
-                              planCapacity: Int = 512) async throws -> HostAuthority {
+                              planCapacity: Int = 512,
+                              sendScope: any DirectSendScopePolicy = AnyTargetScope()) async throws -> HostAuthority {
         let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.main"), musicalClock: nil,
                                           nominalRate: 48_000)
-        let authority = try HostAuthority(host: ledger, live: try liveState(), planCapacity: planCapacity)
+        let authority = try HostAuthority(host: ledger, live: try liveState(), planCapacity: planCapacity,
+                                          sendScope: sendScope)
         let recoveryBase = lifecycleA == .recovering ? recoveryBaseA : nil
         let hasKnownRecoveryBase: Bool
         switch recoveryBase {
@@ -144,10 +146,11 @@ enum AuthorityBench {
     /// Convenience only for tests that never hand engine work to a second double.
     static func makeAuthority(holding window: WindowID? = windowA,
                               lifecycleA: EngineLifecycle? = nil,
-                              recoveryBaseA: RunningSetState? = nil) async throws -> HostAuthority {
+                              recoveryBaseA: RunningSetState? = nil,
+                              sendScope: any DirectSendScopePolicy = AnyTargetScope()) async throws -> HostAuthority {
         var engine = try ScriptedActivationEngine()
         return try await makeAuthority(&engine, holding: window, lifecycleA: lifecycleA,
-                                       recoveryBaseA: recoveryBaseA)
+                                       recoveryBaseA: recoveryBaseA, sendScope: sendScope)
     }
 
     static func begin(_ authority: HostAuthority, project: ProjectID = projectA,
