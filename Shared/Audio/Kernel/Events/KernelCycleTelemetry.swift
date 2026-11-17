@@ -140,7 +140,8 @@ struct KernelCycleParts {
     /// The authority `events`' lanes raise on, and only they (nothing else may mint chains from it or raise
     /// through it). Its `criticalScope` must be prepared in it. A lane's contended fault (a broken single-producer
     /// contract) latches every scope, so the cycle silences at step 2 for good; recovery needs a rebuilt fan-in,
-    /// authority and `NoteOwnership`. `checkWiring` does not yet verify this is the lanes' authority (FLP7c).
+    /// authority and `NoteOwnership`. `checkWiring` verifies it is the lanes' authority (`events.lanesRaiseOn`, by
+    /// identity; `.faultsNotLaneAuthority`); that nothing else mints or raises on it stays a caller contract.
     let faults: FaultChainAuthority
     /// Notes sounding and, in `ownership.tombstones`, the release history: shared by every cycle over it, one at a
     /// time (`KernelCycle.init` claims it, `retire()` hands it back).

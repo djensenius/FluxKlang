@@ -192,12 +192,18 @@ mint left, or its chain's token was lost) has no counted path and must fall back
   per lane of every handoff built on it. R3: a lane refusal that finds its
   token held latches the sticky contended fault, which latches every scope of
   `faults`, `criticalScope` and so the cycle included; it never clears. D9
-  (wiring check that every raiser goes through the authority) is FLP7c.
+  (wiring check that the cycle's authority is the one the lanes raise on) is
+  FLP7c: `KernelCycle` preparation refuses `.faultsNotLaneAuthority` unless
+  every lane's chain was minted from `parts.faults` itself (identity, not
+  capacity or scopes). It checks the lanes only; it cannot see any other
+  raiser.
 - The cycle's `FaultChainAuthority` (`KernelCycleParts.faults`) must be the one
   the fan-in's lanes were minted from, used only by those lanes: the cycle only
   reads it (`isLatched`, `isObservation`, `acknowledge`) and must never mint
-  chains from it or raise through it, and nothing else may share it (FLP7c
-  checks the wiring; until then it is a caller contract).
+  chains from it or raise through it, and nothing else may share it. FLP7c
+  checks the first part (preparation throws `.faultsNotLaneAuthority`, nothing
+  claimed or issued); the rest (no other minting, raising or sharing) is still a
+  caller contract.
 - Recovery: a contended lane fault never clears, so the cycle stays silenced;
   continuing needs a rebuilt `FanInHandoff`, a fresh `faults` authority and a
   fresh `NoteOwnership`. A refused lane mint (`.laneChainBudgetExhausted`)
@@ -205,7 +211,24 @@ mint left, or its chain's token was lost) has no counted path and must fall back
   a retry needs a `faults` authority with enough budget (in practice a fresh
   one, R2), and the claim unit already spent stays spent (R1).
 - `FaultLatch.raise` is still callable on any latch not built by an authority.
-  Nothing yet stops new code from doing that; a lint tripwire is a follow-up.
+  A lint tripwire, the SwiftLint custom rule `fault_latch_raw_raise`, now
+  rejects a call of the plain form `x.raise(scope, kind, frame:)` in every Swift
+  source outside root `FluxKlangTests/` (the rule has no `included` list; root
+  `FluxKlangTests/` disables it because it calls the plain API on purpose). The
+  authority call
+  `raise(&token, ...)` and `raiseContended()` do not match. The one plain call,
+  inside `FaultChainAuthority.raise`, carries an inline
+  `swiftlint:disable:next` with a reason; `scripts/test-seam-policy/check.py`
+  asserts that the real file has no diagnostic and that a copy without the
+  comment has one. The tripwire is a type-blind regex, not access control: it
+  cannot prove that the latch is the lane's own authority (FLP7c enforces that at
+  preparation), a suppression comment or a config edit defeats it (it is visible
+  in review), and authority raises and the contended path are not restricted.
+  Known gaps: whitespace or a newline before the dot (`latch . raise(`) is
+  missed; an unqualified `raise(` inside an `extension FaultLatch` is missed
+  (no leading dot); a comment before the `&` (`raise(/* x */ &token`, or a
+  `// c` line before `&token`) is a false positive that fails closed, and the
+  fix is to put the `&` first.
 - Unsafe escapes of a token (`nonisolated(unsafe)`, `@unchecked Sendable`
   boxes, unsafe pointers) and builds that turn off exclusivity checking are out
   of the model.
