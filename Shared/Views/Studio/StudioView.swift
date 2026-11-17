@@ -95,27 +95,6 @@ struct StudioView: View {
     }
     #endif
 
-    private var startSection: some View {
-        StudioSection("Start") {
-            let connections = appModel.studioConnectionsForCurrentWing().effectiveHome
-            StudioApplyStatusView(
-                graphIsEmpty: graph.nodes.isEmpty,
-                hasIssues: !issues.isEmpty,
-                isConnected: appModel.isConnected,
-                isApplying: isApplying,
-                settings: compiled.settings,
-                verification: applyVerification,
-                endpointCount: endpoints.count,
-                connectionCount: connections.inputs.count + connections.outputs.count,
-                apply: applyStudioPatch
-            )
-        } footer: {
-            Text("""
-            FluxKlang keeps the mixer details out of the way. You describe the sound path; it handles the mixer.
-            """)
-        }
-    }
-
     private var graphSection: some View {
         StudioSection("Patch") {
             if graph.nodes.isEmpty {
@@ -407,6 +386,28 @@ struct StudioView: View {
 }
 
 private extension StudioView {
+    private var startSection: some View {
+        StudioSection("Start") {
+            let connections = appModel.studioConnectionsForCurrentWing().effectiveHome
+            StudioApplyStatusView(
+                graphIsEmpty: graph.nodes.isEmpty,
+                hasIssues: !issues.isEmpty,
+                isConnected: appModel.isConnected,
+                isApplying: isApplying,
+                settings: compiled.settings,
+                verification: applyVerification,
+                endpointCount: endpoints.count,
+                connectionCount: connections.inputs.count + connections.outputs.count,
+                apply: applyStudioPatch
+            )
+            StudioHostPermissionView()
+        } footer: {
+            Text("""
+            FluxKlang keeps the mixer details out of the way. You describe the sound path; it handles the mixer.
+            """)
+        }
+    }
+
     @ViewBuilder
     func actionLabel(_ title: String, systemImage: String) -> some View {
         let label = Label(title, systemImage: systemImage)
