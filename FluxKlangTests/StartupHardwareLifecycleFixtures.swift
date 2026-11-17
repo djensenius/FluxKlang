@@ -128,12 +128,13 @@ final class RecordingLaunchControlXLInput: LaunchControlXLInput {
     private(set) var starts: [[String]] = []
     private(set) var stops = 0
     private(set) var onPackets: (@MainActor (MIDIPacketBatch) -> Void)?
-    private var onSourcesChanged: (([String]) -> Void)?
+    private var onSourcesChanged: (([MIDIConnectedSource]) -> Void)?
+    private var tokens = FakeSourceTokens()
 
     func start(
         sourceNameContains: [String],
         onPackets: @escaping @MainActor (MIDIPacketBatch) -> Void,
-        onSourcesChanged: @escaping ([String]) -> Void
+        onSourcesChanged: @escaping ([MIDIConnectedSource]) -> Void
     ) {
         starts.append(sourceNameContains)
         self.onPackets = onPackets
@@ -145,13 +146,34 @@ final class RecordingLaunchControlXLInput: LaunchControlXLInput {
         onSourcesChanged?([])
     }
 
+    /// Unresolved sources, one stable token per name, all sharing the stream's legacy source.
     func reportSources(_ names: [String]) {
-        onSourcesChanged?(names)
+        onSourcesChanged?(tokens.unresolved(names))
     }
 
-    /// One batch of raw packets, as CoreMIDI would deliver them.
-    func send(packets: [[UInt8]]) {
-        onPackets?(MIDIPacketBatch(packets: packets))
+    func reportConnected(_ sources: [MIDIConnectedSource]) {
+        onSourcesChanged?(sources)
+    }
+
+    /// One batch of raw packets, as CoreMIDI would deliver them from the connection `source`.
+    func send(packets: [[UInt8]], from source: MIDIConnectionToken? = nil, afterGap: Bool = false) {
+        onPackets?(MIDIPacketBatch(packets: packets, afterGap: afterGap, source: source))
+    }
+}
+
+/// Assigns each source name a fake reports the next token, from 1, and keeps that token, so reporting the same
+/// names again, in any order, describes the same connections.
+struct FakeSourceTokens {
+    private var names: [String] = []
+
+    mutating func unresolved(_ reported: [String]) -> [MIDIConnectedSource] {
+        reported.compactMap { name in
+            let index = names.firstIndex(of: name) ?? names.endIndex
+            if index == names.endIndex { names.append(name) }
+            return MIDIConnectionToken(rawValue: UInt(index + 1)).map {
+                MIDIConnectedSource(token: $0, endpoint: nil, name: name)
+            }
+        }
     }
 }
 

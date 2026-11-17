@@ -15,7 +15,8 @@
 /// - Teardown or reset: `reset()`, or `reset(group:channel:)` for one group and channel.
 ///
 /// The translator sends a held CC 6 before every message except the CC 38 that completes it, so a CC 6 still held
-/// after `receive(_:at:)` is always the one just received: its hold time is that call's time.
+/// after `receive(_:at:)` is always the one just received: its hold time is that call's time (the event's own time,
+/// not its admission time, for a call with `admittedAt:`).
 ///
 /// System Common and System Real Time messages (MT 0x1, `UMPSystemCommonRealTime`) go through
 /// `receive(system:at:)`, which passes each one through unchanged (group kept) after any CC 6 it sends. Project
@@ -49,6 +50,11 @@
 /// clock and arms no timer. `receive(_:at:)`, `receive(system:at:)` and `poll` refuse a time earlier than the last
 /// one this stream accepted; equal times are accepted. `endOfStream()` and `reset()` clear that baseline, so the
 /// next segment or stream may start at any time.
+/// `receive(_:at:admittedAt:)` and `receive(system:at:admittedAt:)` split a time's two roles, for a caller whose
+/// timer polls may run late (`UMPTranslationStreamDriver`): the admission time is the one checked against, and
+/// recorded as, the last accepted time; the event's own time alone is compared against a held deadline and sets the
+/// deadline of a CC 6 the call holds. Such a deadline may already be at or before the last accepted time; the next
+/// `poll(at:)` sends it.
 /// The deadline never wraps: a CC 6 whose deadline would pass `UInt64.max` is refused (`deadlineOverflow`). Refusing
 /// drops a valid CC 6, whereas capping the deadline at `UInt64.max` would flush it at most one timeout early; both
 /// happen only with a broken clock.
@@ -68,8 +74,8 @@ struct UMPTranslationStream: Equatable, Sendable {
     private(set) var translator = UMPMIDI1ToMIDI2Translator()
     /// When the held CC 6 is sent by `poll(at:)`; nil when nothing is held.
     private(set) var deadline: UInt64?
-    /// The last time `receive(_:at:)`, `receive(system:at:)` or `poll(at:)` accepted; nil for a new stream and after
-    /// `endOfStream()` or `reset()`.
+    /// The last time `receive(_:at:)`, `receive(system:at:)` or `poll(at:)` accepted (the admission time, for a call
+    /// with `admittedAt:`); nil for a new stream and after `endOfStream()` or `reset()`.
     private(set) var lastAcceptedTime: UInt64?
     /// Every loss the translator declared through this stream, across `reset()`.
     private(set) var losses = UMPTranslationLossCounts()
@@ -86,13 +92,27 @@ struct UMPTranslationStream: Equatable, Sendable {
     }
 
     /// Translates one message received at `time`. If a held CC 6 has reached its deadline, it is sent first.
-    /// A live caller should replace CoreMIDI timestamp 0 ("now") with the current host time in nanoseconds, and
-    /// may clamp small backward jitter to `max(time, lastAcceptedTime ?? time)` rather than drop the message on
-    /// `timeWentBackward`. Clamping timestamp 0 instead would make the deadline stale and flush a held CC 6 early.
+    /// A live caller should replace CoreMIDI timestamp 0 ("now") with the current host time in nanoseconds. To accept
+    /// small backward jitter rather than drop the message on `timeWentBackward`, it should call
+    /// `receive(_:at:admittedAt:)` with `admittedAt: lastAcceptedTime ?? time`, which keeps `time` as the stamp that
+    /// meets and sets deadlines; passing a clamped time here would set a held CC 6's deadline from the clamp, not the
+    /// stamp.
     mutating func receive(
         _ voice: UMPMIDI1ChannelVoice, at time: UInt64
     ) throws(UMPTranslationStreamRefusal) -> UMPTranslationOutput<UMPMIDI2ChannelVoice> {
-        try admit(time)
+        try receive(voice, at: time, admittedAt: time)
+    }
+
+    /// `receive(_:at:)` for an event stamped `time` and admitted at `admission`: the call is refused if `admission`
+    /// is earlier than the last accepted time, and records it as that time, while `time` alone is compared against a
+    /// held deadline and sets the deadline of a CC 6 the event holds. An `admission` earlier than `time` is raised to
+    /// `time`. Only `admission` is checked for order: the caller must not pass a `time` earlier than one it passed
+    /// before, or a held CC 6 could get an earlier deadline.
+    mutating func receive(
+        _ voice: UMPMIDI1ChannelVoice, at time: UInt64, admittedAt admission: UInt64
+    ) throws(UMPTranslationStreamRefusal) -> UMPTranslationOutput<UMPMIDI2ChannelVoice> {
+        let admission = max(time, admission)
+        try admit(admission)
         var next = self
         let idle = next.flushIfIdle(at: time)
         let output: UMPTranslationOutput<UMPMIDI2ChannelVoice>
@@ -109,7 +129,7 @@ struct UMPTranslationStream: Equatable, Sendable {
             next.deadline = deadline
         }
         next.losses.record(output.losses)
-        next.lastAcceptedTime = time
+        next.lastAcceptedTime = admission
         self = next
         return UMPTranslationOutput(messages: idle + output.messages, losses: output.losses)
     }
@@ -122,15 +142,25 @@ struct UMPTranslationStream: Equatable, Sendable {
     mutating func receive(
         system: UMPSystemCommonRealTime, at time: UInt64
     ) throws(UMPTranslationStreamRefusal) -> [UMPTranslationStreamItem] {
-        try admit(time)
-        // Built on a copy and assigned last, as in `receive(_:at:)`, so a refusal can never leave a partial change.
+        try receive(system: system, at: time, admittedAt: time)
+    }
+
+    /// `receive(system:at:)` for a message stamped `time` and admitted at `admission`, with the time roles of
+    /// `receive(_:at:admittedAt:)`.
+    mutating func receive(
+        system: UMPSystemCommonRealTime, at time: UInt64, admittedAt admission: UInt64
+    ) throws(UMPTranslationStreamRefusal) -> [UMPTranslationStreamItem] {
+        let admission = max(time, admission)
+        try admit(admission)
+        // Built on a copy and assigned last, as in `receive(_:at:admittedAt:)`, so a refusal can never leave a partial
+        // change.
         var next = self
         var flushed = next.flushIfIdle(at: time)
         if case .systemCommon = system.event {
             flushed += next.translator.flushAll()
             next.deadline = nil
         }
-        next.lastAcceptedTime = time
+        next.lastAcceptedTime = admission
         self = next
         return flushed.map(UMPTranslationStreamItem.voice) + [.system(system)]
     }

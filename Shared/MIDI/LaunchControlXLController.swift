@@ -36,13 +36,15 @@ final class LaunchControlXLController {
     private var actionHandler: ((LaunchControlXLAction) async -> Void)?
     /// The stream's profile and sender cleanup, used on init and on every restart.
     let sourcePolicy: LaunchControlXLSourcePolicy
-    /// Every matched endpoint feeds this one logical source. Fresh on every restart, so a half message, running
-    /// status or open SysEx never crosses one.
+    /// The names of connected units that are not told apart and so share the stream's legacy source (#81), in
+    /// reported order; resolving them needs a person to choose an ordinal, which a later slice adds.
+    private(set) var unresolvedSourceNames: [String] = []
+
+    /// One source per resolved endpoint plus the shared legacy source. Fresh on every restart, so a half message,
+    /// running status or open SysEx never crosses one.
     @ObservationIgnored private var stream: LaunchControlXLStream
     /// Bumped by every restart; a delivery or sources report from an earlier start is dropped.
     @ObservationIgnored private var generation = 0
-    /// The sorted source names last reported in the current start; empty after every restart.
-    @ObservationIgnored private var sourceNames: [String] = []
     /// Mapped actions not yet dispatched, in feed order, each with the start and mode it was fed under. One drain at
     /// a time empties it; every restart clears it.
     @ObservationIgnored private var pendingActions: ArraySlice<PendingAction> = []
@@ -116,7 +118,7 @@ final class LaunchControlXLController {
     private func restart() {
         midiInput?.stop()
         stream = Self.freshStream(profile: sourcePolicy.profile)
-        sourceNames = []  // Defensive: each input's stop() already reports [] through the current callback.
+        unresolvedSourceNames = []  // Defensive: each input's stop() already reports [] through the current callback.
         pendingActions = []
         generation += 1
         let generation = generation
@@ -132,31 +134,33 @@ final class LaunchControlXLController {
             onPackets: { [weak self] batch in
                 self?.deliver(batch, generation: generation)
             },
-            onSourcesChanged: { [weak self] names in
-                self?.sourcesChanged(names, generation: generation)
+            onSourcesChanged: { [weak self] sources in
+                self?.sourcesChanged(sources, generation: generation)
             }
         )
     }
 
-    /// CoreMIDI may report on every notification, so under `.resetStream` the stream is reset only when the sorted
-    /// names differ from the last ones seen in this start. A report from an earlier start changes nothing.
-    private func sourcesChanged(_ names: [String], generation: Int) {
+    /// Applies the connected sources to the stream: a unit that left or was rekeyed loses its source, whatever the
+    /// policy, and a new one starts fresh. Under `.resetStream` the shared legacy source is also reset when it gained
+    /// or lost a unit; other units' sources are never reset by a change that is not theirs. CoreMIDI may report on
+    /// every notification; a repeated report changes nothing, and one from an earlier start is ignored.
+    private func sourcesChanged(_ sources: [MIDIConnectedSource], generation: Int) {
         guard generation == self.generation else { return }
-        status = names.isEmpty ? .waiting : .connected(names)
-        let sorted = names.sorted()
-        guard sorted != sourceNames else { return }
-        sourceNames = sorted
-        if sourcePolicy.sourceChange == .resetStream {
-            stream.reset()
+        status = sources.isEmpty ? .waiting : .connected(sources.map(\.name))
+        let sharedChanged = stream.connect(sources)
+        unresolvedSourceNames = stream.sources.filter { !$0.isResolved }.map(\.name)
+        if sharedChanged, sourcePolicy.sourceChange == .resetStream {
+            stream.resetSharedSource()
         }
     }
 
-    /// The input path: the batch is fed synchronously, in delivery order, unless it belongs to an earlier start.
-    /// After a gap, framing is cleared before the batch is fed, so bytes on either side of the gap never join.
+    /// The input path: the batch is fed synchronously, in delivery order, into its connection's source, unless it
+    /// belongs to an earlier start. After a gap every source is cleared before the batch is fed, because nothing says
+    /// which source lost bytes, so bytes on either side of the gap never join.
     private func deliver(_ batch: MIDIPacketBatch, generation: Int) {
         guard generation == self.generation else { return }
         if batch.afterGap { stream.reset() }
-        enqueue(configuration.mapping.actions(for: stream.feed(packets: batch.packets)))
+        enqueue(configuration.mapping.actions(for: stream.feed(packets: batch.packets, from: batch.source)))
         Task { [weak self] in await self?.dispatchPendingActions() }
     }
 
