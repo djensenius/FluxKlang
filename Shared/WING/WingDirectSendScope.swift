@@ -5,7 +5,8 @@
 //  The WING `DirectSendScopePolicy` (#62 AU5): a `.parameter` scope for one of the
 //  five `ParameterCatalog` WING parameters admits only that parameter's address
 //  class, on any valid strip. Per-strip binding waits for a NodeID to strip map
-//  (#76). Every other scope admits nothing until its address table exists.
+//  (#76). The reserved `.route(applyRoute)` admits the Studio apply addresses
+//  (AU7a). Every other scope admits nothing until its address table exists.
 //
 
 /// The direct-send address classes, parsed strictly from the shapes `WingAddress`
@@ -35,7 +36,7 @@ enum WingAddressClass: Hashable, Sendable {
     }
 
     /// `segment` as an index in `range`: ASCII digits only, no sign, no leading zero.
-    private static func index(_ segment: Substring, in range: ClosedRange<Int>) -> Int? {
+    static func index(_ segment: Substring, in range: ClosedRange<Int>) -> Int? {
         let digits = segment.utf8
         guard let first = digits.first, first != UInt8(ascii: "0"),
               digits.allSatisfy({ (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0) }),
@@ -45,6 +46,10 @@ enum WingAddressClass: Hashable, Sendable {
 }
 
 struct WingDirectSendScope: DirectSendScopePolicy {
+    /// The one route scope a Studio apply is admitted under (#62 AU7a). It admits
+    /// exactly the `WingRouteAddressClass` addresses; every other route admits nothing.
+    static let applyRoute = RouteID(validated: "wing.apply")
+
     /// The WING parameters and the one address class each may write.
     static let parameterClasses: [ParameterID: WingAddressClass] = [
         ParameterCatalog.wingFaderDecibels: .fader,
@@ -59,7 +64,9 @@ struct WingDirectSendScope: DirectSendScopePolicy {
         case .parameter(let parameter):
             guard let admitted = Self.parameterClasses[parameter] else { return false }
             return WingAddressClass(address: target.key) == admitted
-        case .route, .patch, .action, .draft, .transport, .safety:
+        case .route(let route):
+            return route == Self.applyRoute && WingRouteAddressClass(address: target.key) != nil
+        case .patch, .action, .draft, .transport, .safety:
             return false
         }
     }

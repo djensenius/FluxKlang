@@ -62,6 +62,23 @@ enum DirectSendBench {
                                                 targets: targets).get()
     }
 
+    /// A ticket whose scope is `.route(route)`: a `.structural` `.bind(route)`
+    /// admitted for project A (#62 AU7a).
+    static func ticket(_ authority: HostAuthority, route: RouteID) async throws -> DirectWriteTicket {
+        let admission = AdmissionContext(hostEpoch: AuthorityBench.hostEpoch, connectionEpoch: nil,
+                                         revisions: CommandRevisions(), permission: AuthorityBench.permission,
+                                         allowedScopes: [.route(route)], allowedClasses: Set(ControlClass.allCases),
+                                         catalog: try catalog())
+        let intent = try CommandIntent(.init(
+            id: CommandID(validated: "command.bind"), commandClass: .structural, origin: .human,
+            hostEpoch: AuthorityBench.hostEpoch, connectionEpoch: nil, revisions: CommandRevisions(),
+            operation: .bind(route), permission: AuthorityBench.permission
+        ))
+        return try #require(try await authority.admitDirect(intent, admission: admission,
+                                                            project: AuthorityBench.projectA,
+                                                            window: AuthorityBench.windowA).get())
+    }
+
     /// A grant binding each setting's address.
     static func grant(_ authority: HostAuthority, settings: [WingSetting],
                       parameter: ParameterID = liveParameter) async throws -> DirectWriteAuthorization {
