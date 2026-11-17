@@ -254,7 +254,7 @@ actor WingTransport: WingTransporting {
     /// for the same reason as `sendMixerValue`.
     func sendDirect(_ setting: WingSetting, sessionID: UUID,
                     authorization: DirectWriteAuthorization) async throws {
-        try authorization.consume {
+        try authorization.consume(DirectSendTarget(setting.address)) {
             // Never await or call into the authority here: it may be blocked on this lock.
             guard self.sessionID == sessionID, !Task.isCancelled else { throw WingTransportError.notAuthorized }
             try send(setting.address, setting.value.encodedForWing(address: setting.address))

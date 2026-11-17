@@ -15,7 +15,7 @@ import Testing
 @Suite(.productionAccessAudit)
 struct CloudSyncTests {
     /// In-memory stand-in for iCloud's key-value store.
-    private final class MemoryCloudStore: CloudKeyValueStore, @unchecked Sendable {
+    final class MemoryCloudStore: CloudKeyValueStore, @unchecked Sendable {
         private let lock = NSLock()
         private var storage: [String: Data] = [:]
         private(set) var readCount = 0
@@ -34,7 +34,7 @@ struct CloudSyncTests {
         }
     }
 
-    private struct Model: Codable, Equatable { var value: Int }
+    struct Model: Codable, Equatable { var value: Int }
 
     private func uniqueName() -> String { "test-\(UUID().uuidString).json" }
 
@@ -51,9 +51,11 @@ struct CloudSyncTests {
     }
 
     @Test func saveMirrorsToCloudAndLoads() async {
+        let directory = uniqueDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
         let cloud = MemoryCloudStore()
-        let store = JSONFileStore(cloud: cloud)
-        let name = uniqueName()
+        let store = JSONFileStore(directory: directory, cloud: cloud)
+        let name = "presets.json"
 
         await store.save(Model(value: 7), to: name)
         let key = "store." + name.replacingOccurrences(of: ".", with: "_")
@@ -81,7 +83,7 @@ struct CloudSyncTests {
             if let suite = isolated.preferencesSuiteName { isolated.defaults.removePersistentDomain(forName: suite) }
         }
         let normalJSON = JSONFileStore(directory: production.directory, cloud: production.cloud)
-        await normalJSON.save(Model(value: 41), to: "sentinel.json")
+        await normalJSON.save(Model(value: 41), to: "presets.json")
         production.defaults.set("untouched", forKey: "sentinel.preference")
         let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
         _ = await coordinator.perform(.buildStudioDraft(.init(sourceInstrumentIDs: [])),
@@ -92,10 +94,11 @@ struct CloudSyncTests {
         let historyDirectory = production.directory.appendingPathComponent("AssistantHistory")
         try await LocalAssistantHistoryBackend(directory: historyDirectory).save(.init(conversation: conversation))
         let draftURL = production.directory.appendingPathComponent("assistant-pending-studio-draft.json")
-        let jsonURL = production.directory.appendingPathComponent("sentinel.json")
+        let jsonURL = production.directory.appendingPathComponent("presets.json")
         let historyURL = historyDirectory.appendingPathComponent("\(conversation.id.uuidString).json")
         let originalFiles = try [jsonURL, draftURL, historyURL].map { try Data(contentsOf: $0) }
-        let originalCloud = cloud.data(forKey: "store.sentinel_json")
+        let originalCloud = cloud.data(forKey: "store.presets_json")
+        #expect(originalCloud != nil, "The production sentinel reached the production cloud")
         let reads = cloud.readCount
         let writes = cloud.writeCount
 
@@ -103,21 +106,21 @@ struct CloudSyncTests {
         let isolatedPending = PendingStudioPatchStore(directory: isolated.directory)
         let isolatedHistory = LocalAssistantHistoryBackend(
             directory: isolated.directory.appendingPathComponent("AssistantHistory"))
-        #expect(await isolatedJSON.load(Model.self, from: "sentinel.json") == nil)
+        #expect(await isolatedJSON.load(Model.self, from: "presets.json") == nil)
         #expect(await isolatedPending.load() == nil, "Never load the production pending draft")
         #expect(try await isolatedHistory.loadRecords().isEmpty)
         #expect(isolated.defaults.string(forKey: "sentinel.preference") == nil)
-        await isolatedJSON.save(Model(value: 99), to: "sentinel.json")
+        await isolatedJSON.save(Model(value: 99), to: "presets.json")
         await isolatedPending.save(draft)
         try await isolatedHistory.save(.init(conversation: AssistantConversation(title: "Test only")))
         isolated.defaults.set("test only", forKey: "sentinel.preference")
-        #expect(await isolatedJSON.load(Model.self, from: "sentinel.json") == Model(value: 99))
+        #expect(await isolatedJSON.load(Model.self, from: "presets.json") == Model(value: 99))
         #expect(await isolatedPending.load()?.id == draft.id)
         #expect(isolated.cloud == nil)
         #expect(cloud.readCount == reads)
         #expect(cloud.writeCount == writes)
         #expect(cloud.synchronizeCount == 0)
-        #expect(cloud.data(forKey: "store.sentinel_json") == originalCloud)
+        #expect(cloud.data(forKey: "store.presets_json") == originalCloud)
         #expect(try [jsonURL, draftURL, historyURL].map { try Data(contentsOf: $0) } == originalFiles)
         #expect(production.defaults.string(forKey: "sentinel.preference") == "untouched")
     }
@@ -141,9 +144,11 @@ struct CloudSyncTests {
     }
 
     @Test func cloudValueIsPreferredOverLocal() async throws {
+        let directory = uniqueDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
         let cloud = MemoryCloudStore()
-        let store = JSONFileStore(cloud: cloud)
-        let name = uniqueName()
+        let store = JSONFileStore(directory: directory, cloud: cloud)
+        let name = "presets.json"
 
         await store.save(Model(value: 1), to: name)
         // Simulate another device syncing a newer value into iCloud.
@@ -155,12 +160,14 @@ struct CloudSyncTests {
     }
 
     @Test func existingLocalStateMigratesIntoCloud() async {
-        let name = uniqueName()
+        let directory = uniqueDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let name = "presets.json"
         // Save with no cloud backend so only a local file exists.
-        await JSONFileStore(cloud: nil).save(Model(value: 42), to: name)
+        await JSONFileStore(directory: directory, cloud: nil).save(Model(value: 42), to: name)
 
         let cloud = MemoryCloudStore()
-        let store = JSONFileStore(cloud: cloud)
+        let store = JSONFileStore(directory: directory, cloud: cloud)
         let key = "store." + name.replacingOccurrences(of: ".", with: "_")
         #expect(cloud.data(forKey: key) == nil)
 
@@ -170,9 +177,13 @@ struct CloudSyncTests {
     }
 
     @Test func missingDataReturnsNil() async {
-        let store = JSONFileStore(cloud: MemoryCloudStore())
-        let loaded = await store.load(Model.self, from: uniqueName())
+        let directory = uniqueDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = MemoryCloudStore()
+        let store = JSONFileStore(directory: directory, cloud: cloud)
+        let loaded = await store.load(Model.self, from: "presets.json")
         #expect(loaded == nil)
+        #expect(cloud.readCount == 1, "The missing value was looked up in the cloud")
     }
 
     @MainActor

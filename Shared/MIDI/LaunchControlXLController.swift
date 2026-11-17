@@ -34,11 +34,15 @@ final class LaunchControlXLController {
     /// Created on the first non-disabled restart, so construction opens no MIDI client.
     @ObservationIgnored private var midiInput: (any LaunchControlXLInput)?
     private var actionHandler: ((LaunchControlXLAction) async -> Void)?
+    /// The stream's profile and sender cleanup, used on init and on every restart.
+    let sourcePolicy: LaunchControlXLSourcePolicy
     /// Every matched endpoint feeds this one logical source. Fresh on every restart, so a half message, running
     /// status or open SysEx never crosses one.
-    @ObservationIgnored private var stream = LaunchControlXLController.freshStream()
-    /// Bumped by every restart; a delivery from an earlier start is dropped before it reaches `stream`.
+    @ObservationIgnored private var stream: LaunchControlXLStream
+    /// Bumped by every restart; a delivery or sources report from an earlier start is dropped.
     @ObservationIgnored private var generation = 0
+    /// The sorted source names last reported in the current start; empty after every restart.
+    @ObservationIgnored private var sourceNames: [String] = []
     /// Mapped actions not yet dispatched, in feed order, each with the start and mode it was fed under. One drain at
     /// a time empties it; every restart clears it.
     @ObservationIgnored private var pendingActions: ArraySlice<PendingAction> = []
@@ -49,11 +53,14 @@ final class LaunchControlXLController {
         fileName: String = "launch-control-xl.json",
         defaultConfiguration: LaunchControlXLConfiguration? = .bundled(),
         makeMIDIInput: @escaping @MainActor () -> any LaunchControlXLInput
-            = HardwareServiceFactories.current.makeLaunchControlXLInput
+            = HardwareServiceFactories.current.makeLaunchControlXLInput,
+        sourcePolicy: LaunchControlXLSourcePolicy = .default
     ) {
         self.fileStore = fileStore
         self.fileName = fileName
         self.makeMIDIInput = makeMIDIInput
+        self.sourcePolicy = sourcePolicy
+        stream = Self.freshStream(profile: sourcePolicy.profile)
         configuration = defaultConfiguration ?? LaunchControlXLConfiguration(
             version: 1,
             mode: .disabled,
@@ -98,17 +105,18 @@ final class LaunchControlXLController {
         bank * 8 + slot
     }
 
-    nonisolated private static func freshStream() -> LaunchControlXLStream {
+    nonisolated private static func freshStream(profile: MIDISourceProfile) -> LaunchControlXLStream {
         do throws(MIDISourceRefusal) {
-            return try LaunchControlXLStream.make()
+            return try LaunchControlXLStream.make(profile: profile)
         } catch {
-            preconditionFailure("Invalid built-in Launch Control XL source profile: \(error)")
+            preconditionFailure("Invalid Launch Control XL source profile: \(error)")
         }
     }
 
     private func restart() {
         midiInput?.stop()
-        stream = Self.freshStream()
+        stream = Self.freshStream(profile: sourcePolicy.profile)
+        sourceNames = []  // Defensive: each input's stop() already reports [] through the current callback.
         pendingActions = []
         generation += 1
         let generation = generation
@@ -125,9 +133,22 @@ final class LaunchControlXLController {
                 self?.deliver(batch, generation: generation)
             },
             onSourcesChanged: { [weak self] names in
-                self?.status = names.isEmpty ? .waiting : .connected(names)
+                self?.sourcesChanged(names, generation: generation)
             }
         )
+    }
+
+    /// CoreMIDI may report on every notification, so under `.resetStream` the stream is reset only when the sorted
+    /// names differ from the last ones seen in this start. A report from an earlier start changes nothing.
+    private func sourcesChanged(_ names: [String], generation: Int) {
+        guard generation == self.generation else { return }
+        status = names.isEmpty ? .waiting : .connected(names)
+        let sorted = names.sorted()
+        guard sorted != sourceNames else { return }
+        sourceNames = sorted
+        if sourcePolicy.sourceChange == .resetStream {
+            stream.reset()
+        }
     }
 
     /// The input path: the batch is fed synchronously, in delivery order, unless it belongs to an earlier start.
