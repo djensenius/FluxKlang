@@ -3,7 +3,9 @@
 
 The same self-check also covers `fault_latch_raw_raise` (#190): production code must
 not call the plain `FaultLatch.raise(scope, kind, frame:)`; authority raises
-(`raise(&token, ...)`) and `raiseContended()` stay allowed.
+(`raise(&token, ...)`) and `raiseContended()` stay allowed. A third rule,
+`fault_latch_authority_raise`, allows authority raises only in the four
+lane-owner files listed in its `excluded:` entries.
 
 The seams remain compiled in app modules. This type-blind, non-adversarial policy
 does not defend against lint suppressions or configuration edits. Its declaration
@@ -20,6 +22,7 @@ from collections import Counter
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +32,14 @@ import tempfile
 REPOSITORY = Path(__file__).resolve().parents[2]
 RULE = "fault_latch_test_seams"
 RAW_RAISE_RULE = "fault_latch_raw_raise"
+AUTHORITY_RAISE_RULE = "fault_latch_authority_raise"
+# The lane owners, in .swiftlint.yml order; again not read from the rule.
+AUTHORITY_ALLOWLIST = (
+    "Shared/Audio/Kernel/Memory/DeferredRelease.swift",
+    "Shared/Audio/Kernel/Memory/ReservedCapacityRing+Chains.swift",
+    "Shared/Audio/Kernel/Memory/FanInHandoff+Chains.swift",
+    "Shared/Audio/Kernel/Events/SysExAssembler.swift",
+)
 # Independent expectations, deliberately not extracted from the policy regex.
 SEAMS = (
     "admitRaiseForTesting",
@@ -275,6 +286,7 @@ class Check:
             "rule_id": "trailing_whitespace", "severity": "Error",
         }], (sentinel,))
         self.check_raw_raise()
+        self.check_authority_raise()
         self.manifest["outcome"] = "PASS"
         print("PASS fault-seam-policy self-check: 200 negatives, positives, other-rule sentinel")
 
@@ -326,7 +338,13 @@ class Check:
         write(self.root / "Shared/RawRaiseNegatives.swift", "\n".join(declared) + "\n")
         write(self.root / "FluxKlangTests/RawRaisePositives.swift", "\n".join(plain) + "\n")
         self.lint("raw-raise-positives", expected, ("Shared/RawRaisePositives.swift",))
-        self.lint("raw-raise-negatives", [], ("Shared/RawRaiseNegatives.swift",))
+        # Authority forms are the other rule's; outside the allowlist they fire it, not this one.
+        authority = [{
+            "file": "Shared/RawRaiseNegatives.swift", "line": i + 1,
+            "character": row.index(".raise(") + 2,
+            "rule_id": AUTHORITY_RAISE_RULE, "severity": "Error",
+        } for i, row in enumerate(declared) if ".raise(" in row]
+        self.lint("raw-raise-negatives", authority, ("Shared/RawRaiseNegatives.swift",))
         exempt = [dict(expected[-1], file="FluxKlangTests/RawRaisePositives.swift")]
         self.lint("raw-raise-root-tests-exempt", exempt, ("FluxKlangTests/RawRaisePositives.swift",))
         # The one legitimate plain call carries a narrow, reviewable disable comment.
@@ -346,6 +364,80 @@ class Check:
             "rule_id": RAW_RAISE_RULE, "severity": "Error",
         }], ("Shared/MutatedFaultLatchChains.swift",))
         print("PASS fault-seam-policy self-check: raw-raise positives, negatives, exemptions")
+
+    def check_authority_raise(self):
+        # Third rule (fault_latch_authority_raise): `raise(&token, ...)` only in the lane owners.
+        lines = (REPOSITORY / ".swiftlint.yml").read_text(encoding="utf-8").splitlines()
+        entries, section = [], None
+        for row in lines[lines.index(f"  {AUTHORITY_RAISE_RULE}:") + 1:]:
+            if not row.startswith("    "):
+                break
+            if not row.startswith("     "):
+                section = row.strip()
+            elif section == "excluded:" and row.startswith("      - "):
+                entries.append(row[len("      - "):])
+        if entries != ["/" + re.escape(path) + "$" for path in AUTHORITY_ALLOWLIST]:
+            raise RuntimeError(f"authority allowlist drifted from the self-check: {entries}")
+        # Broader than the rule (also `. raise (` and comments), so every allowlist
+        # entry names a real file that still raises and no other production file does.
+        call = re.compile(r"\.\s*raise\s*\(\s*&")
+        found = sorted(
+            str(path.relative_to(REPOSITORY))
+            for top in ("Shared", "FluxKlang", "FluxKlangMac")
+            for path in (REPOSITORY / top).rglob("*.swift")
+            if call.search(path.read_text(encoding="utf-8"))
+        )
+        if found != sorted(AUTHORITY_ALLOWLIST):
+            raise RuntimeError(f"production authority raises outside the allowlist or stale entries: {found}")
+        for source in AUTHORITY_ALLOWLIST:
+            moved = "Shared/NotAllowlisted/" + Path(source).name
+            self.copy_input(source, source)
+            self.copy_input(source, moved)
+            rows = (REPOSITORY / source).read_text(encoding="utf-8").splitlines()
+            sites = [i for i, row in enumerate(rows) if ".raise(&" in row]
+            if len(sites) != 1:
+                raise RuntimeError(f"{source}: expected one authority raise, found {len(sites)}")
+            self.lint(f"authority-raise-real-{Path(source).stem}", [], (source,))
+            self.lint(f"authority-raise-moved-{Path(source).stem}", [{
+                "file": moved, "line": sites[0] + 1,
+                "character": rows[sites[0]].index("raise(&") + 1,
+                "rule_id": AUTHORITY_RAISE_RULE, "severity": "Error",
+            }], (moved,))
+        positives = (
+            "    x.raise(&token, scope, kind, frame: 0)",
+            "    _ = authorityRef._withUnsafeGuaranteedRef { $0.raise(&token, scope, kind, frame: 0) }",
+            "    _ = optional?.raise(&token, scope, kind, frame: 0)",
+            "    authority.raise(\n        &token, scope, kind, frame: 0)",
+            "    authority\n        .raise(&token, scope, kind, frame: 0)",
+        )
+        body = ["func authorityRaisePositives() {"]
+        calls = []
+        for text in positives:
+            body.extend(text.splitlines())
+            calls.append(max(i for i, row in enumerate(body) if "raise" in row))
+        body.append("}")
+        source = "\n".join(body) + "\n"
+        # Lookalikes of allowlisted paths are not allowlisted.
+        for path in ("Shared/AuthorityRaisePositives.swift",
+                     "Shared/Audio/Kernel/Memory/XDeferredRelease.swift",
+                     "Shared/Audio/Kernel/Memory/DeferredRelease+Extra.swift",
+                     "Shared/Other/SysExAssembler.swift"):
+            write(self.root / path, source)
+            self.lint(f"authority-raise-positives-{Path(path).stem}", [{
+                "file": path, "line": i + 1, "character": body[i].index("raise") + 1,
+                "rule_id": AUTHORITY_RAISE_RULE, "severity": "Error",
+            } for i in calls], (path,))
+        write(self.root / "FluxKlangTests/AuthorityRaisePositives.swift", source)
+        self.lint("authority-raise-root-tests-exempt", [], ("FluxKlangTests/AuthorityRaisePositives.swift",))
+        negatives = ["func authorityRaiseNegatives() {", "    latch.raiseContended()",
+                     "    raiseContended()", "    latch.raise(scope, kind, frame: 0)", "}"]
+        write(self.root / "Shared/AuthorityRaiseNegatives.swift", "\n".join(negatives) + "\n")
+        self.lint("authority-raise-negatives", [{
+            "file": "Shared/AuthorityRaiseNegatives.swift", "line": 4,
+            "character": negatives[3].index("raise") + 1,
+            "rule_id": RAW_RAISE_RULE, "severity": "Error",
+        }], ("Shared/AuthorityRaiseNegatives.swift",))
+        print("PASS fault-seam-policy self-check: authority-raise allowlist, positives, negatives")
 
 
 def main():

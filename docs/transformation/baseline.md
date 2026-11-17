@@ -107,6 +107,9 @@ retarget it to neutral contracts; **replace** = a new subsystem supersedes it;
 | `Shared/Views/App/AppModel+StudioApply.swift:4` | `applyStudio()` → `WingApplyVerification`. The full-patch Listen entry point (verified apply at line 17). | replace with host-authority activation | #62 |
 | `Shared/Views/Studio/StudioView.swift:300` | `.disabled(!appModel.isConnected …)`, a guard that exists only in the UI | replace before exposing activation to peers or automation | #62 |
 
+Where the gated apply's host epoch, permission, window and render lease will come from is defined in
+[host-authority-sources.md](host-authority-sources.md) (#62 AU8, design only).
+
 `applyStudio()` is **not** the only path from the graph or the models to hardware. The
 authority migration (#62) must audit every direct WING write path, all of which bypass
 `applyStudio()`. The tables below list every call site outside `Shared/WING/` that

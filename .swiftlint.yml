@@ -24,3 +24,16 @@ custom_rules:
       - identifier
     message: Production code raises faults through a FaultChainAuthority token (`raise(&token, ...)`), not FaultLatch.raise.
     severity: error
+  fault_latch_authority_raise:
+    name: FaultLatch authority raise
+    regex: '(?<=\.)raise(?=\s*\(\s*&)'
+    match_kinds:
+      - identifier
+    # The allowlist: the four lane owners. Add a file only with review.
+    excluded:
+      - /Shared/Audio/Kernel/Memory/DeferredRelease\.swift$
+      - /Shared/Audio/Kernel/Memory/ReservedCapacityRing\+Chains\.swift$
+      - /Shared/Audio/Kernel/Memory/FanInHandoff\+Chains\.swift$
+      - /Shared/Audio/Kernel/Events/SysExAssembler\.swift$
+    message: Authority raises (`raise(&token, ...)`) are restricted to the lane-owner files allowlisted in .swiftlint.yml.
+    severity: error
