@@ -166,7 +166,10 @@ extension ProjectStagingTests {
     @Test func faultsMapOntoTheRecoveryVocabularyCategories() {
         #expect(StagingIOFault.noSpace.saveFaultCategory == .diskFull)
         #expect(StagingIOFault.denied.saveFaultCategory == .permissionDenied)
-        for fault in [StagingIOFault.notFound, .exists, .crossVolume, .tooManyEntries, .ioError, .interrupted] {
+        let faults: [StagingIOFault] = [
+            .notFound, .exists, .crossVolume, .tooManyEntries, .ioError, .interrupted, .changed
+        ]
+        for fault in faults {
             #expect(fault.saveFaultCategory == .unknown, "\(fault)")
         }
     }
