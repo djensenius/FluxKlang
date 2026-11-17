@@ -63,7 +63,14 @@ enum LegacySourceReader {
     private static func gather<FS: StagingFileSystem>(
         _ source: ProjectMigrationSource, rootVolume: Int, limit: Int, _ store: inout FS
     ) -> Result<Data, LegacySourceRefusal>? {
-        let name = fileName(source)
+        checkedFile(fileName(source), source: source, rootVolume: rootVolume, limit: limit, &store)?.map(\.bytes)
+    }
+
+    /// The file at `name` after the checks listed on this type: its first status and its bytes, its refusal, or nil
+    /// when absent. `source` names an oversized refusal. `LegacyDraftRetirement` reads both draft names with it.
+    static func checkedFile<FS: StagingFileSystem>(
+        _ name: String, source: ProjectMigrationSource, rootVolume: Int, limit: Int, _ store: inout FS
+    ) -> Result<(status: StagingNodeStatus, bytes: Data), LegacySourceRefusal>? {
         do {
             guard let first = try store.status(at: name) else { return nil }
             guard first.kind == .regularFile else { return .failure(.io(.notRegularFile)) }
@@ -76,7 +83,7 @@ enum LegacySourceReader {
             guard let second = try store.status(at: name), second == first, second.byteCount == data.count else {
                 return .failure(.io(.changed))
             }
-            return .success(data)
+            return .success((first, data))
         } catch .notFound, .changed {
             // The regular file it was a moment ago is gone, became a link or was swapped.
             return .failure(.io(.changed))
