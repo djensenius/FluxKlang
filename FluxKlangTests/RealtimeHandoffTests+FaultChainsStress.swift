@@ -7,7 +7,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-/// Shared counters for the chain-token stress test.
+/// Shared counters for the chain-token stress tests.
 private final class ChainStressState: Sendable {
     let arrived = Atomic<Int>(0)
     let started = Atomic<Bool>(false)
@@ -24,6 +24,8 @@ private final class ChainStressState: Sendable {
     let holders = Atomic<Int>(0)
     let overlaps = Atomic<Int>(0)
     let guarded = TokenGuardedCount()
+    /// Per thread, the chain ids each authority granted to it in the batch-mint stress test.
+    let mintedIds = Mutex<[[[UInt64]]]>([])
 }
 
 /// A plain (non-atomic) counter that only a token holder touches: the slot's release/acquire pair is its only
@@ -144,6 +146,50 @@ extension RealtimeHandoffTests {
             #expect(FaultChaining.isEmpty(held))
             #expect(held.put(holder) == .ok)
             #expect(held.put(try FaultChaining.take(held)) == .ok)
+        }
+
+        /// Threads race batch mints of 0 to 8 chains on many small budgets in turn, so each budget's end is contended.
+        /// Every grant is whole and `issued`, no budget is overshot, and each authority's grants are exactly ids
+        /// `1...mintedChains`, once each.
+        @Test(.timeLimit(.minutes(1))) func concurrentBatchMintsNeverOvershootBudget() throws {
+            let budget = 16
+            let attempts = 8
+            let scopes = [FaultScope(handoff: 9, target: 0)]
+            let authorities = try (0..<256).map { _ in try FaultChainAuthority(scopes: scopes, chainBudget: budget) }
+            let state = ChainStressState()
+            let ran = Self.run(state) { thread in
+                var granted = [[UInt64]](repeating: [], count: authorities.count)
+                for (index, authority) in authorities.enumerated() {
+                    if state.cancelled.load(ordering: .relaxed) { break }
+                    for attempt in 0..<attempts {
+                        let count = (thread &* 7 &+ attempt &* 13 &+ index) % 9
+                        guard let chains = authority.mintChains(count: count) else { continue }
+                        let batch = chains.map(\.id)
+                        let whole = batch.count == count && zip(batch, batch.dropFirst()).allSatisfy { $0 + 1 == $1 }
+                        if !whole || !chains.allSatisfy(authority.issued) {
+                            state.wrongStatus.add(1, ordering: .relaxed)
+                        }
+                        granted[index] += batch
+                    }
+                }
+                state.mintedIds.withLock { $0.append(granted) }
+            }
+            guard ran else { return }
+            let perThread = state.mintedIds.withLock { $0 }
+            #expect(perThread.count == Self.threads)
+            #expect(state.wrongStatus.load(ordering: .relaxed) == 0)
+            for (index, authority) in authorities.enumerated() {
+                let minted = authority.mintedChains
+                let ids = perThread.flatMap { granted in granted.dropFirst(index).first ?? [] }.sorted()
+                #expect(minted <= budget)
+                #expect(ids == (0..<minted).map { UInt64($0 + 1) })
+                // Whatever is left is still exactly available, all or nothing.
+                #expect(authority.mintChains(count: budget - minted + 1) == nil)
+                if minted < budget {
+                    #expect(authority.mintChains(count: budget - minted)?.first?.id == UInt64(minted + 1))
+                }
+                #expect(authority.mintedChains == budget)
+            }
         }
     }
 }

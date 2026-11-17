@@ -251,7 +251,7 @@ struct TemporaryDeviceMoveTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let cloud = MemoryCloudStore()
         let fileStore = JSONFileStore(directory: directory, cloud: cloud)
-        let fileName = "temporary-moves-\(UUID().uuidString).json"
+        let fileName = "studio-connections.json"
         let synth = Equipment(name: "Synth", outputs: ["Out"])
         let home = StudioHomeConnections(inputs: [
             StudioInputConnection(connector: 1, equipmentID: synth.id, outputPort: 0)

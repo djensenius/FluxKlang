@@ -219,7 +219,7 @@ struct GlobalStudioConnectionsTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let cloud = MemoryCloudStore()
         let fileStore = JSONFileStore(directory: directory, cloud: cloud)
-        let fileName = "studio-connections-\(UUID().uuidString).json"
+        let fileName = "studio-connections.json"
         let synth = Equipment(name: "Synth")
         let legacy = RoutingEnvironment(
             name: "Legacy",
