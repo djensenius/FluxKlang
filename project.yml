@@ -270,6 +270,8 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+FaultChainsStress.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Ownership.swift
       - path: FluxKlangTests/RealtimeHandoffTests+OwnershipContention.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+RefusalCaller.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+RefusalCallerTransfer.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Telemetry.swift
       - path: FluxKlangTests/RealtimeHandoffTests+ReservedRing.swift
       - path: FluxKlangTests/RealtimeHandoffTests+FanInIdentity.swift
