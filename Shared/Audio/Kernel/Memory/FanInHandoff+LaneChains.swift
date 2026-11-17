@@ -33,6 +33,13 @@ extension FanInHandoff {
         return built
     }
 
+    /// Control-side: whether every lane raises on `authority` itself (identity, not capacity or scopes); the claim
+    /// authority does not count. `owners` is never empty (`HandoffPolicy.validate` requires at least one producer), so
+    /// this is never vacuously true.
+    func lanesRaiseOn(_ authority: FaultChainAuthority) -> Bool {
+        owners.allSatisfy { $0.raisesOn(authority) }
+    }
+
     /// Critical refusals on `lane` that found its chain's token held (each also latched the lane authority's
     /// contended fault); 0 for an out-of-range lane. Each is also counted in that lane's `refusedCriticalCount`.
     func contendedLaneCount(lane: Int) -> UInt64 {
