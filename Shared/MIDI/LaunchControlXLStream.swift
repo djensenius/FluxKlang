@@ -48,19 +48,4 @@ struct LaunchControlXLStream: Sendable {
         // `input` is registered by `make` and never detached, so this cannot be refused.
         _ = try? registry.resetSource(Self.input)
     }
-
-    /// Each valid message is fed as its own complete packet (status byte included), so a pending half message or
-    /// open SysEx cannot absorb it; invalid messages are dropped.
-    mutating func feed(_ messages: [MIDIControlChange]) -> [MIDISourceOutput] {
-        feed(packets: messages.compactMap(Self.bytes(of:)))
-    }
-
-    /// The three bytes of a control change, or nil for a channel outside 1...16 or a data byte of 0x80 or more.
-    static func bytes(of message: MIDIControlChange) -> [UInt8]? {
-        guard (1...MIDI1PerformanceState.channelCount).contains(message.channel),
-              message.controller < 0x80, message.value < 0x80 else {
-            return nil
-        }
-        return [0xB0 | UInt8(message.channel - 1), message.controller, message.value]
-    }
 }

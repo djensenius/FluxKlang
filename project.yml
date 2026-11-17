@@ -524,7 +524,6 @@ targets:
       - path: FluxKlangTests/UMPStreamMessageTests+Text.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+Fragments.swift
-      - path: FluxKlangTests/MIDIControlChangeDecodeTests+Legacy.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+RealTime.swift
       - path: FluxKlangTests/MIDICIMessageTests.swift
       - path: FluxKlangTests/MIDICIMessageTests+Decode.swift
@@ -647,6 +646,7 @@ targets:
       - path: FluxKlangTests/ProjectLegacyAdoptionTests+Refusals.swift
       - path: FluxKlangTests/ProjectMigrationTests.swift
       - path: FluxKlangTests/ProjectMigrationTests+Draft.swift
+      - path: FluxKlangTests/ProjectMigrationTests+Reader.swift
       - path: FluxKlangTests/PeerReconnectTests.swift
       - path: FluxKlangTests/PeerReconnectTests+Epochs.swift
       - path: FluxKlangTests/ParameterAutomationTests.swift
