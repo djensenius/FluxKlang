@@ -129,10 +129,14 @@ extension RealtimeHandoffTests.CycleOrderingStress {
     /// Round 2i: the `program` pending at 1110 is dropped, counted by render's `retire()` and inherited by
     /// control's replacement across the hand-back.
     @Test func controlRetriesReplacementWhileRenderRetires() throws {
+        let role = try #require(RefusalCaller.prepare())
+        var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+        defer { RefusalCalling.giveBack(role, &caller) }
         let rig = try CycleRig()
-        let first = try #require(rig.events.claimProducer()), second = try #require(rig.events.claimProducer())
-        #expect(rig.push(cycleEvent(1_100, .noteOff(channel: 0, note: 60)), second) == .ok)
-        #expect(rig.push(cycleEvent(1_110, .program(channel: 0, program: 5, bank: 0)), second) == .ok)
+        let first = try RefusalCalling.claim(rig.events, &caller!)
+        let second = try RefusalCalling.claim(rig.events, &caller!)
+        #expect(rig.push(cycleEvent(1_100, .noteOff(channel: 0, note: 60)), second, caller: &caller!) == .ok)
+        #expect(rig.push(cycleEvent(1_110, .program(channel: 0, program: 5, bank: 0)), second, caller: &caller!) == .ok)
         let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
                                      safety: rig.safety, ramps: rig.ramps,
                                      admissionRefusals: rig.cycle.admissionRefusals)
@@ -198,7 +202,8 @@ extension RealtimeHandoffTests.CycleOrderingStress {
         #expect(readmitted == [CycleEmission(event: cycleEvent(1_110, .program(channel: 0, program: 5, bank: 0)),
                                              frame: 1_110)])
         #expect(!replacement.unresolvedRetirementLoss.receiverStateMayBeStale)
-        #expect(rig.push(cycleEvent(1_050, .noteOn(channel: 0, note: 60, velocity: 90)), first) == .ok)
+        #expect(rig.push(cycleEvent(1_050, .noteOn(channel: 0, note: 60, velocity: 90)), first, caller: &caller!)
+                == .ok)
         var emitted = 0
         let late = replacement.run(blockStart: 1_128, frames: 64) { _, _ in emitted += 1 }
         #expect(emitted == 0 && late.discardedSuperseded == 1)

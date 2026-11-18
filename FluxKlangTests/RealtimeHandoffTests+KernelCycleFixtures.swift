@@ -55,8 +55,8 @@ struct CycleRig {
                     overflow: .reservedCritical(reserved: 16 &* lanes))
     }
 
-    func push(_ event: KernelEvent, _ token: ProducerToken) -> KernelStatus {
-        events.tryPush(event, class: event.eventClass, frame: event.frame, token: token)
+    func push(_ event: KernelEvent, _ token: ProducerToken, caller: inout RefusalCallerToken) -> KernelStatus {
+        events.tryPush(event, class: event.eventClass, frame: event.frame, token: token, caller: &caller)
     }
 
     /// Runs one cycle and returns its result with everything it emitted.

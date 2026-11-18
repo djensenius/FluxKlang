@@ -91,8 +91,10 @@ private struct PureRow {
 }
 
 /// Fills `token`'s lane with critical events.
-private func fillLane(_ handoff: FanIn, _ token: ProducerToken) {
-    for value in 0..<20 { #expect(handoff.tryPush(UInt64(value), class: .critical, frame: 0, token: token) == .ok) }
+private func fillLane(_ handoff: FanIn, _ token: ProducerToken, caller: inout RefusalCallerToken) {
+    for value in 0..<20 {
+        #expect(handoff.tryPush(UInt64(value), class: .critical, frame: 0, token: token, caller: &caller) == .ok)
+    }
 }
 
 /// Shared state for the concurrent refusal stress (#190 FLP7b).
@@ -284,19 +286,22 @@ extension RealtimeHandoffTests {
         /// T10. Each lane has its own chain: holding one lane's token never contends another lane's refusal, and
         /// the seams refuse an out-of-range lane. Kills: one chain shared across lanes.
         @Test func lanesHaveIndependentChains() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let handoff = try Root.makeFanIn(faults, lanes: 2, laneCapacity: 20)
-            let tokens = [try #require(handoff.claimProducer()), try #require(handoff.claimProducer())]
-            for token in tokens { fillLane(handoff, token) }
+            let tokens = [try RefusalCalling.claim(handoff, &caller!), try RefusalCalling.claim(handoff, &caller!)]
+            for token in tokens { fillLane(handoff, token, caller: &caller!) }
             var refusals: [KernelStatus] = []
             #expect(handoff.withLaneChainTokenHeld(lane: 1) {
-                refusals.append(handoff.tryPush(1, class: .critical, frame: 7, token: tokens[0]))
+                refusals.append(handoff.tryPush(1, class: .critical, frame: 7, token: tokens[0], caller: &caller!))
             })
             #expect(refusals == [.refused(.criticalExhausted)] && !faults.hasContendedFault)
             #expect(handoff.contendedLaneCount(lane: 0) == 0 && handoff.contendedLaneCount(lane: 1) == 0)
             #expect(Root.fanInRecord(faults, Root.fanInCriticalScope)?.count == 1)
             #expect(handoff.withLaneChainTokenHeld(lane: 0) {
-                refusals.append(handoff.tryPush(2, class: .critical, frame: 8, token: tokens[0]))
+                refusals.append(handoff.tryPush(2, class: .critical, frame: 8, token: tokens[0], caller: &caller!))
             })
             #expect(refusals.count == 2 && faults.hasContendedFault)
             #expect(handoff.contendedLaneCount(lane: 0) == 1 && handoff.contendedLaneCount(lane: 1) == 0)
@@ -308,13 +313,16 @@ extension RealtimeHandoffTests {
         /// fault, so step 2 silences every run for good, with no counted record to acknowledge. Kills: `isLatched`
         /// ignoring the contended flag.
         @Test func contendedSilencesCycle() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             var statuses: [KernelStatus] = []
             #expect(rig.events.withLaneChainTokenHeld(lane: 0) {
                 for index in 0..<21 {
                     let event = cycleEvent(0, .noteOff(channel: 0, note: 60), sequence: UInt64(index))
-                    statuses.append(rig.push(event, token))
+                    statuses.append(rig.push(event, token, caller: &caller!))
                 }
             })
             #expect(statuses.prefix(20).allSatisfy { $0 == .ok } && statuses.last == .refused(.criticalExhausted))
@@ -358,28 +366,35 @@ extension RealtimeHandoffTests {
 
         @Test(.timeLimit(.minutes(1)))
         func concurrentRefusalsAreCountedOrContended() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let handoff = try Root.makeFanIn(faults, lanes: 2, laneCapacity: 20)
-            let tokens = [try #require(handoff.claimProducer()), try #require(handoff.claimProducer())]
-            for token in tokens { fillLane(handoff, token) }
+            let tokens = [try RefusalCalling.claim(handoff, &caller!), try RefusalCalling.claim(handoff, &caller!)]
+            for token in tokens { fillLane(handoff, token, caller: &caller!) }
             let state = LaneChainStressState()
+            let roles = try (0..<Self.threads).map { _ in try #require(RefusalCaller.prepare()) }
             for thread in 0..<Self.threads {
                 let lane = thread / 2
                 let token = tokens[lane]
                 Thread {
+                    defer { state.exited.add(1, ordering: .releasing) }
+                    var caller: RefusalCallerToken? = try? RefusalCalling.take(roles[thread])
+                    defer { RefusalCalling.giveBack(roles[thread], &caller) }
                     state.arrived.add(1, ordering: .releasing)
                     let deadline = ContinuousClock.now + .seconds(20)
                     while !state.started.load(ordering: .acquiring), ContinuousClock.now < deadline {}
+                    guard caller != nil else { return }
                     for call in 0..<Self.pushesPerThread {
                         let frame = Int64(thread * Self.pushesPerThread + call)
-                        let status = handoff.tryPush(1, class: .critical, frame: frame, token: token)
+                        let status = handoff.tryPush(1, class: .critical, frame: frame, token: token, caller: &caller!)
                         if status == .refused(.criticalExhausted) {
                             state.refused(lane: lane)
                         } else {
                             state.other.add(1, ordering: .relaxed)
                         }
                     }
-                    state.exited.add(1, ordering: .releasing)
                 }.start()
             }
             let arrivalDeadline = ContinuousClock.now + .seconds(20)
@@ -395,6 +410,7 @@ extension RealtimeHandoffTests {
                 Issue.record("stress workers did not exit; post-run checks skipped")
                 return
             }
+            #expect(roles.allSatisfy { !RefusalCalling.isEmpty($0) })
             let refused = (state.refusedLane0.load(ordering: .relaxed), state.refusedLane1.load(ordering: .relaxed))
             let contended = (handoff.contendedLaneCount(lane: 0), handoff.contendedLaneCount(lane: 1))
             print("LaneChainingStress contended refusals: \(contended)")

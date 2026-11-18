@@ -68,20 +68,24 @@ extension RealtimeHandoffTests {
 
         /// Fills the single lane's general room and reserve, then refuses one critical event at `frame`.
         private static func exhaustCritical(_ handoff: FanInHandoff<UInt64>, _ token: ProducerToken,
-                                            frame: Int64) {
+                                            frame: Int64, caller: inout RefusalCallerToken) {
             for value in 0..<UInt64(handoff.laneCapacity) {
-                #expect(handoff.tryPush(value, class: .critical, frame: 0, token: token) == .ok)
+                #expect(handoff.tryPush(value, class: .critical, frame: 0, token: token, caller: &caller) == .ok)
             }
-            #expect(handoff.tryPush(99, class: .critical, frame: frame, token: token) == .refused(.criticalExhausted))
+            #expect(handoff.tryPush(99, class: .critical, frame: frame, token: token, caller: &caller)
+                    == .refused(.criticalExhausted))
         }
 
         @Test func claimExhaustionFirstLeavesCriticalExhaustionObservable() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let claims = try Root.fanInClaims()
             let handoff = try Root.makeFanIn(faults, claims: claims, lanes: 1, laneCapacity: 17)
-            let token = try #require(handoff.claimProducer(frame: 1))
-            #expect(handoff.claimProducer(frame: 3) == nil)
-            Self.exhaustCritical(handoff, token, frame: 9)
+            let token = try #require(handoff.claimProducer(frame: 1, caller: &caller!))
+            #expect(handoff.claimProducer(frame: 3, caller: &caller!) == nil)
+            Self.exhaustCritical(handoff, token, frame: 9, caller: &caller!)
             #expect(Root.fanInRecord(claims, Root.fanInSlotsScope)
                     == FaultRecord(scope: Root.fanInSlotsScope, kind: .producerSlotsExhausted, count: 1, firstFrame: 3))
             #expect(Root.fanInRecord(faults, Root.fanInCriticalScope)
@@ -94,12 +98,16 @@ extension RealtimeHandoffTests {
         }
 
         @Test func criticalExhaustionFirstLeavesClaimExhaustionObservable() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let claims = try Root.fanInClaims()
             let handoff = try Root.makeFanIn(faults, claims: claims, lanes: 1, laneCapacity: 17)
-            let token = try #require(handoff.claimProducer(frame: 1))
-            Self.exhaustCritical(handoff, token, frame: 4)
-            #expect(handoff.claimProducer(frame: 6) == nil && handoff.claimProducer(frame: 7) == nil)
+            let token = try #require(handoff.claimProducer(frame: 1, caller: &caller!))
+            Self.exhaustCritical(handoff, token, frame: 4, caller: &caller!)
+            #expect(handoff.claimProducer(frame: 6, caller: &caller!) == nil
+                    && handoff.claimProducer(frame: 7, caller: &caller!) == nil)
             #expect(Root.fanInRecord(faults, Root.fanInCriticalScope)
                     == FaultRecord(scope: Root.fanInCriticalScope, kind: .criticalExhausted, count: 1, firstFrame: 4))
             #expect(Root.fanInRecord(claims, Root.fanInSlotsScope)
@@ -115,39 +123,48 @@ extension RealtimeHandoffTests {
     struct FanInTokenIdentity {
         /// Regression: a 20-bit claim count wrapped after 2^20 claims and revived the first token.
         @Test func staleTokenStaysRefusedPastTwoToTheTwentyClaims() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let handoff = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 17)
-            let first = try #require(handoff.claimProducer())
+            let first = try RefusalCalling.claim(handoff, &caller!)
             var token = first
             for _ in 0..<(1 << 20) {
-                guard handoff.releaseProducer(token) == .ok, handoff.drain(perLaneQuota: 1, total: 1, { _, _ in }) == 0,
-                      let next = handoff.claimProducer() else {
+                guard handoff.releaseProducer(token, caller: &caller!) == .ok,
+                      handoff.drain(perLaneQuota: 1, total: 1, { _, _ in }) == 0,
+                      let next = handoff.claimProducer(caller: &caller!) else {
                     Issue.record("claim/release/drain cycle broke")
                     return
                 }
                 token = next
             }
             #expect(token != first)
-            #expect(handoff.tryPush(1, class: .critical, frame: 0, token: first) == .refused(.notOwner))
-            #expect(handoff.releaseProducer(first) == .refused(.notOwner))
-            #expect(handoff.tryPush(2, class: .general, frame: 0, token: token) == .ok)
+            #expect(handoff.tryPush(1, class: .critical, frame: 0, token: first, caller: &caller!)
+                    == .refused(.notOwner))
+            #expect(handoff.releaseProducer(first, caller: &caller!) == .refused(.notOwner))
+            #expect(handoff.tryPush(2, class: .general, frame: 0, token: token, caller: &caller!) == .ok)
             #expect(Root.drained(handoff, quota: 4, total: 4) == [.init(lane: 0, value: 2)])
         }
 
         /// Regression: a 12-bit session block wrapped after 4,096 handoffs and let a foreign token match.
         @Test func foreignTokenStaysRefusedAcrossManyHandoffs() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let origin = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 17)
-            let token = try #require(origin.claimProducer())
+            let token = try RefusalCalling.claim(origin, &caller!)
             var matched = 0
             for _ in 0..<8_192 {
                 let other = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 17)
-                _ = try #require(other.claimProducer())
-                if other.tryPush(1, class: .general, frame: 0, token: token) != .refused(.notOwner) { matched += 1 }
-                if other.releaseProducer(token) != .refused(.notOwner) { matched += 1 }
+                _ = try RefusalCalling.claim(other, &caller!)
+                if other.tryPush(1, class: .general, frame: 0, token: token,
+                                 caller: &caller!) != .refused(.notOwner) { matched += 1 }
+                if other.releaseProducer(token, caller: &caller!) != .refused(.notOwner) { matched += 1 }
             }
             #expect(matched == 0)
-            #expect(origin.tryPush(3, class: .general, frame: 0, token: token) == .ok)
+            #expect(origin.tryPush(3, class: .general, frame: 0, token: token, caller: &caller!) == .ok)
         }
 
         /// Regression (round 2): an injectable identity source gave handoffs a second way to be constructed, and a
@@ -155,6 +172,9 @@ extension RealtimeHandoffTests {
         /// tokens. The handoff now has one initializer, which draws from one shared allocator; `api_absence.sh`
         /// in the scratch package checks at compile time that the injectable form and the seeds are gone.
         @Test func everyConstructionTakesAFreshIdentity() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             // What the removed source did: a separately built allocator starts over at 1. It names no handoff.
             let fresh = FanInIdentityAllocator()
@@ -163,7 +183,7 @@ extension RealtimeHandoffTests {
             var tokens: [ProducerToken] = []
             for _ in 0..<16 {
                 let handoff = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 17)
-                let token = try #require(handoff.claimProducer())
+                let token = try RefusalCalling.claim(handoff, &caller!)
                 // Strictly increasing on one thread, even while other suites prepare handoffs.
                 #expect(handoff.identity > (handoffs.last?.identity ?? 0))
                 #expect(handoff.identity <= FanIn.lastIssuedIdentity)
@@ -174,14 +194,14 @@ extension RealtimeHandoffTests {
             var accepted = 0
             for (index, handoff) in handoffs.enumerated() {
                 for (other, token) in tokens.enumerated() where other != index {
-                    let pushed = handoff.tryPush(1, class: .general, frame: 0, token: token)
+                    let pushed = handoff.tryPush(1, class: .general, frame: 0, token: token, caller: &caller!)
                     if pushed != .refused(.notOwner) { accepted += 1 }
-                    if handoff.releaseProducer(token) != .refused(.notOwner) { accepted += 1 }
+                    if handoff.releaseProducer(token, caller: &caller!) != .refused(.notOwner) { accepted += 1 }
                 }
             }
             #expect(accepted == 0)
             for (handoff, token) in zip(handoffs, tokens) {
-                #expect(handoff.tryPush(2, class: .general, frame: 0, token: token) == .ok)
+                #expect(handoff.tryPush(2, class: .general, frame: 0, token: token, caller: &caller!) == .ok)
                 #expect(Root.drained(handoff, quota: 4, total: 4) == [.init(lane: 0, value: 2)])
             }
         }
@@ -252,14 +272,18 @@ extension RealtimeHandoffTests {
         /// later generation. Only claims make tokens, so malformed generations (0, phase bits, beyond the final
         /// one) exist only as words: `FanInLaneTransitions` shows `held(by:)` refuses them.
         @Test func liveGenerationsGrowAndOtherTokensNeverMatch() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let handoff = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 17)
             // A foreign one-lane handoff cycled ahead: its lane-0 tokens carry generations 1...4.
             let ahead = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 17)
             var foreign: [ProducerToken] = []
             for _ in 0..<4 {
-                let token = try #require(ahead.claimProducer())
-                #expect(ahead.releaseProducer(token) == .ok && ahead.drain(perLaneQuota: 1, total: 1, { _, _ in }) == 0)
+                let token = try RefusalCalling.claim(ahead, &caller!)
+                #expect(ahead.releaseProducer(token, caller: &caller!) == .ok
+                        && ahead.drain(perLaneQuota: 1, total: 1, { _, _ in }) == 0)
                 foreign.append(token)
             }
             #expect(foreign.map(\.generation) == [1, 2, 3, 4] && foreign.allSatisfy { $0.lane == 0 })
@@ -267,15 +291,16 @@ extension RealtimeHandoffTests {
             var stale: [ProducerToken] = []
             var refusals: UInt64 = 0
             for round in UInt64(1)...3 {
-                let token = try #require(handoff.claimProducer())
+                let token = try RefusalCalling.claim(handoff, &caller!)
                 #expect(token.handoff == id && token.generation == round && token.lane == 0)
                 for bad in foreign + stale {
-                    #expect(handoff.tryPush(9, class: .critical, frame: 0, token: bad) == .refused(.notOwner))
-                    #expect(handoff.releaseProducer(bad) == .refused(.notOwner))
+                    #expect(handoff.tryPush(9, class: .critical, frame: 0, token: bad, caller: &caller!)
+                            == .refused(.notOwner))
+                    #expect(handoff.releaseProducer(bad, caller: &caller!) == .refused(.notOwner))
                     refusals += 2
                 }
-                #expect(handoff.tryPush(round, class: .general, frame: 0, token: token) == .ok)
-                #expect(handoff.releaseProducer(token) == .ok)
+                #expect(handoff.tryPush(round, class: .general, frame: 0, token: token, caller: &caller!) == .ok)
+                #expect(handoff.releaseProducer(token, caller: &caller!) == .ok)
                 #expect(Root.drained(handoff, quota: 4, total: 4) == [.init(lane: 0, value: round)])
                 stale.append(token)
             }

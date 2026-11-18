@@ -160,8 +160,9 @@ private struct CycleModel: Sendable {
 }
 
 /// A producer's accepted pushes, and bit `scope * 16 + note` set where its last note event for that note was a
-/// refused `noteOff` (so the note must end unowned).
+/// refused `noteOff` (so the note must end unowned). `ran` is false when it never got its caller and lane.
 private struct ProducerOutcome: Sendable {
+    var ran = false
     var accepted = 0
     var refusedLast: UInt32 = 0
 
@@ -192,10 +193,16 @@ private func stressPayload(_ random: inout CycleRandom, note: UInt8, index: Int)
 
 /// Pushes a deterministic mix of every payload with frames around the render worker's `now`, on notes
 /// `noteBase..<noteBase + 7` only (notes 7 and 15 are left to `latchCriticalScope`).
-@Sendable private func produce(_ rig: CycleRig, _ run: CycleStressRun, seed: UInt64, noteBase: UInt8,
-                               pushes: Int) -> ProducerOutcome {
+@Sendable private func produce( // swiftlint:disable:this function_parameter_count
+    _ rig: CycleRig, _ run: CycleStressRun, _ role: RefusalCaller, seed: UInt64, noteBase: UInt8, pushes: Int
+) -> ProducerOutcome {
     var outcome = ProducerOutcome()
-    guard run.arriveAndWait(), let token = rig.events.claimProducer() else { return outcome }
+    var caller: RefusalCallerToken? = try? RefusalCalling.take(role)
+    defer { RefusalCalling.giveBack(role, &caller) }
+    guard run.arriveAndWait(), caller != nil, let token = rig.events.claimProducer(caller: &caller!) else {
+        return outcome
+    }
+    outcome.ran = true
     // Push only once render's first cycle is done, so no new fault hides how that cycle met the pre-start latch.
     let deadline = ContinuousClock.now + CycleStressRun.waitLimit
     while run.cycleStarted.load(ordering: .acquiring) < 2, !run.shouldStop, ContinuousClock.now < deadline {}
@@ -208,9 +215,9 @@ private func stressPayload(_ random: inout CycleRandom, note: UInt8, index: Int)
         // From 700 frames late (beyond the 480-frame tolerance) to 300 frames ahead.
         let frame = run.now.load(ordering: .relaxed) &+ Int64(random.next(1_001)) &- 700
         let event = cycleEvent(frame, payload, scope: scope, sequence: UInt64(index))
-        outcome.record(event, rig.push(event, token))
+        outcome.record(event, rig.push(event, token, caller: &caller!))
     }
-    _ = rig.events.releaseProducer(token)
+    _ = rig.events.releaseProducer(token, caller: &caller!)
     run.producersDone.add(1, ordering: .releasing)
     return outcome
 }
@@ -283,12 +290,15 @@ private func awaitBounded(_ run: CycleStressRun, _ condition: () -> Bool) -> Boo
 /// Before the workers start, with no cycle draining, queues `noteOn(15)` on a third lane, fills it with
 /// `noteOff(7)`s and has `noteOff(15)` refused: a certain `.criticalExhausted` latch with a `noteOn` ahead of its
 /// lost release (note 15 must end unowned). Returns the accepted pushes.
-private func latchCriticalScope(_ rig: CycleRig) throws -> Int {
-    let token = try #require(rig.events.claimProducer())
-    #expect(rig.push(cycleEvent(0, .noteOn(channel: 0, note: 15, velocity: 90)), token) == .ok)
+private func latchCriticalScope(_ rig: CycleRig, caller: inout RefusalCallerToken) throws -> Int {
+    let token = try RefusalCalling.claim(rig.events, &caller)
+    #expect(rig.push(cycleEvent(0, .noteOn(channel: 0, note: 15, velocity: 90)), token, caller: &caller) == .ok)
     var accepted = 1
-    while accepted < 64, rig.push(cycleEvent(0, .noteOff(channel: 0, note: 7)), token) == .ok { accepted += 1 }
-    #expect(rig.push(cycleEvent(1, .noteOff(channel: 0, note: 15)), token) == .refused(.criticalExhausted))
+    while accepted < 64, rig.push(cycleEvent(0, .noteOff(channel: 0, note: 7)), token, caller: &caller) == .ok {
+        accepted += 1
+    }
+    #expect(rig.push(cycleEvent(1, .noteOff(channel: 0, note: 15)), token, caller: &caller)
+            == .refused(.criticalExhausted))
     #expect(rig.faults.isLatched(CycleRig.criticalScope))
     return accepted
 }
@@ -310,10 +320,15 @@ private final class ReRaisedRounds: Sendable {
 /// A re-raising producer: each round, once an acknowledgement has landed since its last raise (bounded), queues
 /// `noteOn(note)` in scope 1 with velocity `round`, raises the critical scope as its refused `noteOff` would, then
 /// publishes the round. Returns rule breaks.
-@Sendable private func reRaise(_ rig: CycleRig, _ run: CycleStressRun, _ rounds: ReRaisedRounds, producer: Int,
-                               count: Int) -> [String] {
+@Sendable private func reRaise( // swiftlint:disable:this function_parameter_count
+    _ rig: CycleRig, _ run: CycleStressRun, _ rounds: ReRaisedRounds, _ role: RefusalCaller, producer: Int, count: Int
+) -> [String] {
     var violations: [String] = []
-    guard run.arriveAndWait(), let token = rig.events.claimProducer() else { return ["producer \(producer) not run"] }
+    var caller: RefusalCallerToken? = try? RefusalCalling.take(role)
+    defer { RefusalCalling.giveBack(role, &caller) }
+    guard run.arriveAndWait(), caller != nil, let token = rig.events.claimProducer(caller: &caller!) else {
+        return ["producer \(producer) not run"]
+    }
     var acknowledgedBefore = -1
     for round in 1...count where !run.shouldStop {
         guard awaitBounded(run, { run.acknowledged.load(ordering: .acquiring) > acknowledgedBefore }) else {
@@ -324,7 +339,7 @@ private final class ReRaisedRounds: Sendable {
         let payload = KernelEventPayload.noteOn(channel: 0, note: ReRaisedRounds.note(producer),
                                                 velocity: UInt16(round))
         let noteOn = cycleEvent(frame, payload, scope: 1, sequence: UInt64(round))
-        guard awaitBounded(run, { rig.push(noteOn, token) == .ok }) else {
+        guard awaitBounded(run, { rig.push(noteOn, token, caller: &caller!) == .ok }) else {
             violations.append("producer \(producer) round \(round): noteOn never queued")
             break
         }
@@ -334,7 +349,7 @@ private final class ReRaisedRounds: Sendable {
         }
         rounds.publish(producer, round)
     }
-    _ = rig.events.releaseProducer(token)
+    _ = rig.events.releaseProducer(token, caller: &caller!)
     run.producersDone.add(1, ordering: .releasing)
     return violations
 }
@@ -374,16 +389,20 @@ extension RealtimeHandoffTests {
         /// while flushing; a note left owned after its `noteOff` was refused; ownership diverging from what was
         /// emitted; a race TSan can see.
         @Test func concurrentProducersRenderAndControlKeepEveryEventAccounted() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let slots = try kernelCycleTelemetrySlots()
             let rig = try CycleRig(lanes: 3, laneCapacity: 32, blockCapacity: 48,
                                    telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
-            let burst = try latchCriticalScope(rig)
+            let burst = try latchCriticalScope(rig, caller: &caller!)
+            let roles = try (0..<2).map { _ in try #require(RefusalCaller.prepare()) }
             let run = CycleStressRun()
             let outcomes = CycleSlots<ProducerOutcome>(2)
             let model = CycleSlots<CycleModel>(1)
             let workers: [@Sendable (CycleStressRun) -> Void] = [
-                { outcomes.set(0, produce(rig, $0, seed: 0x1234_5678, noteBase: 0, pushes: 20_000)) },
-                { outcomes.set(1, produce(rig, $0, seed: 0x9ABC_DEF0, noteBase: 8, pushes: 20_000)) },
+                { outcomes.set(0, produce(rig, $0, roles[0], seed: 0x1234_5678, noteBase: 0, pushes: 20_000)) },
+                { outcomes.set(1, produce(rig, $0, roles[1], seed: 0x9ABC_DEF0, noteBase: 8, pushes: 20_000)) },
                 { model.set(0, render(rig, $0, producers: 2)) },
                 { control(rig, $0) }
             ]
@@ -392,6 +411,7 @@ extension RealtimeHandoffTests {
             var observed = try #require(model.get(0))
             let first = try #require(outcomes.get(0))
             let second = try #require(outcomes.get(1))
+            #expect(first.ran && second.ran, "producer not run")
             let pushed = burst + first.accepted + second.accepted
             #expect(run.acknowledged.load(ordering: .acquiring) > 0 && observed.silencedCycles > 0)
             // Quiescent flush: observe any latch, run one cycle (silenced if latched, arming the flush), then
@@ -436,11 +456,12 @@ extension RealtimeHandoffTests {
             let rig = try CycleRig(telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
             let run = CycleStressRun()
             let rounds = ReRaisedRounds()
+            let roles = try (0..<2).map { _ in try #require(RefusalCaller.prepare()) }
             let breaks = CycleSlots<[String]>(2)
             let model = CycleSlots<CycleModel>(1)
             let workers: [@Sendable (CycleStressRun) -> Void] = [
-                { breaks.set(0, reRaise(rig, $0, rounds, producer: 0, count: 40)) },
-                { breaks.set(1, reRaise(rig, $0, rounds, producer: 1, count: 40)) },
+                { breaks.set(0, reRaise(rig, $0, rounds, roles[0], producer: 0, count: 40)) },
+                { breaks.set(1, reRaise(rig, $0, rounds, roles[1], producer: 1, count: 40)) },
                 { model.set(0, reRaiseRender(rig, $0, rounds)) },
                 { control(rig, $0) }
             ]
