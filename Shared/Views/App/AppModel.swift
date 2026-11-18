@@ -54,6 +54,9 @@ final class AppModel {
     /// Created explicitly and retained while its unsaved document has no open window.
     private(set) var performanceProjectSession: PerformanceProjectSession?
 
+    /// The one read-only package inspection owner shared by every root window. Performs no IO until asked.
+    let packageInspections = ProjectPackageInspectionSession()
+
     /// Shared read-only assistant domain plus local pending Studio drafts.
     let assistant: AssistantCoordinator
 

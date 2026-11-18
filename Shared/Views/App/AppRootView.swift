@@ -15,6 +15,7 @@ struct AppRootView: View {
     #endif
     @State private var workspaceWindow = WindowID(uuid: UUID())
     @State private var workspaceFailure: String?
+    @State private var packageInspection: PerformancePackageInspectionWindow?
     #if DEBUG
     private let constructionObservation = AcceptanceLaunchConfiguration.isUITesting
         ? AppModel.captureUIConstructionObservation() : nil
@@ -30,13 +31,25 @@ struct AppRootView: View {
             AdaptiveRoot(window: workspaceWindow, widthClass: workspaceWidthClass, newProject: newWorkspaceProject)
             #endif
         }
-        .onAppear { reconcileWorkspaceWindow() }
+        // Window-local inspection; close() runs on root disappear. Whether width-class branch
+        // switches trigger that is unverified (W512d prerequisite).
+        .environment(packageInspection)
+        .onAppear {
+            if packageInspection == nil {
+                packageInspection = PerformancePackageInspectionWindow(
+                    owner: appModel.packageInspections, window: workspaceWindow
+                )
+            }
+            reconcileWorkspaceWindow()
+        }
         .onChange(of: workspaceWidthClass) { _, _ in reconcileWorkspaceWindow() }
         .onChange(of: appModel.performanceProjectSession?.project.id) { _, _ in reconcileWorkspaceWindow() }
         // Navigation belongs to this outer root, not a destination or adaptive-width branch.
         .onDisappear {
             appModel.wingLifecycle.detach(workspaceWindow)
             workspaceOperation { try appModel.closePerformanceProjectWindow(workspaceWindow) }
+            packageInspection?.close()
+            packageInspection = nil
         }
         .safeAreaInset(edge: .bottom) {
             if let message = appModel.wingLifecycle.lastReplacementOutcome?.failureMessage {
