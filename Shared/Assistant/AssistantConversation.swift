@@ -95,6 +95,7 @@ enum AssistantCard: Codable, Hashable, Sendable {
     case wiring(summary: [String], cableInstructions: [String])
     case conflicts([String])
     case moves([String])
+    /// Display reference only; the card opens review just while `id` is still the pending draft's id.
     case pendingDraft(id: UUID, summary: String, hasErrors: Bool)
     /// Inert display reference only; execution authority lives exclusively in the in-memory planner.
     case actionReview(id: UUID, summary: String)

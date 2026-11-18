@@ -41,17 +41,24 @@ struct AssistantCardView: View {
                 }
             case .actionReview(let id, let summary):
                 AssistantActionReviewCard(submissionID: id, summary: summary, planner: appModel.assistantActions)
-            case .pendingDraft(_, let summary, let hasErrors):
+            case .pendingDraft(let id, let summary, let hasErrors):
                 AssistantInlineCard(title: "Pending Draft", systemImage: "doc.badge.clock") {
                     Text(summary)
-                    if hasErrors {
-                        Label("Resolve validation errors before accepting.", systemImage: "xmark.octagon")
-                            .foregroundStyle(.red)
+                    if appModel.assistant.isPendingDraft(id) {
+                        if hasErrors {
+                            Label("Resolve validation errors before accepting.", systemImage: "xmark.octagon")
+                                .foregroundStyle(.red)
+                        }
+                        Button("Review Draft") {
+                            appModel.assistant.openReview(ofDraft: id)
+                        }
+                        .accessibilityIdentifier("assistant.draftReviewCard")
+                    } else {
+                        Text("This draft is no longer pending.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("assistant.draftReviewCard.inactive")
                     }
-                    Button("Review Draft") {
-                        appModel.assistant.navigationTarget = .reviewPendingDraft
-                    }
-                    .accessibilityIdentifier("assistant.draftReviewCard")
                 }
             }
         }

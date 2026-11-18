@@ -218,4 +218,19 @@ final class AssistantCoordinator {
     func clearNavigation() {
         navigationTarget = nil
     }
+
+    /// Matches by draft id only. Ids derive from the request's parameters, so an identical later request
+    /// (in any conversation, even after an accept or discard) or a revalidation still counts as that card's draft.
+    func isPendingDraft(_ id: StudioPatchDraft.ID) -> Bool {
+        pendingStudioDraft?.id == id
+    }
+
+    /// A Pending Draft card opens review only for its own draft. Otherwise navigation is left unchanged.
+    /// This filters navigation only; it grants the draft no lifetime.
+    @discardableResult
+    func openReview(ofDraft id: StudioPatchDraft.ID) -> Bool {
+        guard isPendingDraft(id) else { return false }
+        navigationTarget = .reviewPendingDraft
+        return true
+    }
 }
