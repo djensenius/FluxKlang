@@ -50,7 +50,10 @@ extension HostAuthorityTests {
                 await owner.connected(session: UUID())
                 if initial != .free {
                     _ = try await owner.beginApply(window: Owner.windowOne).get()
-                    if initial == .unattached { await owner.windowClosed(Owner.windowOne) }
+                    if initial == .unattached {
+                        await owner.windowClosed(Owner.windowOne)
+                        await owner.windowOpened(Owner.windowOne, generation: 0)
+                    }
                 }
                 await pause.arm(point)
                 let oldApply = await pause.start(owner)
@@ -99,7 +102,10 @@ extension HostAuthorityTests {
             await owner.connected(session: session)
             if initial != .free {
                 _ = try await owner.beginApply(window: Owner.windowOne).get()
-                if initial == .unattached { await owner.windowClosed(Owner.windowOne) }
+                if initial == .unattached {
+                    await owner.windowClosed(Owner.windowOne)
+                    await owner.windowOpened(Owner.windowOne, generation: 0)
+                }
             }
             await pause.arm(.applyStarting)
             let oldApply = await pause.start(owner)
@@ -133,7 +139,10 @@ extension HostAuthorityTests {
             let (owner, pause) = try await Self.pausable()
             if initial != .free {
                 _ = try await owner.beginApply(window: Owner.windowOne).get()
-                if initial == .unattached { await owner.windowClosed(Owner.windowOne) }
+                if initial == .unattached {
+                    await owner.windowClosed(Owner.windowOne)
+                    await owner.windowOpened(Owner.windowOne, generation: 0)
+                }
             }
             await pause.arm(.applyStarting)
             let apply = await pause.start(owner)
@@ -155,7 +164,10 @@ extension HostAuthorityTests {
             for point in leasePoints {
                 let (owner, pause) = try await Self.pausable()
                 if start != .free { _ = try await owner.beginApply(window: Owner.windowOne).get() }
-                if start == .unattached { await owner.windowClosed(Owner.windowOne) }
+                if start == .unattached {
+                    await owner.windowClosed(Owner.windowOne)
+                    await owner.windowOpened(Owner.windowOne, generation: 0)
+                }
                 if start == .recovering {
                     _ = try await owner.dropped().get()
                     let verified = UUID()
@@ -209,7 +221,28 @@ extension HostAuthorityTests {
             // Refusal timing is the subject of the close tests above; only the reuse after it matters here.
             _ = await apply.value
             await close.value
-            // AppRootView keeps its WindowID across disappear/reappear: a new apply is not fenced.
+            // AppRootView keeps its WindowID across disappear/reappear: refused until it reopens.
+            #expect(await owner.beginApply(window: Owner.windowOne) == .failure(.windowClosed))
+            await owner.windowOpened(Owner.windowOne, generation: 0)
+            #expect(await owner.beginApply(window: Owner.windowOne) == .success(session))
+            #expect(await owner.authority.snapshot().lease?.windows == [Owner.windowOne])
+        }
+
+        @Test(.timeLimit(.minutes(1)), arguments: [HostAuthorityOwner.Checkpoint.applyStarting] + leasePoints)
+        func reopenDoesNotUnfenceEarlierApply(point: HostAuthorityOwner.Checkpoint) async throws {
+            let (owner, pause) = try await Self.pausable()
+            let session = try #require(await owner.session)
+            await pause.arm(point)
+            let apply = await pause.start(owner)
+            guard await pause.waitUntilReached(orJoin: apply) else { return }
+            let close = await Self.settle(pause, queues: point != .applyStarting) {
+                await owner.windowClosed(Owner.windowOne)
+            }
+            // The close's fence ran before it queued or returned; the reopen cannot unfence this apply.
+            await owner.windowOpened(Owner.windowOne, generation: 0)
+            await pause.resume()
+            #expect(await apply.value == .failure(.windowClosed))
+            await close.value
             #expect(await owner.beginApply(window: Owner.windowOne) == .success(session))
             #expect(await owner.authority.snapshot().lease?.windows == [Owner.windowOne])
         }
