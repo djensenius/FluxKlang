@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 protocol PendingStudioPatchPersisting: Sendable {
@@ -100,20 +101,10 @@ actor PendingStudioPatchStore: PendingStudioPatchPersisting {
         return .loaded(draft)
     }
 
-    // Completion is Foundation success, not fsync durability or current-file authority.
+    // Completion is API success, not fsync durability or current-file authority.
     func save(_ draft: StudioPatchDraft?) async -> PendingStudioPatchMutationOutcome {
         guard let draft else {
-            do {
-                // Existing limitation: removeItem may recursively delete a directory.
-                // File-type-safe deletion requires a separately reviewed change.
-                try FileManager.default.removeItem(at: fileURL)
-                return .deleteCompleted
-            } catch {
-                switch PendingStudioPatchIOError.classify(error) {
-                case .absent: return .alreadyAbsent
-                case .failure(let failure): return .mutationFailedEffectUnconfirmed(failure)
-                }
-            }
+            return removeEntry()
         }
         guard let data = try? JSONEncoder().encode(draft) else { return .encodingFailed }
         do {
@@ -127,6 +118,23 @@ actor PendingStudioPatchStore: PendingStudioPatchPersisting {
             return .writeCompleted
         } catch {
             return .mutationFailedEffectUnconfirmed(failure(error))
+        }
+    }
+
+    private func removeEntry() -> PendingStudioPatchMutationOutcome {
+        guard fileURL.isFileURL, !fileURL.path.contains("\0") else {
+            return .mutationFailedEffectUnconfirmed(.other)
+        }
+        return fileURL.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return .mutationFailedEffectUnconfirmed(.other) }
+            // One name, no application-level recursion; ancestors still resolve normally.
+            guard Darwin.unlinkat(AT_FDCWD, path, 0) == 0 else {
+                let code = errno
+                if code == ENOENT { return .alreadyAbsent }
+                return .mutationFailedEffectUnconfirmed(
+                    failure(NSError(domain: NSPOSIXErrorDomain, code: Int(code))))
+            }
+            return .deleteCompleted
         }
     }
 
