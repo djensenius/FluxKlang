@@ -351,3 +351,64 @@ extension PendingStudioPatchPersistenceTests {
         return .some(draft)
     }
 }
+
+// A fallback validate reply shows cards only for the draft its own validate reported.
+extension PendingStudioPatchPersistenceTests {
+    @Test func overtakenFallbackValidateShowsNoOtherDraftCards() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let built = try await fixture.build()
+            let gate = await fixture.forwarding.hold(.beforeSave(2))
+            let reply = fixture.start { await Self.fallbackReply(fixture) }
+            try #require(await gate.waitForEntry())
+            let refreshed = try #require(fixture.owner.pendingStudioDraft)
+            let newer = try await fixture.build(1)
+            try #require(newer != refreshed)
+            await gate.release()
+            let collected = await reply.value
+            #expect(!collected.failed)
+            #expect(collected.texts == ["There is no pending Studio draft."])
+            #expect(collected.cards.isEmpty, "an overtaken validate shows no other request's draft cards")
+            #expect(fixture.owner.pendingStudioDraft == newer)
+            #expect(await fixture.store.load() == .loaded(newer))
+            #expect(await fixture.forwarding.snapshots == [built, refreshed, newer, newer])
+        }
+    }
+
+    @Test func unovertakenFallbackValidateShowsItsDraftCards() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            _ = try await fixture.build()
+            let collected = await Self.fallbackReply(fixture)
+            let refreshed = try #require(fixture.owner.pendingStudioDraft)
+            #expect(!collected.failed)
+            #expect(collected.texts.count == 1)
+            #expect(collected.cards.count == 1)
+            let summary = refreshed.logicalRoutingSummary.map(\.value).joined(separator: "\n")
+            let own = AssistantCard.pendingDraft(id: refreshed.id, summary: summary, hasErrors: refreshed.hasErrors)
+            #expect(collected.cards.first?.contains(own) == true, "an unovertaken validate shows its own draft card")
+        }
+    }
+
+    private struct FallbackReply: Sendable {
+        var texts: [String] = []
+        var cards: [[AssistantCard]] = []
+        var failed = false
+    }
+
+    // Drains the whole stream before returning; stream events are not Equatable, so match them by pattern.
+    private static func fallbackReply(_ fixture: PendingPersistenceFixture) async -> FallbackReply {
+        let request = AssistantGenerationRequest(
+            question: "Show the pending draft", recentMessages: [], summary: "", context: fixture.context)
+        var reply = FallbackReply()
+        do {
+            for try await event in AssistantFallbackGenerator(coordinator: fixture.owner).stream(request) {
+                switch event {
+                case .text(let text): reply.texts.append(text)
+                case .cards(let cards): reply.cards.append(cards)
+                }
+            }
+        } catch {
+            reply.failed = true
+        }
+        return reply
+    }
+}

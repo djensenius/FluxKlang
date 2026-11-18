@@ -26,7 +26,7 @@ Paths below are relative to the repository; line references describe the baselin
 | --- | --- |
 | `Shared/Store/PendingStudioPatchStore.swift:3–34` | `PendingStudioPatchPersisting` returns optional load and Void save. Each initializer creates an independent actor. `load` and save/delete perform synchronous Foundation IO inside that actor; no cross-instance admission or publication control. Default path is `assistant-pending-studio-draft.json`. |
 | `Shared/Assistant/AssistantCore.swift:301–467` | MainActor `AssistantCoordinator` defaults to a new store. `load` publishes an awaited result without freshness/lifetime checking. Build and revalidation publish before awaiting persistence. Prepared commit checks cancellation/context/pending equality, then publishes and awaits save; cancellation may restore the old settled draft and save again. Discard clears memory then awaits deletion. The persistence loop can save repeatedly after reentrancy. |
-| `Shared/Assistant/AssistantChatController.swift:221,474` | Typed chat creation runs in a tracked task; natural-language preparation awaits interpretation before prepared commit. Response cancellation/identity guards are not migration admission. Post-await replies/cards also need stale-lifetime handling. |
+| `Shared/Assistant/AssistantChatController.swift:221,474` | Typed chat creation runs in a tracked task; natural-language preparation awaits interpretation before prepared commit. Response cancellation/identity guards are not migration admission. Post-await replies/cards also need stale-lifetime handling (typed-build cards: see P14b7 below). |
 | `Shared/Intents/FluxKlangIntents.swift:181–254` | Siri text preparation and typed draft requests call the same coordinator commit/build paths. `prepareContext` loads equipment, environments and connections, not the pending draft. Intents may arrive before root loading finishes. |
 | `Shared/Assistant/AssistantFallbackGenerator.swift:69` | Validation requests call coordinator revalidation and therefore persist. Provider/task cancellation is not a storage ownership boundary. |
 | `Shared/Views/App/AppModel+Assistant.swift:49–105` | Review awaits live-reference refresh then revalidates; accept refreshes, revalidates and checks current snapshots before merging. `EnvironmentStore.replaceStudio` (`Shared/Store/EnvironmentStore.swift:273`) schedules separate environment persistence, then pending discard is awaited. Prevent stale draft acceptance as well as file recreation; graph mutation is another effect, not merely a pending-file write. |
@@ -287,7 +287,33 @@ Real-store tests with the existing forwarding gates cover a build overtaken by a
 a validate overtaken by a commit of a same-id edited draft, a build overtaken by a newer
 build (which reports its own draft), and unovertaken build and validate results.
 
-Not covered: freshness of chat-controller or fallback cards (they still read
-`pendingStudioDraft` after the call), whether commit reports a failed save, exclusion
-across coordinators, store instances or processes, and migration activation. Equality is
-by value, so a draft replaced and then restored to an equal value is still reported.
+Not covered here: freshness of chat-controller or fallback cards (P14b6 left them reading
+`pendingStudioDraft` after the call; P14b7 below fixes that), whether commit reports a
+failed save, exclusion across coordinators, store instances or processes, and migration
+activation. Equality is by value, so a draft replaced and then restored to an equal value
+is still reported.
+
+## P14b7 / #811 — chat and fallback cards show only the reported draft
+
+Part of #122 and #48; both remain open. `AssistantChatController.createWiringDraft` and
+the validate path of `AssistantFallbackGenerator` already took their text from their own
+`.buildStudioDraft` or `.validatePendingStudioDraft` result. They now also take their
+cards from the draft carried in that `.pendingDraft` result, through a small private
+`reportedDraft(in:)` helper, instead of reading `coordinator.pendingStudioDraft` after the
+call. An overtaken result (`.pendingDraft(nil)`) or any other result gives no cards, so a
+reply that says "There is no pending Studio draft." no longer shows, or saves to history,
+the wiring and pending-draft cards of another request's draft. The text, coordinator,
+store, Siri donation, commit path and card UI are unchanged; the Review Draft button still
+opens whatever draft is current.
+
+Tests cover a typed wiring draft overtaken by a newer build while its save is held (the
+reply has no cards; pending and stored drafts are the newer build), a later unovertaken
+typed draft that shows its own card, a fallback validate overtaken by a newer build while
+its save is held (one text event, no cards event), and an unovertaken fallback validate
+that shows its own pending-draft card.
+
+Not covered: Copilot and Foundation Models generator cards (they compare
+`pendingStudioDraft` themselves), Review Draft opening the current draft rather than the
+card's draft, exclusion across coordinators, store instances or processes, and migration
+activation. As in P14b6, drafts are compared by value, so a draft replaced and then
+restored to an equal value still shows its cards.
