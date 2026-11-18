@@ -136,7 +136,7 @@ private final class RingWatch: Sendable {
         return .exhausted(producer && consumer ? .both : producer ? .producer : .consumer, after: outcome)
     }
 
-    /// Test thread: samples every 2 ms until both exit, nothing moved for `stallLimit`, or `capLimit` passed.
+    /// Test thread: samples every 2 ms until both exited by `now`, nothing moved for `stallLimit` or `capLimit` passed.
     private func monitor() -> RingOutcome {
         guard Self.waitFor(waitLimit, { arrived.load(ordering: .relaxed) == 2 }) else {
             return .notArrived(arrived: arrived.load(ordering: .relaxed))
@@ -145,9 +145,10 @@ private final class RingWatch: Sendable {
         let start = ContinuousClock.now
         var moved = (producer: start, consumer: start)
         var seen: (producer: UInt64, consumer: UInt64) = (0, 0)
-        while exited.load(ordering: .acquiring) < 2 {
+        while true {
             Thread.sleep(forTimeInterval: 0.002)
             let now = ContinuousClock.now
+            if exited.load(ordering: .acquiring) == 2 { return .completed }
             let counts = (produced.load(ordering: .relaxed), consumed.load(ordering: .relaxed))
             moved = (counts.0 == seen.0 ? moved.0 : now, counts.1 == seen.1 ? moved.1 : now)
             seen = counts
@@ -157,7 +158,6 @@ private final class RingWatch: Sendable {
                 : seen.consumer == total || moved.producer < moved.consumer ? .producer : .both
             return .stalled(side, producer: seen.producer, consumer: seen.consumer, elapsed: now - start)
         }
-        return .completed
     }
 }
 
