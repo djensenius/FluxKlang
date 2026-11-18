@@ -74,30 +74,119 @@ private struct Stamp: BitwiseCopyable, Sendable {
     var isConsistent: Bool { inverse == ~sequence && scaled == sequence &* 0x9E37_79B9_7F4A_7C15 }
 }
 
-private final class StressResults: Sendable {
+enum RingSide: Sendable, Equatable { case producer, consumer, both }
+
+/// How `RingWatch.run` ended. All but `.cleanupTimedOut` joined both workers, and `.notArrived` ran no body.
+indirect enum RingOutcome: Sendable, Equatable {
+    case completed
+    /// No counter moved for the stall limit; `side` is the unfinished side whose counter stopped first. `.both`: both
+    /// last moved in the same 2 ms sample; `producer - consumer` of 0 then points at the producer, 16 at the consumer.
+    case stalled(RingSide, producer: UInt64, consumer: UInt64, elapsed: Duration)
+    case capped(producer: UInt64, consumer: UInt64, elapsed: Duration)
+    /// `side` gave up after `RingWatch.retryLimit` consecutive failures; `after` is what the monitor saw.
+    case exhausted(RingSide, after: RingOutcome)
+    case notArrived(arrived: Int)
+    case cleanupTimedOut(after: RingOutcome, exited: Int)
+}
+
+/// Arrival barrier, start flag, relaxed per-side progress counters, cancel flag and results for one two-`Thread`
+/// `SPSCRing` stress run. The counters are relaxed so the harness adds no happens-before edge between the workers.
+private final class RingWatch: Sendable {
+    static let retryLimit = 200_000_000
+    let total: UInt64
+    /// `waitLimit` bounds the arrival wait and the cleanup join.
+    let stallLimit, capLimit, waitLimit: Duration
+    let arrived = Atomic<Int>(0)
+    let started = Atomic<Bool>(false)
+    let cancelled = Atomic<Bool>(false)
+    let exited = Atomic<Int>(0)
+    let produced = Atomic<UInt64>(0)
+    let consumed = Atomic<UInt64>(0)
     let sides = Mutex<(producer: SideResult, consumer: SideResult)>((SideResult(), SideResult()))
+
+    init(total: UInt64, stall: Duration = .seconds(10), cap: Duration = .seconds(45), wait: Duration = .seconds(3)) {
+        (self.total, stallLimit, capLimit, waitLimit) = (total, stall, cap, wait)
+    }
+
+    /// Test thread: sleeps in 2 ms steps until `condition` holds; `false` after `limit`.
+    static func waitFor(_ limit: Duration, _ condition: () -> Bool) -> Bool {
+        let deadline = ContinuousClock.now + limit
+        while !condition(), ContinuousClock.now < deadline { Thread.sleep(forTimeInterval: 0.002) }
+        return condition()
+    }
+
+    /// Starts one `Thread` per side, releases both once both arrived and watches their progress (`monitor`). It then
+    /// always cancels and joins for up to `waitLimit` before reading results. Workers capture the watch and the rings,
+    /// so a worker that is never joined touches only live, Sendable objects it strongly retains.
+    func run(producer: @escaping @Sendable (RingWatch) -> SideResult,
+             consumer: @escaping @Sendable (RingWatch) -> SideResult) -> RingOutcome {
+        for (isProducer, body) in [(true, producer), (false, consumer)] {
+            Thread {
+                defer { self.exited.add(1, ordering: .releasing) }
+                self.arrived.add(1, ordering: .relaxed)
+                while !self.started.load(ordering: .acquiring), !self.cancelled.load(ordering: .relaxed) {}
+                guard !self.cancelled.load(ordering: .relaxed) else { return }
+                let side = body(self)
+                self.sides.withLock { if isProducer { $0.producer = side } else { $0.consumer = side } }
+            }.start()
+        }
+        let outcome = monitor()
+        cancelled.store(true, ordering: .relaxed)
+        guard Self.waitFor(waitLimit, { exited.load(ordering: .acquiring) == 2 }) else {
+            return .cleanupTimedOut(after: outcome, exited: exited.load(ordering: .acquiring))
+        }
+        let (producer, consumer) = sides.withLock { ($0.producer.exhausted, $0.consumer.exhausted) }
+        guard producer || consumer else { return outcome }
+        return .exhausted(producer && consumer ? .both : producer ? .producer : .consumer, after: outcome)
+    }
+
+    /// Test thread: samples every 2 ms until both exit, nothing moved for `stallLimit`, or `capLimit` passed.
+    private func monitor() -> RingOutcome {
+        guard Self.waitFor(waitLimit, { arrived.load(ordering: .relaxed) == 2 }) else {
+            return .notArrived(arrived: arrived.load(ordering: .relaxed))
+        }
+        started.store(true, ordering: .releasing)
+        let start = ContinuousClock.now
+        var moved = (producer: start, consumer: start)
+        var seen: (producer: UInt64, consumer: UInt64) = (0, 0)
+        while exited.load(ordering: .acquiring) < 2 {
+            Thread.sleep(forTimeInterval: 0.002)
+            let now = ContinuousClock.now
+            let counts = (produced.load(ordering: .relaxed), consumed.load(ordering: .relaxed))
+            moved = (counts.0 == seen.0 ? moved.0 : now, counts.1 == seen.1 ? moved.1 : now)
+            seen = counts
+            if now - start >= capLimit { return .capped(producer: seen.0, consumer: seen.1, elapsed: now - start) }
+            guard now - max(moved.producer, moved.consumer) >= stallLimit else { continue }
+            let side: RingSide = seen.producer == total || moved.consumer < moved.producer ? .consumer
+                : seen.consumer == total || moved.producer < moved.consumer ? .producer : .both
+            return .stalled(side, producer: seen.producer, consumer: seen.consumer, elapsed: now - start)
+        }
+        return .completed
+    }
 }
 
 private func mix(_ value: UInt64) -> UInt64 { (value &+ 1) &* 0x9E37_79B9_7F4A_7C15 }
 
-/// Bounded spin retry. `sched_yield` adds no happens-before edge under TSan, whereas Swift concurrency's runtime
-/// annotations do, which would hide a missing release or acquire in the ring.
-private func retry(_ failures: inout Int) -> Bool {
+/// Bounded spin retry: `false` once `watch` is cancelled or after `retryLimit` consecutive failures (worker loops also
+/// check `cancelled` whenever their count is a multiple of 1,024). `sched_yield` adds no happens-before edge under
+/// TSan, whereas Swift concurrency's runtime annotations do, which would hide a missing release or acquire in the ring.
+private func retry(_ failures: inout Int, _ watch: RingWatch) -> Bool {
     failures += 1
     if failures & 1_023 == 0 { sched_yield() }
-    return failures < 200_000_000
+    return failures < RingWatch.retryLimit && !watch.cancelled.load(ordering: .relaxed)
 }
 
-private func produce(_ ring: SPSCRing<Stamp>, total: UInt64) -> SideResult {
+private func produce(_ ring: SPSCRing<Stamp>, _ watch: RingWatch) -> SideResult {
     var side = SideResult()
     var failures = 0
-    while side.count < total {
+    while side.count < watch.total, side.count & 1_023 != 0 || !watch.cancelled.load(ordering: .relaxed) {
         if ring.tryPush(Stamp(side.count)) == .ok {
             side.checksum &+= mix(side.count)
             side.count += 1
+            watch.produced.store(side.count, ordering: .relaxed)
             failures = 0
-        } else if !retry(&failures) {
-            side.exhausted = true
+        } else if !retry(&failures, watch) {
+            side.exhausted = failures >= RingWatch.retryLimit
             break
         }
     }
@@ -105,7 +194,7 @@ private func produce(_ ring: SPSCRing<Stamp>, total: UInt64) -> SideResult {
 }
 
 /// Alternates `tryPop` and `popAll` and checks exact FIFO order and element integrity.
-private func consume(_ ring: SPSCRing<Stamp>, total: UInt64) -> SideResult {
+private func consume(_ ring: SPSCRing<Stamp>, _ watch: RingWatch) -> SideResult {
     var side = SideResult()
     var failures = 0
     let receive = { (value: Stamp) in
@@ -113,13 +202,14 @@ private func consume(_ ring: SPSCRing<Stamp>, total: UInt64) -> SideResult {
         if value.sequence != side.count { side.mismatches += 1 }
         side.checksum &+= mix(value.sequence)
         side.count += 1
+        watch.consumed.store(side.count, ordering: .relaxed)
         failures = 0
     }
-    while side.count < total {
+    while side.count < watch.total, side.count & 1_023 != 0 || !watch.cancelled.load(ordering: .relaxed) {
         if side.count % 2 == 0, let value = ring.tryPop() {
             receive(value)
-        } else if ring.popAll(limit: 7, receive) == 0, !retry(&failures) {
-            side.exhausted = true
+        } else if ring.popAll(limit: 7, receive) == 0, !retry(&failures, watch) {
+            side.exhausted = failures >= RingWatch.retryLimit
             break
         }
     }
@@ -366,36 +456,44 @@ extension RealtimeHandoffTests {
         }
     }
 
-    struct RingStress {
+    @Suite(.serialized) struct RingStress {
         /// Two OS threads rather than a `TaskGroup`: TSan cannot see a missing release or acquire between tasks.
         @Test(.timeLimit(.minutes(1)))
         func stressExactFIFOWithChecksum() throws {
-            let total: UInt64 = 1_000_000
-            let subject = try SPSCRing<Stamp>(policy: Root.policy(capacity: 16))
-            let results = StressResults()
-            let done = DispatchSemaphore(value: 0)
-            Thread {
-                let side = produce(subject, total: total)
-                results.sides.withLock { $0.producer = side }
-                done.signal()
-            }.start()
-            Thread {
-                let side = consume(subject, total: total)
-                results.sides.withLock { $0.consumer = side }
-                done.signal()
-            }.start()
-            // `.timeLimit` cannot interrupt a semaphore wait, so bound both waits within its minute.
-            for _ in 0..<2 where done.wait(timeout: .now() + .seconds(25)) == .timedOut {
-                Issue.record("stress thread did not finish")
-                // Safe to return: the threads keep running but touch only Sendable objects they strongly retain.
-                return
-            }
-            let (producer, consumer) = results.sides.withLock { $0 }
+            let (total, subject) = try (UInt64(1_000_000), SPSCRing<Stamp>(policy: Root.policy(capacity: 16)))
+            // `.timeLimit` cannot interrupt the test thread, so arrival, the 45 s cap and the join fit in its minute.
+            let watch = RingWatch(total: total)
+            let outcome = watch.run(producer: { produce(subject, $0) }, consumer: { consume(subject, $0) })
+            #expect(outcome == .completed, "ring stress did not complete: \(outcome)")
+            try #require(watch.exited.load(ordering: .acquiring) == 2, "workers not joined; results skipped")
+            let (producer, consumer) = watch.sides.withLock { $0 }
             #expect(!producer.exhausted && !consumer.exhausted)
             #expect(producer.count == total && consumer.count == total)
             #expect(consumer.mismatches == 0 && consumer.torn == 0)
             #expect(consumer.checksum == producer.checksum)
             #expect(subject.tryPop() == nil)
+        }
+
+        /// The producer fills a ring nobody pops while the consumer spins on another, empty ring.
+        @Test func ringWatchReportsStalledConsumerAndJoins() throws {
+            let (full, empty) = try (SPSCRing<Stamp>(policy: Root.policy(capacity: 16)),
+                                     SPSCRing<Stamp>(policy: Root.policy(capacity: 16)))
+            let watch = RingWatch(total: 1_000, stall: .seconds(1))
+            let outcome = watch.run(producer: { produce(full, $0) }, consumer: { consume(empty, $0) })
+            guard case .stalled(.consumer, _, 0, _) = outcome else { Issue.record("\(outcome)"); return }
+            let (pushed, popped) = watch.sides.withLock { $0 }
+            #expect(pushed.count == 16 && popped.count == 0 && !pushed.exhausted && !popped.exhausted)
+        }
+
+        /// The cap cancels two workers that spin without progress; both must exit within `waitLimit`.
+        @Test func ringWatchCancelsSpinningWorkers() throws {
+            let (full, empty) = try (SPSCRing<Stamp>(policy: Root.policy(capacity: 16)),
+                                     SPSCRing<Stamp>(policy: Root.policy(capacity: 16)))
+            let watch = RingWatch(total: 1_000, stall: .seconds(30), cap: .seconds(1), wait: .seconds(2))
+            let outcome = watch.run(producer: { produce(full, $0) }, consumer: { consume(empty, $0) })
+            guard case .capped(_, 0, _) = outcome else { Issue.record("\(outcome)"); return }
+            let (pushed, popped) = watch.sides.withLock { $0 }
+            #expect(pushed.count == 16 && popped.count == 0 && !pushed.exhausted && !popped.exhausted)
         }
     }
 }
