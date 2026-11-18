@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 #if canImport(FluxKlangMac)
 @testable import FluxKlangMac
@@ -6,6 +7,7 @@ import Testing
 #endif
 
 private typealias Root = RealtimeHandoffTests
+private typealias LatchScan = RealtimeHandoffTests.FaultRaiseInventory
 
 extension RealtimeHandoffTests {
     /// #190 FLP4: `SysExAssembler` raises only through the one fault chain it mints, holding the token per `accept`.
@@ -212,5 +214,250 @@ extension RealtimeHandoffTests {
             #expect(fixture.takeFaults().isEmpty && fixture.faults.unknownScopeFaults == 0)
             Self.expectTokenReturned(fixture)
         }
+    }
+}
+
+/// A declaration body in `FaultLatchConstruction`'s scan: UTF-16 offsets from its `{` to its `}`.
+private struct LatchScope {
+    let name: String
+    let isFunction: Bool
+    let body: Range<Int>
+}
+
+/// K-190c's scan (here for `+FaultChains.swift`'s line cap) and its self-tests.
+extension RealtimeHandoffTests.FaultLatchConstruction {
+    /// `sites(of:in:path:within:)` over each `.swift` file under `root` that names one of `words` (every file when
+    /// empty), keyed from `prefix`.
+    static func sites(of patterns: [LatchPattern], under root: URL, prefix: String = "", naming words: [String] = [],
+                      within: String? = nil) throws -> [String: Int] {
+        let all = FileManager.default.enumerator(atPath: root.path)?.allObjects as? [String] ?? []
+        var found: [String: Int] = [:]
+        for path in all.filter({ $0.hasSuffix(".swift") }).sorted() {
+            let text = try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
+            guard words.isEmpty || words.contains(where: { text.contains($0) }) else { continue }
+            found.merge(try Self.sites(of: patterns, in: text, path: prefix + path, within: within)) { $0 + $1 }
+        }
+        return found
+    }
+
+    /// Each match in `text`, keyed `path Type.func kind` (`<none>` when nothing encloses it); a `type` key ends with
+    /// its line up to the match. With `within`, only matches inside a type or extension of that name count. The
+    /// name in a `func name(` declaration is not a call, even when `func` ends the line before.
+    static func sites(of patterns: [LatchPattern], in text: String, path: String, within: String? = nil) throws
+        -> [String: Int] {
+        let code = LatchScan.sanitized(text)
+        let source = code as NSString
+        let matches = try patterns.flatMap { pattern in
+            try NSRegularExpression(pattern: pattern.regex).matches(in: code, range: NSRange(0..<source.length))
+                .map { (pattern.kind, $0.range) }
+        }
+        guard !matches.isEmpty else { return [:] }
+        let scopes = try Self.scopes(in: code)
+        var found: [String: Int] = [:]
+        for (kind, range) in matches {
+            // The whole prefix, as `FaultRaiseInventory.inventory` does, so `func` on an earlier line still counts.
+            let before = source.substring(to: range.location)
+            if before.range(of: #"\bfunc\s+$"#, options: .regularExpression) != nil { continue }
+            let start = source.lineRange(for: NSRange(location: range.location, length: 0)).location
+            let enclosing = scopes.filter { $0.body.contains(range.location) }
+            if let within, !enclosing.contains(where: { !$0.isFunction && $0.name == within }) { continue }
+            let type = enclosing.last { !$0.isFunction }?.name ?? "<none>"
+            let function = enclosing.last { $0.isFunction }?.name ?? "<none>"
+            let line = source.substring(with: NSRange(start..<NSMaxRange(range)))
+                .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            let quote = kind == "type" ? ": " + line : ""
+            found["\(path) \(type).\(function) \(kind)\(quote)", default: 0] += 1
+        }
+        return found
+    }
+
+    /// K-190a's scopes: each declaration with a body, in source order, so the last enclosing one is innermost.
+    fileprivate static func scopes(in code: String) throws -> [LatchScope] {
+        let units = Array(code.utf16)
+        let matches = try NSRegularExpression(pattern: LatchScan.declaration)
+            .matches(in: code, range: NSRange(0..<units.count))
+        var scopes: [LatchScope] = []
+        for (index, match) in matches.enumerated() {
+            let limit = index + 1 < matches.count ? matches[index + 1].range.location : units.count
+            guard let body = LatchScan.body(units, from: NSMaxRange(match.range), before: limit) else { continue }
+            let group = (1...3).first { match.range(at: $0).location != NSNotFound } ?? 3
+            let name = (code as NSString).substring(with: match.range(at: group))
+            scopes.append(LatchScope(name: name, isFunction: group < 3, body: body))
+        }
+        return scopes
+    }
+
+    /// What `found` adds to or misses from `expected`, for a failure message.
+    static func difference(_ found: [String: Int], _ expected: [String: Int]) -> Comment {
+        let added = found.filter { $0.value > expected[$0.key, default: 0] }.map { "\($0.key) x\($0.value)" }
+        let missing = expected.filter { $0.value > found[$0.key, default: 0] }
+            .map { "\($0.key) x\(found[$0.key, default: 0])" }
+        return Comment(rawValue: "added: \(added.sorted()); missing: \(missing.sorted())")
+    }
+
+    @Test func latchScanFlagsConstructionsAndAuthorities() throws {
+        let source = #"""
+            struct Lane {
+                init(scopes: [FaultScope]) throws {
+                    _ = try FaultLatch(scopes: scopes)
+                    _ = try FaultLatch
+                        .init(scopes: scopes, epochLimit: 4)
+                    let spare: FaultLatch = try .init(scopes: scopes)
+                    let kind = FaultLatch.self
+                    let made = try FaultLatch.fresh(scopes)
+                    let makeLatch = FaultLatch.init
+                    let makeSplit = FaultLatch
+                        .init
+                }
+            }
+            typealias Spare = FaultLatch
+            typealias SplitSpare =
+                FluxKlang.FaultLatch
+            typealias Kind = FaultLatch.Type
+            extension FaultLatch {
+                static func spare(_ scopes: [FaultScope]) throws -> FaultLatch { try Self(scopes: scopes) }
+                static func copy(_ scopes: [FaultScope]) throws -> FaultLatch { try .init(scopes: scopes) }
+                static func twin(_ scopes: [FaultScope]) throws -> Self { try Self.init(scopes: scopes) }
+                static func fresh(_ scopes: [FaultScope]) throws -> Self { try self.init(scopes: scopes) }
+                static func makers() -> [([FaultScope]) throws -> Self] { [Self.init, self.init, .init] }
+                static func initial() -> Int { Self.initialCount + self.initialOffset + .initialValue }
+            }
+            """#
+        // The split `FaultLatch\n.init(scopes:` counts as both a spelled-out and an inferred construction; an
+        // unapplied `FaultLatch.init`, `Self.init`, `self.init` or `.init` counts as a construction too, and so do the
+        // metatype and a `typealias` of `FaultLatch` itself (`FaultLatch.Type` counts once, as the metatype).
+        #expect(try Self.sites(of: Self.constructions, in: source, path: "L.swift") == [
+            "L.swift Lane.init latch": 4, "L.swift Lane.init inferred": 2, "L.swift Lane.init metatype": 1,
+            "L.swift Lane.init factory": 1, "L.swift FaultLatch.copy inferred": 1, "L.swift <none>.<none> alias": 2,
+            "L.swift <none>.<none> metatype": 1
+        ])
+        #expect(try Self.sites(of: Self.selfConstructions, in: source, path: "L.swift", within: "FaultLatch") == [
+            "L.swift FaultLatch.spare self": 1, "L.swift FaultLatch.copy init": 1, "L.swift FaultLatch.twin self": 1,
+            "L.swift FaultLatch.fresh selfInit": 1, "L.swift FaultLatch.makers self": 1,
+            "L.swift FaultLatch.makers selfInit": 1, "L.swift FaultLatch.makers init": 1
+        ])
+        let audit = "let authority = try FaultChainAuthority\n    .init(scopes: scopes, chainBudget: 2)\n"
+            + "func make() throws -> FaultChainAuthority { try .init(scopes: scopes) }\n"
+            + "let makeAuthority = FaultChainAuthority.init\n"
+            // Copilot's two forms on PR #825: a metatype and an alias, each then called without naming the type.
+            + "let authorityType = FaultChainAuthority.self; try authorityType(scopes: [], chainBudget: 1)\n"
+            + "typealias Authority = FaultChainAuthority; try Authority(scopes: [], chainBudget: 1)\n"
+            + "typealias Split =\n    Kernel.FaultChainAuthority\nlet kind: FaultChainAuthority.Type? = nil\n"
+        #expect(try Self.sites(of: Self.authorities, in: audit, path: "A.swift") == [
+            "A.swift <none>.<none> authority": 2, "A.swift <none>.<none> inferred": 1, "A.swift <none>.<none> alias": 2,
+            "A.swift <none>.<none> metatype": 2, "A.swift <none>.make inferred": 1
+        ])
+    }
+
+    @Test func latchScanFlagsEveryWayToHoldALatch() throws {
+        let source = #"""
+            final class FaultChainAuthority {
+                let latch: FaultLatch
+                var exposedLatch: FaultLatch { latch }
+                func borrow() -> FaultLatch { latch }
+                private let latchRef: Unmanaged<FaultLatch>
+                var spares: [FaultLatch?] = []
+                func visit(_ body: (FaultLatch) -> Void) { body(latch) }
+                func rawRaise() -> (FaultScope, FaultKind, Int64) -> KernelStatus { self.latch.raise }
+                func hook() -> () -> Bool { { [latch] in latch.isLatched(scope) } }
+                func path() -> AnyKeyPath { \Self.`latch` }
+                func describe() -> String { "latch.raise" } // self.latch
+            }
+            typealias Latch = FaultLatch
+            let held = holder as! FaultLatch
+            func adopt(_ latch: inout FaultLatch) {}
+            """#
+        let owner = "H.swift FaultChainAuthority.<none> type: "
+        #expect(try Self.sites(of: Self.holders, in: source, path: "H.swift") == [
+            owner + "let latch: FaultLatch": 1, owner + "var exposedLatch: FaultLatch": 1,
+            owner + "func borrow() -> FaultLatch": 1, owner + "private let latchRef: Unmanaged<FaultLatch": 1,
+            owner + "var spares: [FaultLatch": 1, owner + "func visit(_ body: (FaultLatch": 1,
+            "H.swift <none>.<none> type: typealias Latch = FaultLatch": 1,
+            "H.swift <none>.<none> type: let held = holder as! FaultLatch": 1,
+            "H.swift <none>.<none> type: func adopt(_ latch: inout FaultLatch": 1
+        ])
+        // Escapes that never name the type: a bare, `self.`, captured or key-path `latch` (not `adopt`'s, outside).
+        let uses = "H.swift FaultChainAuthority."
+        #expect(try Self.sites(of: Self.latchUses, in: source, path: "H.swift", within: "FaultChainAuthority") == [
+            uses + "<none> use": 2, uses + "borrow use": 1, uses + "visit use": 1, uses + "rawRaise use": 1,
+            uses + "hook use": 2, uses + "path use": 1
+        ])
+    }
+
+    @Test func latchScanFlagsMintsOutsideTheirSites() throws {
+        let source = #"""
+            extension FanInHandoff {
+                func claimProducer() -> Bool { faults.mintChain() != nil }
+                static func buildLanes(_ policy: HandoffPolicy) throws -> [Lane] {
+                    try makeLanes(policy, count: 2, faults: faults, scope: scope)
+                }
+                func releaseProducer() {
+                    _ = FanInClaimChain.init(minting: faults)
+                    _ = faults
+                        .mintChains (count: 2)
+                    let ring = ReservedRingChain(authority: faults, chain: chain)
+                    let makeChain = ReservedRingChain.init
+                    let makeSplit = ReservedRingChain
+                        .init
+                    let ringType = ReservedRingChain.self
+                    let ringKind: ReservedRingChain.Type? = nil
+                }
+            }
+            typealias Ring = ReservedRingChain
+            typealias SplitRing =
+                ReservedRingChain
+            """#
+        #expect(try Self.sites(of: Self.mints, in: source, path: "F.swift") == [
+            "F.swift FanInHandoff.claimProducer mintChain": 1, "F.swift FanInHandoff.buildLanes makeLanes": 1,
+            "F.swift FanInHandoff.releaseProducer claimChain": 1, "F.swift FanInHandoff.releaseProducer mintChains": 1,
+            "F.swift FanInHandoff.releaseProducer ringChain": 3, "F.swift FanInHandoff.releaseProducer metatype": 2,
+            "F.swift <none>.<none> alias": 2
+        ])
+    }
+
+    @Test func latchScanIgnoresCommentsStringsAndLookalikes() throws {
+        let source = #"""
+            // let latch = try FaultLatch(scopes: scopes); faults.mintChain()
+            /* outer /* nested FaultLatch.init(scopes:) */ -> FaultLatch? */
+            /// var exposed: FaultLatch { latch }; makeLanes(policy); FanInClaimChain(minting: faults)
+            final class FaultChainAuthority {
+                enum PreparationError: Error { case latch(FaultLatch.PreparationError) }
+                convenience init(scopes: [FaultScope]) throws { try self.init(scopes: scopes, chainBudget: 1) }
+                func mintChain() -> FaultChain? { nil }
+                func mintChains(count: Int) -> [FaultChain]? { nil }
+                static func makeLanes(_ count: Int) {}
+                func
+                    mintChain(scope: FaultScope) -> FaultChain? { nil }
+                func
+                    mintChains(scopes: [FaultScope]) -> [FaultChain]? { nil }
+                static func
+                    makeLanes(_ policy: HandoffPolicy) {}
+                func describe() -> String {
+                    let plain = "FaultLatch(scopes: s) Self(scopes: s) .init(scopes: s) \" mintChain() [FaultLatch]"
+                    let raw = #"Unmanaged<FaultLatch> latch "# + "\(note("FaultChainAuthority(scopes:"))"
+                    return plain + raw + """
+                        FaultLatch.self ReservedRingChain(authority: a, chain: c) "" makeLanes( { latch }
+                        """
+                }
+                func unlatch() -> Bool { isLatched(latches: latchRef) }
+            }
+            struct FaultLatchNote { let note = MyFaultLatch(); let other = FaultLatchy() }
+            let state = (FaultLatch.initialState, FaultLatchInit(), FaultChainAuthority.initialBudget)
+            let ring = (ReservedRingChain.initialCapacity, ReservedRingChainInit())
+            typealias Failure = FaultLatch.PreparationError; typealias Refusal = FaultChainAuthority
+                .PreparationError; typealias Notes = (FaultLatchNote, FaultChainAuthorityNote, ReservedRingChainNote)
+            typealias Slot = ReservedRingChain.Slot; typealias Hook = (FaultChainAuthority) -> Void
+            let probes = (FaultLatch.selfTest, FaultChainAuthority.Types, ReservedRingChain.selfCheck)
+            func remakeLanes() { faultLatch(); premintChain(); mintChainCount(); ReservedRingChainNote() }
+            extension FaultLatchNote { func make() -> Self { Self() } static func spare() -> Self { .init() } }
+            """#
+        for patterns in [Self.constructions, Self.holders, Self.mints, Self.authorities] {
+            #expect(try Self.sites(of: patterns, in: source, path: "G.swift").isEmpty)
+        }
+        #expect(try Self.sites(of: Self.selfConstructions, in: source, path: "G.swift", within: "FaultLatch").isEmpty)
+        // Only the `PreparationError.latch` case is a `latch` token: not strings, `unlatch`, `latches` or `latchRef`.
+        #expect(try Self.sites(of: Self.latchUses, in: source, path: "G.swift", within: "FaultChainAuthority") == [
+            "G.swift PreparationError.<none> use": 1
+        ])
     }
 }

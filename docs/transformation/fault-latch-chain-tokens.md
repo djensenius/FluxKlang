@@ -278,7 +278,18 @@ mint left, or its chain's token was lost) has no counted path and must fall back
   missed; an unqualified `raise(` inside an `extension FaultLatch` is missed
   (no leading dot); a comment before the `&` (`raise(/* x */ &token`, or a
   `// c` line before `&token`) is a false positive that fails closed, and the
-  fix is to put the `&` first.
+  fix is to put the `&` first. A third rule, `fault_latch_construction`
+  (K-190c), rejects spelled-out `FaultLatch(` and `FaultLatch.init`, called or
+  unapplied, and the metatype (`FaultLatch.self`, `.Type`), also split over
+  lines, outside `FaultLatch+Chains.swift`. So a latch not built by an authority
+  needs a visible `.swiftlint.yml` edit or
+  suppression; root `FluxKlangTests/` disables it. The self-check asserts the
+  real file is clean only at its own path, and lints fixture positives,
+  negatives and a lookalike path. The rule misses an alias, a factory and
+  backticks.
+  K-190c's source tests (section 8) pin the construction, the latch's
+  non-escape and the mint sites in the kernel, and keep the other production
+  trees free of latch constructions and holders.
 - Unsafe escapes of a token (`nonisolated(unsafe)`, `@unchecked Sendable`
   boxes, unsafe pointers) and builds that turn off exclusivity checking are out
   of the model.
@@ -315,7 +326,7 @@ token back.
 | S2 `claimProducer` | **Migrated (FLP6)**: `FanInHandoff.init` takes a separate claim `FaultChainAuthority` (`claimFaults`) for `producerSlotsScope` and mints one chain per handoff after every other check that can throw, before the identity is reserved (`.chainBudgetExhausted`). The lanes keep `faults` for S4. The claim authority is separate because its sticky contended fault latches every scope and would latch `criticalScope` on `faults`. Unlike the common steps above, only a refused claim takes the token: it raises `.producerSlotsExhausted` once and puts the token back. A successful claim never touches it. A failed take (refused claims overlapping, legal because any thread may claim) calls `raiseContended()` and counts `contendedClaimCount`. The claim still returns `nil` and still counts in `refusedClaimCount`. K <= `chainBudget` per claim authority by construction; per-handoff happens-before edge between refused claims via the slot. Tests: `RealtimeHandoffTests+FanInClaimChains.swift`, `FanInClaimChainingStress` | Real callers of `claimProducer`. Every producer context shares the handoff's one claim chain, so no per-context minting is needed; the refusal counter's own bound (C) is unchanged |
 | S3 `retire` via `beginCycle` | **Migrated (FLP5)**: `DeferredReleaseQueue.init` takes a `FaultChainAuthority` and mints one chain per queue, last, after the policy checks and the ring (`.chainBudgetExhausted`); `retire` takes the token first, holds it across the push and the `.retireBacklog` raise and puts it back on every path; a failed take pushes nothing, calls `raiseContended()`, counts `contendedRetireCount` and returns `.refused(.notOwner)` with the +1 left with the caller. `RetiringExchange` and `PreparedPlanSlot` treat it as a refused retire (stall, retry next cycle; fail closed at the cost of a stall). K <= `chainBudget` per authority by construction; per-queue happens-before edge via the slot. Tests: `RealtimeHandoffTests+RetireChains.swift`, `RetireChainingStress` | A real render caller (FLP2: one chain per render block and generation). Every exchange or slot sharing a queue shares its one chain, so the token is held per `retire`, not per cycle |
 | S4 `ReservedCapacityRing.refuse` | **Migrated (FLP7b)**: `FanInHandoff.init` mints one chain per lane from `faults` in one all-or-nothing batch (`mintChains(count:)`, `.laneChainBudgetExhausted`) after the pure checks, the lane policy check (`validateLanes`) and the claim chain, before the identity. Each ring holds its chain (`ReservedRingChain`); the standalone ring `init` takes a chain (`.foreignChain` if another authority minted it) and a convenience `init` mints its own (`.chainBudgetExhausted`). Only a critical refusal takes the token: it raises `.criticalExhausted` and puts the token back; a general refusal and every successful push never touch it. A failed take (refusals overlapping on one lane, which the single-producer contract forbids: the old holder must stop pushing before release, and the chain token protects the fault raise, not the whole push, so contention is fail-safe handling of that violation, not legal holder overlap) calls `raiseContended()`, counts `contendedCount`, still returns `.refused(.criticalExhausted)` and still counts in `refusedCriticalCount`. `KernelCycle`, `KernelCycleParts` and `KernelAckRequests` now hold the `FaultChainAuthority`. Per-lane happens-before edge via the slot, between refusals of one holder and between successive lane holders on any thread: the chain belongs to the lane, only `FanInHandoff.init` mints it, and claims, releases and drains never mint or replace it (K-190b, section 3). By construction (FLP7b), reference model only; guard tests T14/T15. Tests: `RealtimeHandoffTests+LaneChains.swift`, `LaneChainingStress`, `FanInClaimChainingStress` | Real lane holders and a render caller. The slot edge orders raises across holders but does not replace the "stop pushing before release" caller contract, which stays: it protects the ring's single-producer `pushed`, not the raise contract (section 6). K <= `chainBudget` holds only while every handoff's lanes fit the budget (R2) |
-| Global K over one latch, incl. unknown scopes | **Discharged by construction for raises through one authority**: K <= `chainBudget` <= 2^16 | Holds for the app only once every raiser on that latch goes through the authority, and each site's chains fit its budget |
+| Global K over one latch, incl. unknown scopes | **Discharged per latch lifetime, reference model (K-190c)**: K <= `chainBudget` <= 2^16 < 2^39 for every latch production code can construct. Only `FaultChainAuthority.init` builds one, it never leaves the authority except as `FaultObservation`'s raise-less owner, and chains are minted only at the keyed control-side sites, so every raise on it goes through the authority with a token ([raise sites](fault-latch-raise-sites.md) section 9.1, T1 to T3; lint rule `fault_latch_construction`) | Real callers, and each site's chains fitting its authority's budget (R2). Production builds no `FaultChainAuthority` yet (T4); each real-caller slice adds its construction to T4's set deliberately |
 | C counters | **Bounded by construction at the reference-model level (K-RC1, K-RC2)**: every `FanInRefusalCounter` `bump` and every counter-writing API (`claimProducer`, `tryPush`, `releaseProducer`, `ProducerAdmission.push`, `KernelAdmissionRefusals.record`) borrows an exclusive `RefusalCallerToken`, so each counter's chains are prepared `RefusalCaller` roles and K is at most that type's process lifetime budget, 2^38 − 1 < 2^39 ([refusal caller ownership](refusal-caller-ownership.md)). Not a `raise` and not reported by `FaultLatch`. Tests: `RealtimeHandoffTests+RefusalCaller.swift`, `RealtimeHandoffTests+RefusalCallerTransfer.swift` | Real callers and their native/RT qualification (#190, #64): no real caller holds a role yet |
 | A real caller per item | Not discharged | Each site slice, with FLP2's platform evidence |
 | A check that fails if the bound or edge breaks | Reference model: tests plus mutation checks (section 8) | The same on each real caller |
@@ -381,5 +392,30 @@ K-190b adds the guard tests for section 3's successive lane holders:
   the slot order the holders. Every turn's refusal is counted (H×R records), none
   contends and there is no contended fault. The kernel mirror's TSan filter
   (`Stress`) includes it.
+
+K-190c adds `FaultLatchConstruction` (`RealtimeHandoffTests+FaultChains.swift`;
+its scan and self-tests are in `RealtimeHandoffTests+SysExChains.swift`). These
+are source scans over K-190a's sanitizer, not behaviour tests:
+- T1 `faultLatchIsBuiltOnlyByTheAuthorityInit`: counting spelled-out (an
+  unapplied `FaultLatch.init` included), inferred, metatype, `typealias` and
+  factory forms anywhere in the kernel, and `Self(`, `Self.init`, `.init` or
+  `self.init` (called or not) inside `FaultLatch`, the only latch construction
+  is in `FaultChainAuthority.init`.
+- T2 `faultLatchIsHeldOnlyByItsOwners`: the only `FaultLatch`-typed declarations
+  are the private latch, `FaultObservation`'s owner and identity check, and the
+  two test-seam owners; every `latch` token inside `FaultChainAuthority` is one
+  of its 11 known uses, so an escape that never names the type also fails.
+- T3 `chainsAreMintedOnlyAtTheKeyedSites`: chains are minted only at the keyed
+  sites, with `makeLanes` and the claim chain only in `FanInHandoff.init`, and
+  no `ReservedRingChain` metatype or `typealias` appears. This pins K-190b's
+  premise in source as well as in behaviour.
+- T4 `productionBuildsNoFaultChainAuthority`: production builds no authority yet
+  (an unapplied `FaultChainAuthority.init`, its metatype or a `typealias` of it
+  counts as a build), and outside the kernel no T1 construction or T2 holder
+  appears at all.
+
+Four self-tests cover red and green synthetic sources. The Debug kernel-mirror
+job requires T1 to T4 to pass. Details and blind spots are in
+[raise sites](fault-latch-raise-sites.md) section 9.1.
 
 They are tests of the reference model, not a proof: section 3 is the argument.
