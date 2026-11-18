@@ -48,6 +48,12 @@ enum MIDICapabilityDiscoveryRefusal: Error, Equatable, Sendable {
     /// A Reply to Profile Inquiry from the peer, arriving on `transport` at this address, that lists one id more than
     /// once over its enabled and disabled lists together.
     case duplicateProfileInReply(device: SysExDeviceID, transport: MIDICapabilityCITransport)
+    /// A Reply to Property Exchange Capabilities from the peer at an address (device id) other than the function
+    /// block or whole port (0x7F), where the Inquiry is always addressed.
+    case propertyCapabilitiesNotAtFunctionBlock(device: SysExDeviceID)
+    /// A Reply to Property Exchange Capabilities from the peer's MUID whose request count or version differs from
+    /// the one already collected.
+    case conflictingPropertyCapabilities(MIDICIMUID)
 }
 
 /// Why `collect` kept nothing from a message.
@@ -59,7 +65,8 @@ enum MIDICapabilityDiscoveryIgnoreReason: Equatable, Sendable {
     case otherDestination(MIDICIMUID)
     /// A MIDI-CI message from a MUID other than the peer's (the source of the first Discovery Reply).
     case otherMUID(MIDICIMUID)
-    /// A Reply to Profile Inquiry before any Discovery Reply: there is no peer yet to attribute it to.
+    /// A Reply to Profile Inquiry or to Property Exchange Capabilities before any Discovery Reply: there is no peer
+    /// yet to attribute it to.
     case beforeDiscoveryReply
 }
 
@@ -76,10 +83,10 @@ enum MIDICapabilityDiscoveryOutcome: Equatable, Sendable {
 /// The production adapter from decoded UMP Stream and MIDI-CI messages to `MIDICapabilityFacts`. A pure value: it
 /// never talks to a device, keeps no clock and holds at most one Endpoint Info, one Device Identity,
 /// `MIDICapabilityLimits.maximumFunctionBlocks` blocks, one Discovery Reply, one Profile Reply per address (one at
-/// the function block, and at most one per other 7-bit device id on each of the 17 transports) and
-/// `MIDICapabilityLimits.maximumProfiles` profile ids over all of them. The caller
-/// feeds it the messages of one connection (the UMP endpoint and the MIDI-CI exchange on it) in arrival order;
-/// decoding and timeouts stay with the caller.
+/// the function block, and at most one per other 7-bit device id on each of the 17 transports),
+/// `MIDICapabilityLimits.maximumProfiles` profile ids over all of them and one Property Exchange Capabilities
+/// Reply. The caller feeds it the messages of one connection (the UMP endpoint and the MIDI-CI exchange on it) in
+/// arrival order; decoding and timeouts stay with the caller.
 ///
 /// One rule per piece of state (see the `collect` overloads):
 /// - Endpoint Info and UMP Device Identity: the first is kept; an identical repeat is `.repeated`; a different one is
@@ -87,8 +94,9 @@ enum MIDICapabilityDiscoveryOutcome: Equatable, Sendable {
 /// - Function Block Info: keyed by block index. An identical repeat is `.repeated`; a different block with a known
 ///   index is `conflictingFunctionBlock`; a new index beyond `maximumFunctionBlocks` blocks is
 ///   `tooManyFunctionBlocks`. The facts list the blocks by ascending index.
-/// - Destination: when `host` is given, a Discovery Reply or Profile Reply addressed to neither `host` nor the
-///   broadcast MUID is ignored with `otherDestination`. Without `host`, no destination is checked.
+/// - Destination: when `host` is given, a Discovery Reply, Profile Reply or Property Exchange Capabilities Reply
+///   addressed to neither `host` nor the broadcast MUID is ignored with `otherDestination`. Without `host`, no
+///   destination is checked.
 /// - Discovery Reply: Discovery is always addressed to the function block or whole port (device id 0x7F), so a
 ///   Discovery Reply at any other address, before the peer is known or from the peer, is refused with
 ///   `discoveryReplyNotAtFunctionBlock`; it never fixes the peer. The first one at 0x7F fixes the peer (its source
@@ -110,12 +118,20 @@ enum MIDICapabilityDiscoveryOutcome: Equatable, Sendable {
 ///   address that already has a Reply, an identical one is `.repeated` and any other (other ids, other order or another
 ///   enabled/disabled split) is `conflictingProfileReply`. At a new address, the would-be total of ids over every
 ///   address is checked before anything is stored (`tooManyProfiles`).
+/// - Reply to Property Exchange Capabilities: from the peer only (`beforeDiscoveryReply` and `otherMUID` otherwise),
+///   then at the function block only: the Inquiry is always addressed to 0x7F (as Discovery is), so a Reply at any
+///   other address is refused with `propertyCapabilitiesNotAtFunctionBlock`. The first is kept as received (the
+///   7-bit request count and, in CI 1.2 only, the Property Exchange version); an identical repeat is `.repeated` and
+///   any other is `conflictingPropertyCapabilities`. It is kept beside the facts and never changes them: there is no
+///   Property Exchange feature to negotiate yet. The Inquiry is `.ignored(.notCollected)`; a NAK to it is a
+///   `MIDICIMessage` NAK, ignored as below.
 /// - NAK, and no reply at all: both leave the answer `.missing` (the documented `MIDICapabilityCIAnswer` rule). A NAK
 ///   is `.ignored(.notCollected)` and never removes a Discovery Reply already collected.
 /// For a collected MIDI-CI message the destination check comes first. A Discovery Reply then has its source MUID
 /// checked once a peer is known (another MUID is ignored), then its address. A Profile Reply then has its source
-/// MUID checked, then duplicates inside it, then the address repeat or conflict check, then the count. A refusal
-/// stores nothing.
+/// MUID checked, then duplicates inside it, then the address repeat or conflict check, then the count. A Property
+/// Exchange Capabilities Reply then has the peer checked, then its source MUID, then its address, then the repeat
+/// or conflict check. A refusal stores nothing.
 ///
 /// The facts' profile list is the union over addresses in address order (`order`): the function block first, then
 /// the group addresses (0x7E) by transport, then the channels by transport and, within one transport, ascending
@@ -151,6 +167,9 @@ struct MIDICapabilityDiscovery: Equatable, Sendable {
     private(set) var reply: Reply?
     /// The peer's Profile Replies, one per address (see the type doc), sorted by `order`.
     private(set) var profileReplies: [ProfileReply] = []
+    /// The peer's Reply to Property Exchange Capabilities at the function block, as received: the request count and
+    /// the version (nil in CI 1.1).
+    private(set) var propertyCapabilities: MIDICIPropertyCapabilities?
 
     init(host: MIDICIMUID? = nil) {
         self.host = host
@@ -276,6 +295,21 @@ extension MIDICapabilityDiscovery {
         }
     }
 
+    /// Collects a Reply to Property Exchange Capabilities from the peer at the function block (0x7F); the Inquiry is
+    /// `.ignored(.notCollected)`. No transport is taken: 0x7F is one address per peer whatever group carried it.
+    @discardableResult
+    mutating func collect(
+        _ message: MIDICIPropertyCapabilityMessage
+    ) throws(MIDICapabilityDiscoveryRefusal) -> MIDICapabilityDiscoveryOutcome {
+        switch message {
+        case let .reply(header, capabilities):
+            if let ignored = ignoredDestination(header) { return .ignored(ignored) }
+            return try collectPropertyCapabilities(header, capabilities)
+        case .inquiry:
+            return .ignored(.notCollected)
+        }
+    }
+
     private mutating func collectEndpoint(
         _ info: UMPStreamEndpointInfo
     ) throws(MIDICapabilityDiscoveryRefusal) -> MIDICapabilityDiscoveryOutcome {
@@ -321,6 +355,20 @@ extension MIDICapabilityDiscovery {
         }
         guard kept.muid == received.muid else { return .ignored(.otherMUID(received.muid)) }
         guard kept == received else { throw .conflictingDiscoveryReply(kept.muid) }
+        return .repeated
+    }
+
+    private mutating func collectPropertyCapabilities(
+        _ header: MIDICIHeader, _ capabilities: MIDICIPropertyCapabilities
+    ) throws(MIDICapabilityDiscoveryRefusal) -> MIDICapabilityDiscoveryOutcome {
+        guard let peerMUID = reply?.muid else { return .ignored(.beforeDiscoveryReply) }
+        guard header.source == peerMUID else { return .ignored(.otherMUID(header.source)) }
+        guard header.device == .allCall else { throw .propertyCapabilitiesNotAtFunctionBlock(device: header.device) }
+        guard let kept = propertyCapabilities else {
+            propertyCapabilities = capabilities
+            return .recorded
+        }
+        guard kept == capabilities else { throw .conflictingPropertyCapabilities(peerMUID) }
         return .repeated
     }
 

@@ -67,6 +67,8 @@ struct MIDICIPropertyCapabilities: Equatable, Hashable, Sendable {
 /// `midiCIPropertyGetCapabilities`, which always writes the 16-byte CI 1.2 form, and `CIRetrieval.kt`, which reads
 /// byte 13 only). JUCE ignores trailing fields of a newer version; this codec, like the other CI decoders, refuses
 /// a format above 0x02 and any trailing byte. No byte array was copied from any source.
+///
+/// `MIDICapabilityDiscovery` collects the Reply from its peer, at the function block (0x7F) only.
 enum MIDICIPropertyCapabilityMessage: Equatable, Hashable, Sendable {
     case inquiry(MIDICIHeader, MIDICIPropertyCapabilities)
     case reply(MIDICIHeader, MIDICIPropertyCapabilities)
