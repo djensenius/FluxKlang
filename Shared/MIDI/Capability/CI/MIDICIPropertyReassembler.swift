@@ -30,15 +30,17 @@ enum MIDICIPropertyReassemblyRefusal: Error, Equatable, Hashable, Sendable {
     case chunkCountChanged(expected: UInt16, got: UInt16)
     /// 7. The message kind differs from chunk 1's.
     case kindChanged(expected: MIDICIPropertyDataKind, got: MIDICIPropertyDataKind)
-    /// 8. Header data in a chunk after chunk 1.
+    /// 8. The MIDI-CI envelope differs from chunk 1's (local receive policy, not a standards requirement).
+    case envelopeChanged(expected: MIDICIHeader, received: MIDICIHeader)
+    /// 9. Header data in a chunk after chunk 1.
     case headerAfterFirstChunk(chunkNumber: UInt16)
-    /// 9. A chunk number above the chunk count. A defensive guard: checks 3 and 5 refuse every such chunk first.
+    /// 10. A chunk number above the chunk count. A defensive guard: checks 3 and 5 refuse every such chunk first.
     case chunkNumberAboveCount(number: UInt16, count: UInt16)
-    /// 10. Chunk 1 declares more chunks than `maximumChunks`.
+    /// 11. Chunk 1 declares more chunks than `maximumChunks`.
     case tooManyChunks(count: UInt16, limit: Int)
-    /// 11. The property data so far would exceed `maximumPropertyBytes`.
+    /// 12. The property data so far would exceed `maximumPropertyBytes`.
     case tooManyBytes(total: Int, limit: Int)
-    /// 12. Opening the request would exceed `maximumOpenRequests`; the other open requests are kept.
+    /// 13. Opening the request would exceed `maximumOpenRequests`; the other open requests are kept.
     case tooManyOpenRequests(limit: Int)
 }
 
@@ -67,6 +69,14 @@ struct MIDICIPropertyReassembly: Equatable, Sendable {
 /// content rules for them stay with `MIDICIPropertyDataMessage.encode` (the codec's decoder is lenient on receive).
 /// On receive, `MIDICIPropertyContent.decode(_:)` refuses their property data (fail closed); neither type checks
 /// their chunk count.
+///
+/// Compatibility tightening (#838): every appended continuation must have the same full `MIDICIHeader` as chunk 1.
+/// Previously changed destination, device or format bytes were accepted and the discrepancy lost on completion.
+/// This is intentionally tighter local receive policy, not a claimed M2-102/M2-103 requirement. Consistently
+/// noncanonical device IDs remain accepted; the individual codec is unchanged. No live consumer is activated.
+/// Equality is not peer authentication, transport isolation or request/reply correlation. Earlier refusal/abort
+/// paths still use only source/request keying; a transport owner must partition assembler instances appropriately.
+/// See `docs/transformation/midi-property-reassembly-envelope.md`.
 ///
 /// Bounds: at most `maximumOpenRequests` open requests, `maximumChunks` declared chunks and `maximumPropertyBytes`
 /// of property data per request; a value exactly at a limit is accepted. Nothing expires on its own: the caller
@@ -123,7 +133,7 @@ struct MIDICIPropertyReassembler: Sendable {
     }
 
     /// The complete message once its last chunk arrives, nil while chunks are pending. Refuses in the order of
-    /// `MIDICIPropertyReassemblyRefusal` (1 to 12); a refusal drops the open request it concerns, except
+    /// `MIDICIPropertyReassemblyRefusal` (1 to 13); a refusal drops the open request it concerns, except
     /// `tooManyOpenRequests`, which concerns a request that never opened.
     mutating func accept(
         _ message: MIDICIPropertyDataMessage
@@ -139,7 +149,7 @@ struct MIDICIPropertyReassembler: Sendable {
         return try following(message, entry: entry, key: key)
     }
 
-    /// A chunk for an open request: refusals 4 to 9 and 11, each dropping it; the last chunk completes it.
+    /// A chunk for an open request: refusals 4 to 10 and 12, each dropping it; the last chunk completes it.
     private mutating func following(
         _ message: MIDICIPropertyDataMessage, entry: Entry, key: Key
     ) throws(MIDICIPropertyReassemblyRefusal) -> MIDICIPropertyReassembly? {
@@ -154,6 +164,9 @@ struct MIDICIPropertyReassembler: Sendable {
         }
         guard message.kind == entry.kind else {
             throw drop(key, .kindChanged(expected: entry.kind, got: message.kind))
+        }
+        guard message.header == entry.header else {
+            throw drop(key, .envelopeChanged(expected: entry.header, received: message.header))
         }
         guard chunk.headerData.isEmpty else { throw drop(key, .headerAfterFirstChunk(chunkNumber: number)) }
         guard number <= count else { throw drop(key, .chunkNumberAboveCount(number: number, count: count)) }

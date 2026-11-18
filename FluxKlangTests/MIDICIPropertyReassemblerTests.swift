@@ -67,10 +67,8 @@ struct MIDICIPropertyReassemblerTests {
         #expect(sut.openCount == 1)
         #expect(try sut.accept(Self.chunk(2, of: 3, data: [0x03])) == nil)
         #expect(sut.openCount == 1)
-        let later = try MIDICIPropertyChunk.make(
-            requestID: 0x2A, headerData: [], chunkCount: 3, chunkNumber: 3, propertyData: [0x04, 0x05])
-        let otherHeader = try MIDICIMessageTests.header(.ci11, device: 0x7F, source: Self.sourceA, destination: 0)
-        let done = try #require(try sut.accept(.getReply(otherHeader, later)))
+        // Changed-envelope success was intentionally retired in #838; +Envelope covers that exact regression.
+        let done = try #require(try sut.accept(Self.chunk(3, of: 3, data: [0x04, 0x05])))
         #expect(done == (try Self.expected([0x01, 0x02, 0x03, 0x04, 0x05])))
         #expect(sut.openCount == 0)
     }
