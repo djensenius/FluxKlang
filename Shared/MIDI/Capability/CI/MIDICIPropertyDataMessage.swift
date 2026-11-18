@@ -77,8 +77,9 @@ struct MIDICIPropertyChunk: Equatable, Hashable, Sendable {
 /// does this one for the sub-ids 0x3A to 0x3E, which Appendix D lists as reserved). The Property Exchange
 /// Capabilities Inquiry and Reply (0x30, 0x31) are `MIDICIPropertyCapabilityMessage`. This type is the codec of one
 /// message (one chunk) only: it sends nothing, keeps no state, does not reassemble chunks (`MIDICIPropertyReassembler`
-/// does), does not pair a reply's request id with its inquiry, and does not parse the header data (JSON) or the
-/// property data (Mcoded7).
+/// does), does not pair a reply's request id with its inquiry, and does not parse the header data (JSON) or decode the
+/// property data (`MIDICIPropertyHeader.parse(_:)`, `MIDICIPropertyBody.decode(_:encoding:)` and, for a reassembled
+/// message, `MIDICIPropertyContent.decode(_:)` do).
 ///
 /// Layout of the payload as `MIDI1Event.sysEx` delivers it (F0 and F7 excluded). The common 13-byte header is
 /// `7E, device id, 0D, sub-id 2, format, source MUID (4), destination MUID (4)`, MUIDs 7 bits per byte, least

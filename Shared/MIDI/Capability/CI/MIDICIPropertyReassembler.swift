@@ -63,7 +63,9 @@ struct MIDICIPropertyReassembly: Equatable, Sendable {
 /// chunk 1 must hold, and any violation drops the open request (fail closed). A chunk count of 0 (unknown, streamed)
 /// is refused, not supported. The kinds whose tables fix one chunk with no property data (`hasNoPropertyData`:
 /// Get Inquiry and Set Reply) are not special-cased: chunk 1 of 1 passes through like any single chunk, and the
-/// content rules for them stay with `MIDICIPropertyDataMessage.encode` (lenient receive, as the decoder).
+/// content rules for them stay with `MIDICIPropertyDataMessage.encode` (the codec's decoder is lenient on receive).
+/// On receive, `MIDICIPropertyContent.decode(_:)` refuses their property data (fail closed); neither type checks
+/// their chunk count.
 ///
 /// Bounds: at most `maximumOpenRequests` open requests, `maximumChunks` declared chunks and `maximumPropertyBytes`
 /// of property data per request; a value exactly at a limit is accepted. Nothing expires on its own: the caller

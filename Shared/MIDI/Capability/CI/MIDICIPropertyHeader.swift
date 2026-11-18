@@ -3,7 +3,8 @@
 //  FluxKlang
 //
 //  The header data of a MIDI-CI Property Exchange message as a typed value (#83, slice M83-PXH1, issue #820): a
-//  pure, bounded parse of the header JSON that uses only the standard library. Nothing calls it yet.
+//  pure, bounded parse of the header JSON that uses only the standard library. Only `MIDICIPropertyContent.decode(_:)`
+//  calls it, and nothing calls that yet.
 //
 //  Provenance: the Property Exchange specifications (M2-102-UM, the Common Rules, and M2-103-UM, the resources) were
 //  not read. `resource`, `status` and `command` appear in the repo's header goldens
@@ -15,7 +16,8 @@
 
 /// The encoding of a Property Exchange body, named by the header's `mutualEncoding`. `ASCII`, `Mcoded7` and
 /// `zlib+Mcoded7` are matched byte for byte, so another case or a canonically equivalent spelling is another name.
-/// Any other name is kept as `other` (lenient receive). Nothing calls it yet.
+/// Any other name is kept as `other` (lenient receive). Only `MIDICIPropertyHeader.parse(_:)` makes one, and only
+/// `MIDICIPropertyContent.decode(_:)` calls that; nothing calls that yet.
 enum MIDICIPropertyEncoding: Equatable, Hashable, Sendable {
     case ascii
     case mcoded7
@@ -36,7 +38,7 @@ enum MIDICIPropertyEncoding: Equatable, Hashable, Sendable {
 /// when that key is absent. The exception is `encoding` (`mutualEncoding`), which is `.ascii` when its key is absent.
 /// `unknownKeys` holds the names of every other top-level member, sorted by their UTF-8 bytes; their values are
 /// checked as JSON and then dropped. Rules that depend on the message kind (a resource in an inquiry, a status in a
-/// reply) are not checked. Nothing calls it yet.
+/// reply) are not checked. Only `MIDICIPropertyContent.decode(_:)` calls `parse(_:)`, and nothing calls that yet.
 struct MIDICIPropertyHeader: Equatable, Hashable, Sendable {
     var resource: String?
     /// `resId`.
