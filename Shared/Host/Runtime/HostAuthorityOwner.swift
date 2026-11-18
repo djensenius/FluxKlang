@@ -17,6 +17,8 @@ actor HostAuthorityOwner {
         case noSession
         /// Another window renders the Studio lease (decision 6).
         case otherWindowRenders
+        /// The applying window closed while the apply was in flight.
+        case windowClosed
         case authority(HostAuthorityRefusal)
     }
 
@@ -52,10 +54,13 @@ actor HostAuthorityOwner {
     /// The last grant's revision; the first grant is 1. Never reset.
     private(set) var grantRevision: UInt64
     private var sessionVersion = UUID()
+    /// In-flight `beginApply` calls only, each removed on return: its window and whether that
+    /// window closed meanwhile. No closed-window history outlives the call.
+    private var applies: [UUID: (window: WindowID, closed: Bool)] = [:]
     private var lifecycleBusy = false
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     /// Internal, init-only test seam; production never suspends at these checkpoints.
-    enum Checkpoint: Sendable { case applyStarting, leaseRead, leaseChecked, leaseReady }
+    enum Checkpoint: Sendable { case applyStarting, leaseRead, leaseChecked, leaseReady, restoreAcknowledging }
     private let checkpoint: (@Sendable (Checkpoint) async -> Void)?
     private let sessionInvalidated: (@Sendable () -> Void)?
     private let lifecycleQueued: (@Sendable () -> Void)?
@@ -143,17 +148,21 @@ actor HostAuthorityOwner {
 
     /// `window`'s apply gesture: acquires a free lease, keeps its own, or attaches to an
     /// unattached one; another rendering window refuses it (decision 6). Returns the session.
+    /// A loss or a close of `window` while it is in flight refuses it, the loss first.
     func beginApply(window: WindowID) async -> Result<UUID, ApplyRefusal> {
         guard let session else { return .failure(.noSession) }
         let version = sessionVersion
+        let apply = UUID()
+        applies[apply] = (window, false)
+        defer { applies[apply] = nil }
         await checkpoint?(.applyStarting)
         await lockLifecycle()
         defer { unlockLifecycle() }
         _ = await opened.value
-        guard version == sessionVersion else { return .failure(.noSession) }
+        if let refusal = staleness(of: apply, version) { return .failure(refusal) }
         let lease = await authority.snapshot().lease
         await checkpoint?(.leaseRead)
-        guard version == sessionVersion else { return .failure(.noSession) }
+        if let refusal = staleness(of: apply, version) { return .failure(refusal) }
         await checkpoint?(.leaseChecked)
         let result: Result<EngineLeaseSnapshot, HostAuthorityRefusal>
         switch lease {
@@ -163,15 +172,29 @@ actor HostAuthorityOwner {
         case _?: return .failure(.otherWindowRenders)
         }
         await checkpoint?(.leaseReady)
-        guard version == sessionVersion else { return .failure(.noSession) }
+        if let refusal = staleness(of: apply, version) { return .failure(refusal) }
         if case .failure(let refusal) = result { return .failure(.authority(refusal)) }
         await completeRestore()
-        guard version == sessionVersion else { return .failure(.noSession) }
+        if let refusal = staleness(of: apply, version) { return .failure(refusal) }
         return .success(session)
     }
 
+    private func staleness(of apply: UUID, _ version: UUID) -> ApplyRefusal? {
+        guard version == sessionVersion else { return .noSession }
+        return applies[apply]?.closed == true ? .windowClosed : nil
+    }
+
+    /// Marks `window`'s in-flight applies closed, so each is refused at its next recheck. Takes no lock
+    /// and keeps no history: a later apply is not fenced. A queued detach sends this before its turn.
+    func fenceApplies(for window: WindowID) {
+        for (id, apply) in applies where apply.window == window { applies[id]?.closed = true }
+    }
+
     /// Window close: a rendering window detaches, dropping its tickets; the lease stays held.
+    /// Before any wait it fences `window`'s in-flight applies, which are then refused; this close
+    /// then detaches whatever one holding the lock attached. A later apply is not fenced.
     func windowClosed(_ window: WindowID) async {
+        fenceApplies(for: window)
         await lockLifecycle()
         defer { unlockLifecycle() }
         _ = await opened.value
@@ -186,6 +209,7 @@ actor HostAuthorityOwner {
         while let command = await authority.nextEngineCommand() {
             guard self.session == session, verifiedSession == session else { return }
             guard case .restore(let attempt, let revision, let target, let token) = command else { continue }
+            await checkpoint?(.restoreAcknowledging)
             _ = await authority.restoreCompleted(attempt: attempt, revision: revision, target: target, token: token)
         }
     }

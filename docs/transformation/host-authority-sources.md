@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Issue | Part of #62 (slice AU8 design); roadmap #48. #62 remains open |
-| Status | AU8 design archive plus AU7c1 planned lifecycle composition (§12); pure Debug/Release checked, hosted compilation pending |
+| Status | AU8 design archive plus AU7c1 planned lifecycle composition, the AU7c2 owner close fence and the AU7c3 detach-time fence (§12); pure Debug/Release checked, hosted compilation pending |
 | Source baseline | Historical citations: `41f69372`; AU7c1 implementation base: `2165503ab27043999cda062c10ba9132a2085262` |
 | Scope | Authority input sources, original AU8a plan, and bounded planned replacement/session/detach composition |
 
@@ -265,6 +265,8 @@ The user delegated these choices ("make your best assumption"); the coordinator 
 | AU8a | Worker | `Shared/Host/Runtime/HostAuthorityOwner.swift` (*proposed*): the owner of section 3, its `shared` instance, the session, apply-time acquire, attach, release, drop, verified-reconnect restore, demo and window hooks, the role grant and revoke input that only AU8b calls, which mints the live fingerprint with the grant revision (decision 2, *proposed*), and the admission provider. No caller changes | Owner at most 150 lines; `FluxKlangTests/HostAuthorityTests+Owner.swift` at most 250 lines, registered by the coordinator |
 | AU8b | Worker | The host-user permission grant owner and a minimal grant and revoke gesture; the only path to a non-`nil` live permission | No peer path, no automatic grant |
 | AU7c1 | Worker; coordinator registers | Shared owner injection, serialized planned replacements, exact session publication and existing root-ID detach (§12) | No StudioView/applyStudio/window-to-Apply wiring; no verified reconnect or activation |
+| AU7c2 | Worker | Owner-only close fence (§12): `windowClosed` fences in-flight applies for its window before waiting; `beginApply` refuses `.windowClosed` | No sequencer, root-lifetime or AppRootView change; no closed-window history |
+| AU7c3 | Worker | Detach-time fence (§12): the owner's lock-free `fenceApplies(for:)`, which `windowClosed` still calls first; `HostWingLifecycle.detach` sends it when submitted, while the detach itself keeps its FIFO turn; `Completion.fenced()` joins it | No queue-order change or early detach; no root lifetime, `windowOpened` or closed-window history; no AppRootView, AppModel or WingController change |
 | AU8d | Worker (follow-up, after AU7c) | Verified-reconnect signal: report from the WING path that a new session is connected and its state re-read, and feed it to the owner's verified-reconnect input | Until it lands, a drop leaves gated writes refused |
 | AU8c | Worker | `applyStudio` calls the gated overload for real sessions; the ungated `applyAndVerify(_:safetySettings:)` stays only for Demo Mode | Needs AU8a, AU8b and AU7c |
 
@@ -314,7 +316,7 @@ network or UI.
 - No migration of the other direct WING write paths listed in `docs/transformation/baseline.md` (Dispatch gap).
 - No change to `HostAuthority`, the book, the gate or the minter.
 
-## 12. AU7c1 bounded planned lifecycle composition
+## 12. AU7c1 bounded planned lifecycle composition, AU7c2 owner close fence and AU7c3 detach-time fence
 
 Part of #62 and roadmap #48; both remain open. Source implementation follows the approved #779 plan.
 Approval was design/source feasibility only. The exact 71-input closure now compiles without missing dependencies.
@@ -377,10 +379,30 @@ file, and unchanged direct phase/protocol and budget declarations. The closure r
 PendingPreparation, offline processor/compiler/admission/ScratchArena, FaderMath, ActionPolicy, clocks,
 CryptoKit identity and canonical audit/receipt sink. No shadow declarations or SwiftOSC dependency are allowed.
 
-No beginApply, dropped, verifiedReconnect, completeRestore, production minter construction, lease acquisition,
-engine installation/retirement or recovery execution is introduced. Existing Apply/mixer remain ungated and
+AU7c1 introduces no beginApply, dropped, verifiedReconnect, completeRestore, production minter construction,
+lease acquisition, engine installation/retirement or recovery execution. Existing Apply/mixer remain ungated and
 their permission warnings remain true. AU8d and AU8c remain separate, including window-to-Apply wiring.
-Before AU8c, qualify real root lifetime and close-before-paused-Apply ordering: windowClosed does not prevent an
-already-paused beginApply from later acquiring. Root disappearance is not native close qualification.
+AU7c2 (#792) fences close-before-paused-Apply ordering inside the owner only. `windowClosed(w)` marks every
+in-flight `beginApply(w)` before it waits for the lifecycle lock; each apply registers before its first suspension
+and unregisters on return, so no closed-window history, permission or authority is cached. Every session recheck,
+including the one before `completeRestore`, then refuses `.windowClosed` (`.noSession` first). A close queued behind
+an apply's lease work still detaches after the refused apply, so the closed window ends unattached. A later apply
+on the same `WindowID` (AppRootView reuses it on reappear) is not fenced. An apply whose window closes during
+`completeRestore` is refused only after that restore is acknowledged (pinned at the test-only
+`.restoreAcknowledging` checkpoint); other in-flight applies of `w` queued behind it are refused at their first
+recheck. Mirror-run `OwnerRaces` tests cover this.
+AU7c3 (#795) applies that fence when the detach is requested, not on its FIFO turn. `HostWingLifecycle.detach(w)`
+starts a task that calls the owner's lock-free, history-free `fenceApplies(for: w)` (which `windowClosed` still
+calls first), then reserves its turn as before; the detach itself (`windowClosed`) still waits behind earlier
+queued replacements, and queue order is unchanged. `Completion.fenced()` joins only the fence; `wait()` joins
+both. An apply for `w` already in flight when the fence lands is refused `.windowClosed`; one paused after its
+lease check may already have acquired or attached, and stays attached until the detach's turn. The fence is a
+task started at submission (a MainActor job, then one owner hop); an apply registered after it lands is not
+fenced and succeeds, but the queued detach still detaches it on its turn. If it is still in flight at the turn,
+`windowClosed`'s own fence refuses it (the reused-`WindowID` gap). An owner-nil sequencer's fence and detach are
+inert. Mirror-run `LifecycleComposition` tests cover this; `beginApply` still has no production caller. Still open:
+root-lifetime (`windowOpened`) registration, window liveness and a reused `WindowID` are not modelled, and
+AU8c/AU8d remain.
+Root disappearance is not native close qualification, and native close remains unqualified.
 WingController.disconnect cancels but does not join its tasks; awaited socket stop is not callback quiescence.
 Nothing here qualifies #191/G2 native reclamation.

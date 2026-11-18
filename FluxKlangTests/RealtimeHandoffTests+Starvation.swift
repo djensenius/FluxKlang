@@ -23,8 +23,8 @@ private struct SeededMix {
 }
 
 /// Claims every lane of `handoff` and returns the tokens in lane order.
-private func claimAll(_ handoff: FanInHandoff<UInt64>) throws -> [ProducerToken] {
-    try (0..<handoff.laneCount).map { _ in try #require(handoff.claimProducer()) }
+private func claimAll(_ handoff: FanInHandoff<UInt64>, caller: inout RefusalCallerToken) throws -> [ProducerToken] {
+    try (0..<handoff.laneCount).map { _ in try RefusalCalling.claim(handoff, &caller) }
 }
 
 /// Every lane of one handoff claimed, with each lane's queued count and next value number.
@@ -34,19 +34,19 @@ private struct Backlog {
     var queued: [Int]
     var next: [UInt64]
 
-    init(_ handoff: FanInHandoff<UInt64>) throws {
+    init(_ handoff: FanInHandoff<UInt64>, caller: inout RefusalCallerToken) throws {
         self.handoff = handoff
-        tokens = try claimAll(handoff)
+        tokens = try claimAll(handoff, caller: &caller)
         queued = Array(repeating: 0, count: handoff.laneCount)
         next = Array(repeating: 0, count: handoff.laneCount)
     }
 
     /// Tops each listed lane up to `depth` queued values (general class), numbering values per lane.
-    mutating func fill(lanes: [Int], depth: Int) {
+    mutating func fill(lanes: [Int], depth: Int, caller: inout RefusalCallerToken) {
         for lane in lanes {
             while queued[lane] < depth {
                 #expect(handoff.tryPush(UInt64(lane) << 32 | next[lane], class: .general, frame: 0,
-                                        token: tokens[lane]) == .ok)
+                                        token: tokens[lane], caller: &caller) == .ok)
                 next[lane] += 1
                 queued[lane] += 1
             }
@@ -187,8 +187,8 @@ private struct ModelRun {
 
     private var liveTokens: [ProducerToken] { live.compactMap { $0 } }
 
-    mutating func claim(frame: Int64) {
-        let token = handoff.claimProducer(frame: frame)
+    mutating func claim(frame: Int64, caller: inout RefusalCallerToken) {
+        let token = handoff.claimProducer(frame: frame, caller: &caller)
         let lane = model.claim(frame: frame)
         #expect(token.map { Int($0.lane) } == lane)
         if let token, let lane {
@@ -198,28 +198,28 @@ private struct ModelRun {
     }
 
     /// Releases a random live token, or re-releases the newest stale one.
-    mutating func release() {
+    mutating func release(caller: inout RefusalCallerToken) {
         let liveTokens = liveTokens
         if let token = liveTokens.isEmpty ? nil : liveTokens[random.below(liveTokens.count)] {
-            #expect(handoff.releaseProducer(token) == .ok)
+            #expect(handoff.releaseProducer(token, caller: &caller) == .ok)
             model.phases[Int(token.lane)] = .retiring
             live[Int(token.lane)] = nil
             stale.append(token)
         } else if let token = stale.last {
-            #expect(handoff.releaseProducer(token) == model.refuseNotOwner())
+            #expect(handoff.releaseProducer(token, caller: &caller) == model.refuseNotOwner())
         }
     }
 
     /// Pushes through a random live token (7 in 10), or an issued token that is not live here: one of this
     /// handoff's stale tokens, or a live token of another handoff.
-    mutating func push(_ value: UInt64, frame: Int64) {
+    mutating func push(_ value: UInt64, frame: Int64, caller: inout RefusalCallerToken) {
         let liveTokens = liveTokens
         let critical = random.below(4) == 0
         let eventClass: EventClass = critical ? .critical : .general
         let kind = random.below(10)
         if kind < 7, !liveTokens.isEmpty {
             let token = liveTokens[random.below(liveTokens.count)]
-            #expect(handoff.tryPush(value, class: eventClass, frame: frame, token: token)
+            #expect(handoff.tryPush(value, class: eventClass, frame: frame, token: token, caller: &caller)
                     == model.push(value, critical: critical, lane: Int(token.lane), frame: frame))
             return
         }
@@ -233,7 +233,8 @@ private struct ModelRun {
         case 8: token = foreign[random.below(foreign.count)]
         default: token = other
         }
-        #expect(handoff.tryPush(value, class: eventClass, frame: frame, token: token) == model.refuseNotOwner())
+        #expect(handoff.tryPush(value, class: eventClass, frame: frame, token: token, caller: &caller)
+                == model.refuseNotOwner())
     }
 
     /// One drain with a random quota and total in -1...5 and -1...12.
@@ -247,10 +248,13 @@ private struct ModelRun {
 extension RealtimeHandoffTests {
     struct LaneFairness {
         @Test func roundRobinVisitsEveryNonEmptyLaneWithinOneDrain() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let handoff = try Root.makeFanIn(faults, lanes: 4, laneCapacity: 40)
-            var backlog = try Backlog(handoff)
-            backlog.fill(lanes: [0, 2, 3], depth: 10)
+            var backlog = try Backlog(handoff, caller: &caller!)
+            backlog.fill(lanes: [0, 2, 3], depth: 10, caller: &caller!)
             // Ample budget: every non-empty lane gives exactly its quota, in lane order from the start lane.
             let first = backlog.drain(quota: 3, total: 12)
             #expect(first.map(\.lane) == [0, 0, 0, 2, 2, 2, 3, 3, 3])
@@ -263,21 +267,24 @@ extension RealtimeHandoffTests {
             #expect(backlog.drain(quota: 3, total: 4).map(\.lane) == [3, 3, 3, 0])
             #expect(backlog.queued == [3, 0, 1, 0])
             // Exactly lanes × quota still reaches every non-empty lane.
-            backlog.fill(lanes: [0, 2, 3], depth: 6)
+            backlog.fill(lanes: [0, 2, 3], depth: 6, caller: &caller!)
             let exact = backlog.drain(quota: 2, total: 8)
             #expect(exact.map(\.lane) == [0, 0, 2, 2, 3, 3])
         }
 
         @Test func rotatingStartPreventsPositionalBias() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let handoff = try Root.makeFanIn(faults, lanes: 4, laneCapacity: 40)
-            var backlog = try Backlog(handoff)
-            backlog.fill(lanes: [0, 1, 2, 3], depth: 8)
+            var backlog = try Backlog(handoff, caller: &caller!)
+            backlog.fill(lanes: [0, 1, 2, 3], depth: 8, caller: &caller!)
             // Ample budget: the start lane rotates 0, 1, 2, 3, 0.
             var starts: [UInt8?] = []
             for _ in 0..<5 {
                 starts.append(backlog.drain(quota: 1, total: 4).first?.lane)
-                backlog.fill(lanes: [0, 1, 2, 3], depth: 8)
+                backlog.fill(lanes: [0, 1, 2, 3], depth: 8, caller: &caller!)
             }
             #expect(starts == [0, 1, 2, 3, 0])
 
@@ -287,7 +294,7 @@ extension RealtimeHandoffTests {
                 for delivery in backlog.drain(quota: 2, total: 3) {
                     served[Int(delivery.lane)] += 1
                 }
-                backlog.fill(lanes: [0, 1, 2, 3], depth: 8)
+                backlog.fill(lanes: [0, 1, 2, 3], depth: 8, caller: &caller!)
             }
             #expect(served == [300, 300, 300, 300])
 
@@ -296,10 +303,13 @@ extension RealtimeHandoffTests {
         }
 
         @Test func emptyLanesDoNotBiasTheNextLane() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let handoff = try Root.makeFanIn(faults, lanes: 4, laneCapacity: 40)
-            var backlog = try Backlog(handoff)
-            backlog.fill(lanes: [0, 1], depth: 20)
+            var backlog = try Backlog(handoff, caller: &caller!)
+            backlog.fill(lanes: [0, 1], depth: 20, caller: &caller!)
             // Lanes 2 and 3 stay empty; one event per drain alternates between lanes 0 and 1.
             let served = firstLanes(handoff, drains: 20, quota: 1, total: 1)
             #expect(served == Array(repeating: [0, 1] as [UInt8?], count: 10).flatMap { $0 })
@@ -307,15 +317,18 @@ extension RealtimeHandoffTests {
 
         @Test(arguments: [UInt64(1), 7, 0xDEAD_BEEF])
         func everyNonEmptyLaneIsServedWithinLaneCountDrains(seed: UInt64) throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let lanes = 5
             let faults = try Root.fanInLatch()
             let handoff = try Root.makeFanIn(faults, lanes: lanes, laneCapacity: 40)
-            var backlog = try Backlog(handoff)
+            var backlog = try Backlog(handoff, caller: &caller!)
             var waited = Array(repeating: 0, count: lanes)
             var random = SeededMix(state: seed)
             for _ in 0..<2_000 {
                 let busy = (0..<lanes).filter { _ in random.below(3) > 0 }
-                backlog.fill(lanes: busy, depth: 1 + random.below(6))
+                backlog.fill(lanes: busy, depth: 1 + random.below(6), caller: &caller!)
                 let nonEmpty = (0..<lanes).map { backlog.queued[$0] > 0 }
                 let deliveries = Root.drained(handoff, quota: 1 + random.below(4), total: 1 + random.below(8))
                 var servedLanes = Set<Int>()
@@ -331,11 +344,14 @@ extension RealtimeHandoffTests {
         }
 
         @Test func nonPositiveBudgetsAreNoOps() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let handoff = try Root.makeFanIn(faults, lanes: 2, laneCapacity: 40)
-            var backlog = try Backlog(handoff)
-            backlog.fill(lanes: [0, 1], depth: 20)
-            #expect(handoff.releaseProducer(backlog.tokens[1]) == .ok)
+            var backlog = try Backlog(handoff, caller: &caller!)
+            backlog.fill(lanes: [0, 1], depth: 20, caller: &caller!)
+            #expect(handoff.releaseProducer(backlog.tokens[1], caller: &caller!) == .ok)
             // After every non-positive call, a one-event drain still alternates 0, 1, 0, …: the cursor never moved.
             var served: [UInt8?] = []
             for quota in Root.adversarialInts {
@@ -345,37 +361,42 @@ extension RealtimeHandoffTests {
                 }
             }
             #expect(served == (0..<27).map { UInt8($0 % 2) })
-            #expect(handoff.claimProducer() == nil)
+            #expect(handoff.claimProducer(caller: &caller!) == nil)
             #expect(backlog.drain(quota: .max, total: .max).count == 40 - 27 && backlog.queued == [0, 0])
-            #expect(handoff.claimProducer()?.lane == 1)
+            #expect(handoff.claimProducer(caller: &caller!)?.lane == 1)
 
             // A non-positive drain does not free an empty retiring lane either; a real one does.
             let single = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 17)
-            let token = try #require(single.claimProducer())
-            #expect(single.releaseProducer(token) == .ok)
+            let token = try RefusalCalling.claim(single, &caller!)
+            #expect(single.releaseProducer(token, caller: &caller!) == .ok)
             for budget in Root.adversarialInts where budget <= 0 {
                 #expect(single.drain(perLaneQuota: budget, total: 1) { _, _ in } == 0)
                 #expect(single.drain(perLaneQuota: 1, total: budget) { _, _ in } == 0)
             }
-            #expect(single.claimProducer() == nil)
-            #expect(Root.drained(single, quota: 1, total: 1).isEmpty && single.claimProducer()?.lane == 0)
+            #expect(single.claimProducer(caller: &caller!) == nil)
+            #expect(Root.drained(single, quota: 1, total: 1).isEmpty
+                    && single.claimProducer(caller: &caller!)?.lane == 0)
         }
 
         @Test(arguments: [UInt64(1), 2, 3, 0x5EED, 0xFACE_FEED])
         func seededTrafficMatchesModel(seed: UInt64) throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let lanes = 3
             let faults = try Root.fanInLatch()
             let claims = try Root.fanInClaims()
             let handoff = try Root.makeFanIn(faults, claims: claims, lanes: lanes, laneCapacity: 18)
             let elsewhere = try Root.makeFanIn(faults, lanes: lanes, laneCapacity: 18)
             let wider = try Root.makeFanIn(faults, lanes: lanes + 2, laneCapacity: 18)
-            var run = ModelRun(handoff: handoff, foreign: try claimAll(elsewhere), wide: try claimAll(wider),
+            var run = ModelRun(handoff: handoff, foreign: try claimAll(elsewhere, caller: &caller!),
+                               wide: try claimAll(wider, caller: &caller!),
                                random: SeededMix(state: seed))
             for step in 0..<3_000 {
                 switch run.random.below(20) {
-                case 0..<3: run.claim(frame: Int64(step))
-                case 3..<5: run.release()
-                case 5..<13: run.push(UInt64(step), frame: Int64(step))
+                case 0..<3: run.claim(frame: Int64(step), caller: &caller!)
+                case 3..<5: run.release(caller: &caller!)
+                case 5..<13: run.push(UInt64(step), frame: Int64(step), caller: &caller!)
                 default: run.drain()
                 }
             }

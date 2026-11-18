@@ -12,8 +12,15 @@ struct CoreMIDIEndpointBindings: Sendable, Equatable {
         let ref: UInt32
         let source: MIDIConnectedSource
         /// The mapped `kMIDIPropertyProtocolID` of the enumeration that registered or last kept this binding. Evidence
-        /// only: not identity or eligibility, and not the protocol the input port receives.
+        /// only: not identity or eligibility, and not the protocol the input port receives (see `receiveFidelity`).
         let endpointProtocol: MIDIEndpointProtocol
+    }
+
+    /// One binding's derived receive fidelity, with the ref and token it belongs to.
+    struct ReceiveFidelity: Sendable, Equatable {
+        let ref: UInt32
+        let token: MIDIConnectionToken
+        let fidelity: CoreMIDIReceiveFidelity
     }
 
     /// A kept binding whose mapped endpoint protocol changed. Reported only: its token and key stay, because the input
@@ -53,6 +60,17 @@ struct CoreMIDIEndpointBindings: Sendable, Equatable {
     var connectedRefs: Set<UInt32> { Set(bindings.map(\.ref)) }
 
     var sources: [MIDIConnectedSource] { bindings.map(\.source) }
+
+    /// Each binding's receive fidelity through an input backend delivering `format`, in enumeration order. Derived
+    /// from the last mapped endpoint protocol; nothing consumes it yet.
+    func receiveFidelity(format: MIDIPacketBatch.Format) -> [ReceiveFidelity] {
+        bindings.map { binding in
+            ReceiveFidelity(
+                ref: binding.ref, token: binding.source.token,
+                fidelity: CoreMIDIReceiveFidelity(endpoint: binding.endpointProtocol, format: format)
+            )
+        }
+    }
 
     /// The key a matched source is registered under, or nil when it is unresolved. `fingerprint` is nil when the
     /// source has no uniqueID. Fingerprint 0 is the legacy source's key, so a real fingerprint of 0 shares it.

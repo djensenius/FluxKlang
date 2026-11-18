@@ -44,9 +44,10 @@ private func runBlock(_ cycle: KernelCycle, _ start: Int64) -> (KernelCycleResul
 
 /// Queues a `program` at 128 and a `control` at 140, runs `rig.cycle`'s last block, [64, 128), where both stay
 /// pending, and retires it: the replacement inherits both as its carry.
-private func retireWithCarry(_ rig: CycleRig, _ token: ProducerToken) -> KernelRetirementLoss {
-    #expect(rig.push(cycleEvent(128, programFive), token) == .ok)
-    #expect(rig.push(cycleEvent(140, controlNine), token) == .ok)
+private func retireWithCarry(_ rig: CycleRig, _ token: ProducerToken,
+                             caller: inout RefusalCallerToken) -> KernelRetirementLoss {
+    #expect(rig.push(cycleEvent(128, programFive), token, caller: &caller) == .ok)
+    #expect(rig.push(cycleEvent(140, controlNine), token, caller: &caller) == .ok)
     #expect(runBlock(rig.cycle, 64).0.pending == 2)
     return rig.cycle.retire()
 }
@@ -61,9 +62,12 @@ extension RealtimeHandoffTests {
         /// frame; a late carried event dropped.
         @Test(arguments: [Int64(0), 1, 8, 1_000])
         func carriedEventsDispatchLateAfterAnyGap(gap: Int64) throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            let loss = retireWithCarry(rig, token)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            let loss = retireWithCarry(rig, token, caller: &caller!)
             #expect(loss.programs == 1 && loss.controls == 1 && loss.receiverStateMayBeStale)
             let next = try replacement(of: rig)
             let start = 128 + 64 * gap
@@ -82,12 +86,15 @@ extension RealtimeHandoffTests {
         /// that same block, at `blockStart` (192, after a one-callback gap). Kills: re-admission gated by the
         /// watermark.
         @Test func carryDeliveredWhileReplacementFlushes() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            _ = retireWithCarry(rig, token)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            _ = retireWithCarry(rig, token, caller: &caller!)
             let next = try replacement(of: rig, perLaneQuota: 1)
-            #expect(rig.push(cycleEvent(200, noteOn(60)), token) == .ok)
-            #expect(rig.push(cycleEvent(210, noteOn(61)), token) == .ok)
+            #expect(rig.push(cycleEvent(200, noteOn(60)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(210, noteOn(61)), token, caller: &caller!) == .ok)
             let (result, emitted) = runBlock(next, 192)
             #expect(result.flushing && result.drained == 1 && result.discardedWhileSilenced == 1)
             #expect(result.status == .ok && result.dispatched == 0 && result.pending == 0)
@@ -102,12 +109,15 @@ extension RealtimeHandoffTests {
         /// watermark discards only `noteOn`s), and the next replacement delivers it on time at 200 while it discards
         /// the lane's flushed `noteOn` (210). Kills: flushed entries left out of the carry.
         @Test func carriedStatefulEventFromFlushedLaneIsStillCarried() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
             rig.cycle.retire()
             let middle = try replacement(of: rig, perLaneQuota: 1)
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(200, controlNine), token) == .ok)
-            #expect(rig.push(cycleEvent(210, noteOn(60)), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(200, controlNine), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(210, noteOn(60)), token, caller: &caller!) == .ok)
             let (flushed, early) = runBlock(middle, 64)
             #expect(flushed.flushing && flushed.drained == 1 && flushed.pending == 1 && early.isEmpty)
             let loss = middle.retire()
@@ -125,9 +135,12 @@ extension RealtimeHandoffTests {
         /// so the carry stays pending and unresolved, and the next block delivers both carried events at its
         /// `blockStart`. Kills: re-admission in a silenced block; a carry dropped by a silenced block.
         @Test func carryWaitsOutSilencedReplacement() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            _ = retireWithCarry(rig, token)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            _ = retireWithCarry(rig, token, caller: &caller!)
             #expect(rig.safety.request(.panic, scope: 0) == .ok)
             let next = try replacement(of: rig)
             let (muted, silent) = runBlock(next, 192)
@@ -148,10 +161,13 @@ extension RealtimeHandoffTests {
         /// both notes at its `blockStart` (the takeover) and applies the panic (`.safetyMute`); the next block runs
         /// `.ok`. Kills: the takeover skipped in the first block; safety requests not taken there.
         @Test func gapDefersTakeoverReleasesAndPanic() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(10, noteOn(60)), token) == .ok)
-            #expect(rig.push(cycleEvent(20, noteOn(61), scope: 1), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(10, noteOn(60)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(20, noteOn(61), scope: 1), token, caller: &caller!) == .ok)
             #expect(runBlock(rig.cycle, 0).0.dispatched == 2)
             #expect(rig.cycle.retire() == KernelRetirementLoss())
             #expect(rig.safety.request(.panic, scope: 0) == .ok)
@@ -177,20 +193,24 @@ extension RealtimeHandoffTests {
         /// `.silenced(.scopeFaulted)` and is the first to drain the lane. Kills: a refused `noteOff` that does not
         /// latch; a replacement that skips the latch check in its first block; a gap callback that drains.
         @Test func gapOverflowRefusesNoteOffAndFaultsReplacement() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let laneCapacity = 20
             let rig = try CycleRig(laneCapacity: laneCapacity)
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             rig.cycle.retire()
             var start: Int64 = 0
             for index in 0..<laneCapacity {
-                #expect(rig.push(cycleEvent(start, .noteOff(channel: 0, note: UInt8(index))), token) == .ok)
+                #expect(rig.push(cycleEvent(start, .noteOff(channel: 0, note: UInt8(index))), token, caller: &caller!)
+                        == .ok)
                 let (idle, emitted) = runBlock(rig.cycle, start)
                 #expect(idle.retired && idle.drained == 0 && emitted.isEmpty)
                 start += 64
             }
             #expect(!rig.faults.isLatched(CycleRig.criticalScope))
             let refused = cycleEvent(start, .noteOff(channel: 0, note: 60))
-            #expect(rig.push(refused, token) == .refused(.criticalExhausted))
+            #expect(rig.push(refused, token, caller: &caller!) == .refused(.criticalExhausted))
             #expect(rig.faults.isLatched(CycleRig.criticalScope))
             let next = try replacement(of: rig)
             let (first, _) = runBlock(next, start)
@@ -212,29 +232,34 @@ extension RealtimeHandoffTests {
         /// event or release; a gap callback doing event work; the takeover skipped in the first block; a race TSan
         /// can see.
         @Test(.timeLimit(.minutes(1))) func renderCountsGapBlocksUntilInstall() throws {
-            for round in 0..<16 { try gapRound(Int64(round)) }
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
+            for round in 0..<16 { try gapRound(Int64(round), caller: &caller!) }
         }
 
-        private func gapRound(_ round: Int64) throws {
+        private func gapRound(_ round: Int64, caller: inout RefusalCallerToken) throws {
             let rig = try CycleRig(laneCapacity: 32)
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller)
             let base = 1_000 + round
             for (index, held) in heldNotes.enumerated() {
-                #expect(rig.push(cycleEvent(base + Int64(index), noteOn(held.note), scope: held.scope), token) == .ok)
+                #expect(rig.push(cycleEvent(base + Int64(index), noteOn(held.note), scope: held.scope), token,
+                                 caller: &caller) == .ok)
             }
             let carried = [cycleEvent(base + 100, programFive), cycleEvent(base + 110, controlNine)]
-            for event in carried { #expect(rig.push(event, token) == .ok) }
+            for event in carried { #expect(rig.push(event, token, caller: &caller) == .ok) }
             let last = rig.cycle.run(blockStart: base, frames: 64) { _, _ in }
             #expect(last.dispatched == heldNotes.count && last.pending == 2)
             let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
                                          safety: rig.safety, ramps: rig.ramps,
                                          admissionRefusals: rig.cycle.admissionRefusals)
             let run = CycleStressRun()
+            let renderRole = try #require(RefusalCaller.prepare())
             let handOff = GapHandOff()
             let traces = CycleSlots<GapTrace>(1)
             let notes = CycleSlots<[String]>(1)
             let workers: [@Sendable (CycleStressRun) -> Void] = [
-                { traces.set(0, gapRender(rig, token, $0, handOff, from: base + 64)) },
+                { traces.set(0, gapRender(rig, token, renderRole, $0, handOff, from: base + 64)) },
                 { notes.set(0, gapControl(parts, $0, handOff)) }
             ]
             try #require(runCycleWorkers(run, workers))
@@ -296,10 +321,18 @@ private struct GapTrace: Sendable {
 /// Render: retires `rig.cycle` once control was refused, runs the retired cycle as one event-free callback per spin
 /// from `first` until the replacement appears, then four replacement blocks, queueing `noteOn(70)` in scope 0 and
 /// `noteOn(71)` in scope 1 for the second. Each wait ends at most `CycleStressRun.waitLimit` after it starts.
-@Sendable private func gapRender(_ rig: CycleRig, _ token: ProducerToken, _ run: CycleStressRun,
-                                 _ handOff: GapHandOff, from first: Int64) -> GapTrace {
+@Sendable private func gapRender( // swiftlint:disable:this function_parameter_count
+    _ rig: CycleRig, _ token: ProducerToken, _ role: RefusalCaller, _ run: CycleStressRun, _ handOff: GapHandOff,
+    from first: Int64
+) -> GapTrace {
     var trace = GapTrace()
+    var caller: RefusalCallerToken? = try? RefusalCalling.take(role)
+    defer { RefusalCalling.giveBack(role, &caller) }
     guard run.arriveAndWait() else { return trace }
+    guard caller != nil else {
+        trace.violations.append("render: refusal caller unavailable")
+        return trace
+    }
     let refusalDeadline = ContinuousClock.now + CycleStressRun.waitLimit
     while handOff.refused.load(ordering: .acquiring) == 0, ContinuousClock.now < refusalDeadline, !run.shouldStop {
         _ = sched_yield()
@@ -323,7 +356,9 @@ private struct GapTrace: Sendable {
     for block in 0..<4 {
         for scope in UInt32(0)..<2 where block == 1 {
             let event = cycleEvent(start + 8, noteOn(70 + UInt8(scope)), scope: scope, sequence: UInt64(scope))
-            if rig.push(event, token) != .ok { trace.violations.append("noteOn in scope \(scope) refused") }
+            if rig.push(event, token, caller: &caller!) != .ok {
+                trace.violations.append("noteOn in scope \(scope) refused")
+            }
         }
         var emitted: [CycleEmission] = []
         let result = next.run(blockStart: start, frames: 64) { emitted.append(CycleEmission(event: $0, frame: $1)) }

@@ -112,7 +112,7 @@ enum FanInLaneWord {
 
 /// Fan-in from up to `KernelLimits.maximumProducers` producers to one consumer. Reference model; not RT-certified.
 ///
-/// Lanes. Each producer claims a lane with `claimProducer()` and pushes only through its `ProducerToken`. A lane
+/// Lanes. Each producer claims a lane with `claimProducer` and pushes only through its `ProducerToken`. A lane
 /// is an M4 `ReservedCapacityRing`, so each producer has its own general room and its own critical reserve: a
 /// flooding producer is refused on its own lane and cannot take another lane's capacity. Nothing is merged or
 /// reordered; each lane is FIFO and `drain` tags every element with its lane, so per-producer order is kept.
@@ -162,10 +162,12 @@ enum FanInLaneWord {
 /// Both are `FanInRefusalCounter`s, so each count's callers over this handoff's whole lifetime must keep that type's
 /// caller contract (at most K < 2^39 logical chains, each non-reentrant and happens-before ordered). The lane count
 /// does not bound these callers: any thread may call `claimProducer`, and any thread holding any token, stale or
-/// foreign, may push or release with it. The invalid-token paths raise no fault, so no latch limits or reports
-/// them; a failed claim does raise `.producerSlotsExhausted` through the claim chain (or latches its contended
-/// fault), but the count's bound does not rely on it: the claim chain bounds the raises on `claimFaults`, not this
-/// counter's callers. Reference model only: #190 must prove the chain bound for the real callers before any hot use.
+/// foreign, may push or release with it. Since #768 K-RC2 `claimProducer`, `tryPush` and `releaseProducer` borrow
+/// an exclusive `RefusalCallerToken` (`caller`) for the whole call, valid or not, so every caller is a prepared
+/// `RefusalCaller` role and K is at most that type's lifetime budget. The invalid-token paths raise no fault, so no
+/// latch limits or reports them; a failed claim does raise `.producerSlotsExhausted` through the claim chain (or
+/// latches its contended fault), but the count's bound does not rely on it: the claim chain bounds the raises on
+/// `claimFaults`, not this counter's callers. Reference model only; no real caller is RT-qualified.
 ///
 /// Fair drain. `drain` visits lanes from a rotating start lane and takes at most `perLaneQuota` from each until
 /// every lane is visited or `total` is spent. The next drain starts after the last lane visited, or at that lane
@@ -329,7 +331,7 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
     /// Any producer context (see Progress). Claims the lowest claimable lane, or returns `nil` after counting the
     /// refusal (see Refusal counting) and raising `.producerSlotsExhausted` on `producerSlotsScope` at `frame`
     /// through the claim chain; a refusal that finds the token held latches the contended fault instead.
-    func claimProducer(frame: Int64 = 0) -> ProducerToken? {
+    func claimProducer(frame: Int64 = 0, caller: inout RefusalCallerToken) -> ProducerToken? {
         var lane = 0
         while lane < laneCount {
             let state = (states + lane).pointee.load(ordering: .relaxed)
@@ -342,7 +344,7 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
             }
             lane &+= 1
         }
-        refusedClaims.bump()
+        refusedClaims.bump(caller: &caller)
         claimChain.refuse(producerSlotsScope, frame: frame)
         return nil
     }
@@ -351,7 +353,7 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
     /// the next `drain` that finds it empty frees it for a new claim. Any token that does not own its lane is
     /// refused with `.refused(.notOwner)` and counted (see Refusal counting); no fault is raised.
     @discardableResult
-    func releaseProducer(_ token: ProducerToken) -> KernelStatus {
+    func releaseProducer(_ token: ProducerToken, caller: inout RefusalCallerToken) -> KernelStatus {
         let lane = Int(token.lane)
         // Defense in depth (see Tokens): `held(by:)` refuses a generation that would carry phase bits into the word.
         // Releasing: publishes this producer's pushes and lane state to the consumer (see Ordering).
@@ -360,7 +362,7 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
                   expected: held, desired: FanInLaneWord.retire(held), successOrdering: .releasing,
                   failureOrdering: .relaxed
               ).exchanged else {
-            refusedNotOwner.bump()
+            refusedNotOwner.bump(caller: &caller)
             return .refused(.notOwner)
         }
         return .ok
@@ -371,11 +373,12 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
     /// `.refused(.criticalExhausted)` at lane capacity, which also raises `.criticalExhausted` on `criticalScope`.
     /// A token that does not own its lane is refused with `.refused(.notOwner)` and counted (see Refusal counting);
     /// no fault is raised.
-    func tryPush(_ value: Element, class eventClass: EventClass, frame: Int64, token: ProducerToken) -> KernelStatus {
+    func tryPush(_ value: Element, class eventClass: EventClass, frame: Int64, token: ProducerToken,
+                 caller: inout RefusalCallerToken) -> KernelStatus {
         let lane = Int(token.lane)
         guard token.handoff == identity, lane < laneCount, let held = FanInLaneWord.held(by: token.generation),
               (states + lane).pointee.load(ordering: .relaxed) == held else {
-            refusedNotOwner.bump()
+            refusedNotOwner.bump(caller: &caller)
             return .refused(.notOwner)
         }
         return lanes[lane]._withUnsafeGuaranteedRef { $0.tryPush(value, class: eventClass, frame: frame) }

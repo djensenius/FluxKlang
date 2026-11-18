@@ -86,10 +86,13 @@ extension RealtimeHandoffTests {
         /// the ownership. A `.freshFanIn` cycle over a new ownership with a note already marked takes nothing over.
         /// Kills: synthesis skipped; synthesis on `.freshFanIn` too; ownership not cleared.
         @Test func takeoverReleasesANoteWhoseNoteOffOnlyTheRetiredCycleBuffered() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(0, noteOn(9)), token) == .ok)
-            #expect(rig.push(cycleEvent(128, noteOff(9)), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(0, noteOn(9)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(128, noteOff(9)), token, caller: &caller!) == .ok)
             let (old, sounded) = rig.run(0, 64)
             #expect(sounded.map(\.event.payload) == [noteOn(9)] && old.pending == 1)
             let replacement = try takeover(of: rig)
@@ -114,21 +117,24 @@ extension RealtimeHandoffTests {
         /// (counted, not emitted, nothing latched); a re-struck key then sounds and releases as usual. Kills: the
         /// takeover not recording its releases (double release); ownership not cleared.
         @Test func lateNoteOffAfterTakeoverIsConsumedOnceAndARestruckNoteReleases() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(0, noteOn(9)), token) == .ok)
-            #expect(rig.push(cycleEvent(128, noteOff(9)), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(0, noteOn(9)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(128, noteOff(9)), token, caller: &caller!) == .ok)
             _ = rig.run(0, 64)
             let replacement = try takeover(of: rig)
             #expect(takeoverRun(replacement, 64).1 == [takeoverRelease(TakeoverKey(0, 0, 9), at: 64)])
-            #expect(rig.push(cycleEvent(128, noteOff(9)), token) == .ok)
+            #expect(rig.push(cycleEvent(128, noteOff(9)), token, caller: &caller!) == .ok)
             let (late, lateEmitted) = takeoverRun(replacement, 128)
             #expect(lateEmitted.isEmpty && late.status == .ok && late.releasedNotes == 0)
             #expect(late.discardedWhileSilenced == 1 && late.dispatched == 0)
             #expect(!rig.faults.isLatched(CycleRig.criticalScope))
             #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: 9))
-            #expect(rig.push(cycleEvent(192, noteOn(9)), token) == .ok)
-            #expect(rig.push(cycleEvent(200, noteOff(9)), token) == .ok)
+            #expect(rig.push(cycleEvent(192, noteOn(9)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(200, noteOff(9)), token, caller: &caller!) == .ok)
             let (_, restruck) = takeoverRun(replacement, 192)
             #expect(restruck.map(\.event.payload) == [noteOn(9), noteOff(9)])
             #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: 9))
@@ -137,13 +143,16 @@ extension RealtimeHandoffTests {
         /// With nothing sounding the takeover emits and counts nothing, and ends at once: a `noteOn` queued after the
         /// first cycle proved the lanes empty sounds. Guards the empty case: a takeover that never ends.
         @Test func takeoverWithNothingSoundingEmitsNothing() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             let replacement = try takeover(of: rig)
             let (first, emitted) = takeoverRun(replacement, 0)
             #expect(emitted.isEmpty && first.releasedNotes == 0 && first.discardedWhileSilenced == 0)
             #expect(first.discardedDuringTakeover == 0)
-            #expect(rig.push(cycleEvent(64, noteOn(9)), token) == .ok)
+            #expect(rig.push(cycleEvent(64, noteOn(9)), token, caller: &caller!) == .ok)
             #expect(takeoverRun(replacement, 64).1.map(\.event.payload) == [noteOn(9)])
         }
 
@@ -154,9 +163,12 @@ extension RealtimeHandoffTests {
         /// Kills: the carry dropped; `noteOn`s decided in held scopes; the cursor test reversed; the discard counted
         /// elsewhere or not copied into the result.
         @Test func takeoverCarriesReleasesBeyondBlockCapacityInOrder() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             for sounding in [3, 4, 7] {
                 let rig = try CycleRig()
-                let token = try #require(rig.events.claimProducer())
+                let token = try RefusalCalling.claim(rig.events, &caller!)
                 for key in sevenKeys.prefix(sounding) {
                     #expect(rig.ownership.noteOn(scope: key.scope, channel: key.channel, note: key.note) == .ok)
                 }
@@ -166,7 +178,7 @@ extension RealtimeHandoffTests {
                     let pushed = [cycleEvent(blockStart, noteOn(100), scope: 0),
                                   cycleEvent(blockStart, noteOn(100), scope: 1)]
                     if block == 1 || block == 3 {
-                        for event in pushed { #expect(rig.push(event, token) == .ok) }
+                        for event in pushed { #expect(rig.push(event, token, caller: &caller!) == .ok) }
                     }
                     let chunk = sevenKeys.prefix(sounding).dropFirst(block * 3).prefix(3)
                     var expected = chunk.map { takeoverRelease($0, at: blockStart) }
@@ -189,9 +201,12 @@ extension RealtimeHandoffTests {
         /// takeover chunk first, then the interruption releases the rest, so every key is released exactly once and
         /// the takeover ends (its next pass finds nothing); a later `noteOn` in scope 1 sounds.
         @Test func panicOrLatchMidTakeoverReleasesEveryNoteExactlyOnce() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             for latch in [false, true] {
                 let rig = try CycleRig()
-                let token = try #require(rig.events.claimProducer())
+                let token = try RefusalCalling.claim(rig.events, &caller!)
                 for key in sevenKeys {
                     #expect(rig.ownership.noteOn(scope: key.scope, channel: key.channel, note: key.note) == .ok)
                 }
@@ -212,7 +227,7 @@ extension RealtimeHandoffTests {
                 let (after, afterEmitted) = takeoverRun(replacement, 128)
                 #expect(after.status == .ok && after.releasedNotes == 0 && afterEmitted.isEmpty)
                 #expect(releasedKeys(emitted) == sevenKeys && emitted.count == sevenKeys.count)
-                #expect(rig.push(cycleEvent(192, noteOn(100), scope: 1), token) == .ok)
+                #expect(rig.push(cycleEvent(192, noteOn(100), scope: 1), token, caller: &caller!) == .ok)
                 let (later, laterEmitted) = takeoverRun(replacement, 192)
                 #expect(laterEmitted.map(\.event.payload) == [noteOn(100)] && later.discardedDuringTakeover == 0)
             }
@@ -223,8 +238,11 @@ extension RealtimeHandoffTests {
         /// The takeover record is per cycle: a late `noteOff` for a key the first takeover released reaches the
         /// second as an ordinary unowned `noteOff` and is emitted (redundant, harmless), never latched.
         @Test func secondReplacementMidTakeoverReleasesTheRestOnce() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             for key in sevenKeys {
                 #expect(rig.ownership.noteOn(scope: key.scope, channel: key.channel, note: key.note) == .ok)
             }
@@ -237,7 +255,7 @@ extension RealtimeHandoffTests {
                 #expect(result.releasedNotes == [3, 1, 0][Int(block) - 1])
             }
             #expect(releasedKeys(emitted) == sevenKeys && emitted.count == sevenKeys.count)
-            #expect(rig.push(cycleEvent(256, noteOff(1)), token) == .ok)
+            #expect(rig.push(cycleEvent(256, noteOff(1)), token, caller: &caller!) == .ok)
             let (late, lateEmitted) = takeoverRun(second, 256)
             #expect(lateEmitted.map(\.event.payload) == [noteOff(1)] && late.dispatched == 1)
             #expect(!rig.faults.isLatched(CycleRig.criticalScope))
@@ -248,6 +266,9 @@ extension RealtimeHandoffTests {
         /// released in order across calls, fewer than `limit` when that is all. A takeover with notes only in the
         /// last scope's last bit releases them and ends (its cursor reaches the end).
         @Test func releaseFirstEdgesAndATakeoverEndingAtTheLastScope() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let ownership = try NoteOwnership(scopes: 2)
             var released: [TakeoverKey] = []
             #expect(ownership.releaseFirst(scope: 1, limit: 4) { released.append(TakeoverKey(1, $0, $1)) } == 0)
@@ -267,11 +288,11 @@ extension RealtimeHandoffTests {
             #expect(ownership.ownedCount(scope: 1) == 0)
 
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             #expect(rig.ownership.noteOn(scope: 1, channel: 15, note: 127) == .ok)
             let replacement = try takeover(of: rig, blockCapacity: 1)
             #expect(takeoverRun(replacement, 0).1 == [takeoverRelease(TakeoverKey(1, 15, 127), at: 0)])
-            #expect(rig.push(cycleEvent(64, noteOn(100), scope: 1), token) == .ok)
+            #expect(rig.push(cycleEvent(64, noteOn(100), scope: 1), token, caller: &caller!) == .ok)
             let (after, emitted) = takeoverRun(replacement, 64)
             #expect(emitted.map(\.event.payload) == [noteOn(100)] && after.releasedNotes == 0)
         }
@@ -280,10 +301,13 @@ extension RealtimeHandoffTests {
         /// the `noteOn`s held in scope 1 in blocks 1–3 are discarded and accumulate in the published telemetry,
         /// which keeps the sum once the takeover ends and scope 1 sounds again. Kills: the discards not accumulated.
         @Test func takeoverDiscardsAccumulateInTelemetry() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let slots = try kernelCycleTelemetrySlots()
             let output = KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0)
             let rig = try CycleRig(telemetry: output)
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             for key in [TakeoverKey(0, 0, 1), TakeoverKey(0, 0, 2), TakeoverKey(1, 0, 5), TakeoverKey(1, 0, 6),
                         TakeoverKey(1, 0, 7)] {
                 #expect(rig.ownership.noteOn(scope: key.scope, channel: key.channel, note: key.note) == .ok)
@@ -293,7 +317,7 @@ extension RealtimeHandoffTests {
             var discarded: [Int] = []
             for block in Int64(0)...5 {
                 if (1...3).contains(block) || block == 5 {
-                    #expect(rig.push(cycleEvent(block * 64, noteOn(100), scope: 1), token) == .ok)
+                    #expect(rig.push(cycleEvent(block * 64, noteOn(100), scope: 1), token, caller: &caller!) == .ok)
                 }
                 let (result, emitted) = takeoverRun(successor, block * 64)
                 discarded.append(result.discardedDuringTakeover)
@@ -315,14 +339,18 @@ extension RealtimeHandoffTests {
         /// replacement in between it is superseded, never sounds and is never owned. Kills: the decider allocating
         /// its own tombstone table.
         @Test func replacementKeepsReleaseHistorySoALateNoteOnNeverSticks() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             for replaced in [false, true] {
                 let rig = try CycleRig()
-                let first = try #require(rig.events.claimProducer()), second = try #require(rig.events.claimProducer())
-                #expect(rig.push(cycleEvent(999, noteOff(60)), first) == .ok)
+                let first = try RefusalCalling.claim(rig.events, &caller!)
+                let second = try RefusalCalling.claim(rig.events, &caller!)
+                #expect(rig.push(cycleEvent(999, noteOff(60)), first, caller: &caller!) == .ok)
                 #expect(rig.run(1_000, 64).1.map(\.event.payload) == [noteOff(60)])
                 let cycle = replaced ? try takeover(of: rig) : rig.cycle
                 #expect(takeoverRun(cycle, 1_064).1.isEmpty)
-                #expect(rig.push(cycleEvent(990, noteOn(60)), second) == .ok)
+                #expect(rig.push(cycleEvent(990, noteOn(60)), second, caller: &caller!) == .ok)
                 let (late, emitted) = takeoverRun(cycle, 1_128)
                 #expect(emitted.isEmpty && late.discardedSuperseded == 1)
                 #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: 60))
@@ -335,18 +363,22 @@ extension RealtimeHandoffTests {
         /// A pending `noteOn(61)` (with its `noteOff`) is dropped with the retired cycle: it never sounds or sticks.
         /// Kills: `retire()` recording nothing.
         @Test func retiredCyclesPendingNoteOffStillSupersedesALaterArrivingNoteOn() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             for replaced in [false, true] {
                 let rig = try CycleRig()
-                let first = try #require(rig.events.claimProducer()), second = try #require(rig.events.claimProducer())
+                let first = try RefusalCalling.claim(rig.events, &caller!)
+                let second = try RefusalCalling.claim(rig.events, &caller!)
                 for event in [cycleEvent(1_100, noteOff(60)), cycleEvent(1_100, noteOn(61)),
                               cycleEvent(1_120, noteOff(61))] {
-                    #expect(rig.push(event, second) == .ok)
+                    #expect(rig.push(event, second, caller: &caller!) == .ok)
                 }
                 #expect(rig.run(1_000, 64).0.pending == 3)
                 let cycle = replaced ? try takeover(of: rig) : rig.cycle
                 let due = takeoverRun(cycle, 1_064).1.map(\.event.payload)
                 #expect(due == (replaced ? [] : [noteOff(60), noteOn(61), noteOff(61)]))
-                #expect(rig.push(cycleEvent(1_050, noteOn(60)), first) == .ok)
+                #expect(rig.push(cycleEvent(1_050, noteOn(60)), first, caller: &caller!) == .ok)
                 let (late, emitted) = takeoverRun(cycle, 1_128)
                 #expect(emitted.isEmpty && late.discardedSuperseded == 1)
                 for note in UInt8(60)...61 { #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: note)) }
@@ -359,8 +391,11 @@ extension RealtimeHandoffTests {
         /// Kills: the retirement or the fresh check skipped; the claim never recorded; `retire()` not handing the
         /// claim back; a stale retire releasing any claim.
         @Test func preparationEnforcesRetirementAndTakeoverOverAUsedOwnership() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             let fresh = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
                                          safety: rig.safety, ramps: rig.ramps, start: .freshFanIn)
             let gate = try ClockPulseGate(maximumPulsesPerBlock: 4, staleTolerance: 48)
@@ -369,7 +404,7 @@ extension RealtimeHandoffTests {
             #expect(refusal { () throws(KernelCycle.PreparationError) in
                 try KernelCycle(fresh, pulses: gate, blockCapacity: 64, perLaneQuota: 64)
             } == .ownershipClaim(.alreadyUsed))
-            #expect(rig.push(cycleEvent(0, noteOn(9)), token) == .ok)
+            #expect(rig.push(cycleEvent(0, noteOn(9)), token, caller: &caller!) == .ok)
             #expect(rig.run(0, 64).1.map(\.event.payload) == [noteOn(9)])
             rig.cycle.retire()
             #expect(refusal { () throws(KernelCycle.PreparationError) in
@@ -388,19 +423,22 @@ extension RealtimeHandoffTests {
         /// released note 9 is consumed there (not emitted) and clears the takeover record, so a later unowned
         /// `noteOff(9)` is an ordinary one (emitted), not consumed again. Kills: the silenced consume keeping the bit.
         @Test func lateNoteOffInASilencedCycleIsConsumedAndClearsTheTakeoverRecord() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(0, noteOn(9)), token) == .ok)
-            #expect(rig.push(cycleEvent(128, noteOff(9)), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(0, noteOn(9)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(128, noteOff(9)), token, caller: &caller!) == .ok)
             _ = rig.run(0, 64)
             let replacement = try takeover(of: rig)
             #expect(takeoverRun(replacement, 64).1 == [takeoverRelease(TakeoverKey(0, 0, 9), at: 64)])
-            #expect(rig.push(cycleEvent(130, noteOff(9)), token) == .ok)
+            #expect(rig.push(cycleEvent(130, noteOff(9)), token, caller: &caller!) == .ok)
             #expect(rig.safety.request(.panic, scope: 0) == .ok)
             let (silenced, silencedEmitted) = takeoverRun(replacement, 128)
             #expect(silenced.status == .silenced(.safetyMute) && silencedEmitted.isEmpty)
             #expect(silenced.discardedWhileSilenced == 1)
-            #expect(rig.push(cycleEvent(200, noteOff(9)), token) == .ok)
+            #expect(rig.push(cycleEvent(200, noteOff(9)), token, caller: &caller!) == .ok)
             let (later, laterEmitted) = takeoverRun(replacement, 192)
             #expect(laterEmitted.map(\.event.payload) == [noteOff(9)])
             #expect(later.dispatched == 1 && later.discardedWhileSilenced == 0)
@@ -411,17 +449,20 @@ extension RealtimeHandoffTests {
         /// second `noteOff` follows the re-struck note's. Kills: a re-strike clearing the takeover record (the
         /// round 2f draft called that behaviour-neutral; it is not).
         @Test func restruckNoteReleasedThenLateNoteOffIsConsumedOnce() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(0, noteOn(9)), token) == .ok)
-            #expect(rig.push(cycleEvent(128, noteOff(9)), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(0, noteOn(9)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(128, noteOff(9)), token, caller: &caller!) == .ok)
             _ = rig.run(0, 64)
             let replacement = try takeover(of: rig)
             #expect(takeoverRun(replacement, 64).1 == [takeoverRelease(TakeoverKey(0, 0, 9), at: 64)])
-            #expect(rig.push(cycleEvent(130, noteOn(9)), token) == .ok)
-            #expect(rig.push(cycleEvent(140, noteOff(9)), token) == .ok)
+            #expect(rig.push(cycleEvent(130, noteOn(9)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(140, noteOff(9)), token, caller: &caller!) == .ok)
             #expect(takeoverRun(replacement, 128).1.map(\.event.payload) == [noteOn(9), noteOff(9)])
-            #expect(rig.push(cycleEvent(150, noteOff(9)), token) == .ok)
+            #expect(rig.push(cycleEvent(150, noteOff(9)), token, caller: &caller!) == .ok)
             let (late, lateEmitted) = takeoverRun(replacement, 192)
             #expect(lateEmitted.isEmpty && late.discardedWhileSilenced == 1 && late.dispatched == 0)
             #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: 9))
@@ -432,15 +473,18 @@ extension RealtimeHandoffTests {
         /// replacement, leaves the shared ownership (note 9 for the takeover) and its own telemetry alone; a second
         /// `retire()` releases nothing. Kills: the retired flag ignored.
         @Test func runAfterRetireDoesNothingAndLeavesTheReplacementAlone() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(0, noteOn(9)), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(0, noteOn(9)), token, caller: &caller!) == .ok)
             #expect(rig.run(0, 64).1.map(\.event.payload) == [noteOn(9)])
             let successor = try takeover(of: rig)
             rig.cycle.retire()
             #expect(refusal { () throws(KernelCycle.PreparationError) in try replacement(of: rig) }
                     == .ownershipClaim(.predecessorNotRetired))
-            #expect(rig.push(cycleEvent(64, noteOn(10)), token) == .ok)
+            #expect(rig.push(cycleEvent(64, noteOn(10)), token, caller: &caller!) == .ok)
             #expect(rig.safety.request(.panic, scope: 1) == .ok)
             let telemetry = rig.cycle.telemetry
             let (stray, strayEmitted) = rig.run(64, 64)

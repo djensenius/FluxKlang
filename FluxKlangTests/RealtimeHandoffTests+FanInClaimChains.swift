@@ -104,9 +104,10 @@ extension RealtimeHandoffTests {
 
         /// A one-lane handoff whose only lane the returned token already holds, so every further claim is refused.
         fileprivate static func full(_ faults: FaultChainAuthority, _ claims: FaultChainAuthority,
-                                     slots: FaultScope = Root.fanInSlotsScope) throws -> (FanIn, ProducerToken) {
+                                     slots: FaultScope = Root.fanInSlotsScope,
+                                     caller: inout RefusalCallerToken) throws -> (FanIn, ProducerToken) {
             let handoff = try preparation(faults, claims, lanes: 1, slots: slots).get()
-            return (handoff, try #require(handoff.claimProducer()))
+            return (handoff, try RefusalCalling.claim(handoff, &caller))
         }
 
         /// Nothing counted on the lanes' latch: the claim path never raises there.
@@ -117,6 +118,9 @@ extension RealtimeHandoffTests {
 
         /// T1. Kills: minting no claim chain, more than one, or one shared across handoffs.
         @Test func initMintsExactlyOneClaimChain() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let claims = try Root.fanInClaims(budget: 3)
             #expect(claims.mintedChains == 0)
@@ -124,11 +128,11 @@ extension RealtimeHandoffTests {
             #expect(claims.mintedChains == 1)
             let second = try Root.makeFanIn(faults, claims: claims, lanes: 1)
             #expect(claims.mintedChains == 2)
-            _ = try #require(first.claimProducer())
-            _ = try #require(second.claimProducer())
+            _ = try RefusalCalling.claim(first, &caller!)
+            _ = try RefusalCalling.claim(second, &caller!)
             // Holding the first handoff's token never contends a refusal on the second: each has its own chain.
             var refusals: [ProducerToken?] = []
-            #expect(first.withChainTokenHeld { refusals.append(second.claimProducer(frame: 4)) })
+            #expect(first.withChainTokenHeld { refusals.append(second.claimProducer(frame: 4, caller: &caller!)) })
             #expect(refusals == [nil] && second.contendedClaimCount == 0 && !claims.hasContendedFault)
             #expect(Root.fanInRecord(claims, Self.slots)?.count == 1)
             #expect(first.withChainTokenHeld {} && second.withChainTokenHeld {})
@@ -166,53 +170,64 @@ extension RealtimeHandoffTests {
         /// only the contended fault; a later refusal with the token free is counted normally. Kills: no
         /// `raiseContended`, no contended count, no refused count, or a token returned on the contended path.
         @Test func contendedRefusalReturnsNilAndRaisesContended() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let claims = try Root.fanInClaims()
-            let (handoff, owner) = try Self.full(faults, claims)
+            let (handoff, owner) = try Self.full(faults, claims, caller: &caller!)
             var refusals: [ProducerToken?] = []
-            #expect(handoff.withChainTokenHeld { refusals.append(handoff.claimProducer(frame: 9)) })
+            #expect(handoff.withChainTokenHeld { refusals.append(handoff.claimProducer(frame: 9, caller: &caller!)) })
             #expect(refusals == [nil] && handoff.refusedClaimCount == 1 && handoff.contendedClaimCount == 1)
             #expect(claims.hasContendedFault && claims.isLatched(Self.slots))
             #expect(Root.FaultChaining.records(claims).isEmpty && claims.unknownScopeFaults == 0)
             Self.expectLanesLatchUntouched(faults)
-            #expect(handoff.claimProducer(frame: 10) == nil)
+            #expect(handoff.claimProducer(frame: 10, caller: &caller!) == nil)
             #expect(handoff.refusedClaimCount == 2 && handoff.contendedClaimCount == 1)
             #expect(Root.fanInRecord(claims, Self.slots)
                     == FaultRecord(scope: Self.slots, kind: .producerSlotsExhausted, count: 1, firstFrame: 10))
-            #expect(handoff.releaseProducer(owner) == .ok && handoff.refusedNotOwnerCount == 0)
+            #expect(handoff.releaseProducer(owner, caller: &caller!) == .ok && handoff.refusedNotOwnerCount == 0)
         }
 
         /// T4. Claims that succeed while the token is held never touch it: no contention, no fault, no refusal.
         /// Kills: taking the token at entry (or on the success path).
         @Test func successfulClaimNeverTakesTheChainToken() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let claims = try Root.fanInClaims()
             let handoff = try Root.makeFanIn(faults, claims: claims)
             var tokens: [ProducerToken] = []
-            #expect(handoff.withChainTokenHeld { tokens = (0..<4).compactMap { _ in handoff.claimProducer() } })
+            #expect(handoff.withChainTokenHeld {
+                tokens = (0..<4).compactMap { _ in handoff.claimProducer(caller: &caller!) }
+            })
             #expect(tokens.map(\.lane) == [0, 1, 2, 3])
             #expect(handoff.refusedClaimCount == 0 && handoff.contendedClaimCount == 0)
             #expect(!claims.hasContendedFault && !claims.isLatched(Self.slots))
             #expect(Root.FaultChaining.records(claims).isEmpty)
             Self.expectLanesLatchUntouched(faults)
-            #expect(handoff.claimProducer(frame: 2) == nil && handoff.contendedClaimCount == 0)
+            #expect(handoff.claimProducer(frame: 2, caller: &caller!) == nil && handoff.contendedClaimCount == 0)
             #expect(Root.fanInRecord(claims, Self.slots)?.count == 1)
         }
 
         /// T5. After every refusal, counted or contended, the token is back in its slot and the next refusal is
         /// counted. Kills: a missing `put`.
         @Test func everyRefusalPutsTheTokenBack() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let claims = try Root.fanInClaims()
-            let (handoff, _) = try Self.full(faults, claims)
+            let (handoff, _) = try Self.full(faults, claims, caller: &caller!)
             for frame in Int64(1)...3 {
-                #expect(handoff.claimProducer(frame: frame) == nil)
+                #expect(handoff.claimProducer(frame: frame, caller: &caller!) == nil)
                 #expect(handoff.withChainTokenHeld {})
             }
             var contended: [ProducerToken?] = []
-            #expect(handoff.withChainTokenHeld { contended.append(handoff.claimProducer(frame: 4)) })
+            #expect(handoff.withChainTokenHeld { contended.append(handoff.claimProducer(frame: 4, caller: &caller!)) })
             #expect(contended == [nil] && handoff.withChainTokenHeld {})
-            #expect(handoff.claimProducer(frame: 5) == nil && handoff.withChainTokenHeld {})
+            #expect(handoff.claimProducer(frame: 5, caller: &caller!) == nil && handoff.withChainTokenHeld {})
             #expect(handoff.refusedClaimCount == 5 && handoff.contendedClaimCount == 1)
             #expect(Root.fanInRecord(claims, Self.slots)
                     == FaultRecord(scope: Self.slots, kind: .producerSlotsExhausted, count: 4, firstFrame: 1))
@@ -223,14 +238,18 @@ extension RealtimeHandoffTests {
         /// `claimProducer` raised before FLP6, for a prepared and an unprepared slots scope. Kills: a wrong scope,
         /// kind or frame on the token path, or a raise on the lanes' latch.
         @Test func claimRaiseMatchesPlainLatch() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let claims = try Root.fanInClaims(budget: 2)
             let twin = try FaultLatch(scopes: [Self.slots])
             let stray = FaultScope(handoff: 5, target: 9)
-            let (prepared, _) = try Self.full(faults, claims)
-            let (unprepared, _) = try Self.full(faults, claims, slots: stray)
-            let refusals = [prepared.claimProducer(frame: 17), prepared.claimProducer(frame: 18),
-                            unprepared.claimProducer(frame: 5)]
+            let (prepared, _) = try Self.full(faults, claims, caller: &caller!)
+            let (unprepared, _) = try Self.full(faults, claims, slots: stray, caller: &caller!)
+            let refusals = [prepared.claimProducer(frame: 17, caller: &caller!),
+                            prepared.claimProducer(frame: 18, caller: &caller!),
+                            unprepared.claimProducer(frame: 5, caller: &caller!)]
             #expect(refusals.allSatisfy { $0 == nil })
             for frame in Int64(17)...18 { _ = twin.raise(Self.slots, .producerSlotsExhausted, frame: frame) }
             _ = twin.raise(stray, .producerSlotsExhausted, frame: 5)
@@ -243,7 +262,7 @@ extension RealtimeHandoffTests {
             let expected = try #require(twin.observe(Self.slots))
             #expect(claims.acknowledge(observed) == twin.acknowledge(expected))
             #expect(!claims.isLatched(Self.slots) && !twin.isLatched(Self.slots))
-            #expect(prepared.claimProducer(frame: 40) == nil)
+            #expect(prepared.claimProducer(frame: 40, caller: &caller!) == nil)
             #expect(twin.raise(Self.slots, .producerSlotsExhausted, frame: 40) == .ok)
             #expect(Root.FaultChaining.records(claims) == Root.FaultChaining.records(twin))
             #expect(!claims.hasContendedFault && prepared.contendedClaimCount == 0)
@@ -261,23 +280,31 @@ extension RealtimeHandoffTests {
 
         @Test(.timeLimit(.minutes(1)))
         func concurrentRefusedClaimsAreCountedOrContended() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let faults = try Root.fanInLatch()
             let claims = try Root.fanInClaims()
-            let (handoff, _) = try FanInClaimChaining.full(faults, claims)
+            let (handoff, _) = try FanInClaimChaining.full(faults, claims, caller: &caller!)
             let state = ClaimChainStressState()
+            let roles = try (0..<Self.threads).map { _ in try #require(RefusalCaller.prepare()) }
             for thread in 0..<Self.threads {
                 Thread {
+                    defer { state.exited.add(1, ordering: .releasing) }
+                    var caller: RefusalCallerToken? = try? RefusalCalling.take(roles[thread])
+                    defer { RefusalCalling.giveBack(roles[thread], &caller) }
                     state.arrived.add(1, ordering: .releasing)
                     let deadline = ContinuousClock.now + .seconds(20)
                     while !state.started.load(ordering: .acquiring), ContinuousClock.now < deadline {}
+                    guard caller != nil else { return }
                     for call in 0..<Self.claimsPerThread {
-                        if handoff.claimProducer(frame: Int64(thread * Self.claimsPerThread + call)) == nil {
+                        let frame = Int64(thread * Self.claimsPerThread + call)
+                        if handoff.claimProducer(frame: frame, caller: &caller!) == nil {
                             state.refused.add(1, ordering: .relaxed)
                         } else {
                             state.claimed.add(1, ordering: .relaxed)
                         }
                     }
-                    state.exited.add(1, ordering: .releasing)
                 }.start()
             }
             let arrivalDeadline = ContinuousClock.now + .seconds(20)
@@ -293,6 +320,7 @@ extension RealtimeHandoffTests {
                 Issue.record("stress workers did not exit; post-run checks skipped")
                 return
             }
+            #expect(roles.allSatisfy { !RefusalCalling.isEmpty($0) })
             let refused = state.refused.load(ordering: .relaxed)
             let contended = handoff.contendedClaimCount
             print("FanInClaimChainingStress contended claims: \(contended)")

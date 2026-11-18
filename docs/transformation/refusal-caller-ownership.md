@@ -74,24 +74,34 @@ protect only the test thread's result inspection, not the tested worker reads.
 TSan is schedule-dependent evidence, not a weak-memory proof; removing ordering
 need not fail deterministically.
 
-## 4. What K-RC1 does not establish
+## 4. K-RC2 counter coverage, and what remains open
 
-No counter-writing API takes this token yet. `FanInRefusalCounter.bump`,
-`FanInHandoff.claimProducer`, `tryPush`, `releaseProducer`,
-`ProducerAdmission.push` and `KernelAdmissionRefusals.record` remain unchanged.
-Their existing conditional saturation contracts remain requirements, not
-enforced premises. Fault-chain tokens do not cover these separate counters.
+Every counter-writing API now requires one exclusive borrowed token
+(`caller: inout RefusalCallerToken`) for the whole operation:
+`FanInRefusalCounter.bump`, `FanInHandoff.claimProducer`, `tryPush`,
+`releaseProducer`, `ProducerAdmission.push` and `KernelAdmissionRefusals.record`.
+Nested writes forward the same borrow. There is no tokenless overload, implicit
+mint or busy-drop fallback, and every caller was migrated in the same change.
+Fault-chain tokens still do not cover these separate counters.
 
-K-RC2 must require one exclusive borrowed token throughout every such operation
-and migrate all callers without tokenless overloads. Only then can every
-counter's lifetime caller set (including retained tables and foreign aggregates)
-be shown a subset of this one global mint. With ordered nonoverlapping calls,
-each role can admit at most one stale addition past saturation; for
-`cap = 2^63 - 1`, `raw <= max(initial, cap + Kmax) < 2^64`.
-This is the intended future composition, **not a proof of current counter coverage**.
+So every counter's lifetime caller set (including retained tables and foreign
+aggregates) is a subset of this one global mint, and each logical chain is one
+prepared role. With ordered nonoverlapping calls, each role can admit at most
+one stale addition past saturation; for `cap = 2^63 - 1`,
+`raw <= max(initial, cap + Kmax) < 2^64`. This is a source-level reference-model
+argument under the exclusivity and HB assumptions above. It covers every caller
+compiled against these APIs; unsafe escapes stay outside the model.
+
+Tests hold the token in an `Optional` with a `defer` that returns it, lend
+`&caller!`, and pass explicit borrows to helpers. Each independently overlapping
+worker prepares its own role before threads start and takes its token inside the
+worker. Focused concurrent tests check exact stale, foreign and admission totals
+under per-worker roles, and a retained admission table across a cycle
+replacement. Compiler controls reject each of the six APIs without `caller:`
+(K-RC2 review evidence; not committed).
 
 An unavailable role means failure to acquire a capability, not an ordinary event
-refusal and not an uncounted `.notOwner` event result. K-RC1 adds no busy-drop
+refusal and not an uncounted `.notOwner` event result. There is no busy-drop
 wrapper. Application callback entry ownership, recovery, actual integration,
 platform progress and full #190/#64 qualification are separate obligations.
 `ProducerToken` and existing fault-chain/fallback contracts are unchanged.

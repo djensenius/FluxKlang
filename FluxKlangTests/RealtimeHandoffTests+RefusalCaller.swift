@@ -84,6 +84,8 @@ private struct NarrowCounter: Hashable {
 }
 
 private struct RefusalCallerEmptySlot: Error {}
+/// Visible to file-scope helpers and extensions of nested test types.
+typealias RefusalCalling = RealtimeHandoffTests.RefusalCalling
 
 extension RealtimeHandoffTests {
     /// Reduced-width interleaving evidence for `FanInRefusalCounter`'s caller contract (see its doc and the
@@ -137,6 +139,24 @@ extension RealtimeHandoffTests {
                 throw RefusalCallerEmptySlot()
             }
             return token
+        }
+
+        static func claim<Element>(_ handoff: FanInHandoff<Element>, _ caller: inout RefusalCallerToken,
+                                   sourceLocation: SourceLocation = #_sourceLocation) throws -> ProducerToken {
+            let token = handoff.claimProducer(caller: &caller)
+            return try #require(token, sourceLocation: sourceLocation)
+        }
+
+        static func give(_ role: RefusalCaller, _ caller: consuming RefusalCallerToken,
+                         sourceLocation: SourceLocation = #_sourceLocation) {
+            let status = role.put(caller)
+            #expect(status == .ok, sourceLocation: sourceLocation)
+        }
+
+        static func giveBack(_ role: RefusalCaller, _ caller: inout RefusalCallerToken?,
+                             sourceLocation: SourceLocation = #_sourceLocation) {
+            guard let token = caller.take() else { return }
+            give(role, token, sourceLocation: sourceLocation)
         }
 
         static func isEmpty(_ role: RefusalCaller) -> Bool {
