@@ -67,6 +67,33 @@ private final class ClaimChainStressState: Sendable {
     let claimed = Atomic<UInt64>(0)
 }
 
+/// Shared state for the lane hand-over stress (#190 K-190b). `turn` and `drainWanted` are relaxed on purpose: they
+/// add no happens-before edge, so holders are ordered only by the handoff's claim, release and drain and by the
+/// lane chain's slot, and TSan sees a missing acquire or release on that path.
+private final class LaneHandOverState: Sendable {
+    let arrived = Atomic<Int>(0)
+    let started = Atomic<Bool>(false)
+    let exited = Atomic<Int>(0)
+    /// The next hand-over (`round × threads + thread`); relaxed.
+    let turn = Atomic<Int>(0)
+    /// Set by a holder before it releases, cleared by the next holder once it has claimed; relaxed.
+    let drainWanted = Atomic<Bool>(false)
+    let refused = Atomic<UInt64>(0)
+    let admitted = Atomic<UInt64>(0)
+    let delivered = Atomic<UInt64>(0)
+    let other = Atomic<UInt64>(0)
+    let missed = Atomic<Int>(0)
+
+    /// Bounded spin, yielding the core; `false` at `deadline`.
+    func spin(until deadline: ContinuousClock.Instant, _ condition: () -> Bool) -> Bool {
+        while !condition() {
+            if ContinuousClock.now >= deadline { return false }
+            sched_yield()
+        }
+        return true
+    }
+}
+
 /// Shared by the fan-in suites (#190 FLP6).
 extension RealtimeHandoffTests {
     /// A claim authority that prepares only the fan-in's producer-slots scope.
@@ -332,6 +359,122 @@ extension RealtimeHandoffTests {
             #expect(claims.unknownScopeFaults == 0)
             FanInClaimChaining.expectLanesLatchUntouched(faults)
             #expect(handoff.withChainTokenHeld {})
+        }
+
+        static let handOverThreads = 4
+        static let handOverRounds = 200
+
+        /// T15 (#190 K-190b; lane-chain T14's stress, here for `file_length`). `Thread`s take turns holding one lane
+        /// while a drain thread empties it: each turn claims (retrying until the drain frees the lane), pushes
+        /// critical events until the first refusal and releases. The turn counter is relaxed, so successive holders
+        /// on different threads are ordered only by the handoff and the lane chain's slot. Every turn's refusal is
+        /// counted through the one lane chain and none contends (TSan, `--filter Stress`). Kills: a missing
+        /// acquire or release on the claim, release or free path (TSan); a chain minted per claim; a skipped `put`.
+        @Test(.timeLimit(.minutes(1)))
+        func laneHandOverAcrossThreadsNeverContends() throws {
+            let (threads, rounds) = (Self.handOverThreads, Self.handOverRounds)
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
+            let faults = try Root.fanInLatch()
+            let handoff = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 20)
+            let chainID = try #require(handoff.owners.first).laneChainID
+            let state = LaneHandOverState()
+            let roles = try (0..<threads).map { _ in try #require(RefusalCaller.prepare()) }
+            for thread in 0..<threads {
+                Thread {
+                    defer { state.exited.add(1, ordering: .releasing) }
+                    var caller: RefusalCallerToken? = try? RefusalCalling.take(roles[thread])
+                    defer { RefusalCalling.giveBack(roles[thread], &caller) }
+                    state.arrived.add(1, ordering: .releasing)
+                    let deadline = ContinuousClock.now + .seconds(25)
+                    guard state.spin(until: deadline, { state.started.load(ordering: .acquiring) }),
+                          caller != nil else { return }
+                    for round in 0..<rounds {
+                        let turn = round * threads + thread
+                        guard Self.holdLane(handoff, state, turn: turn, until: deadline, caller: &caller!) else {
+                            state.missed.add(1, ordering: .relaxed)
+                            return
+                        }
+                    }
+                }.start()
+            }
+            Thread {
+                defer { state.exited.add(1, ordering: .releasing) }
+                state.arrived.add(1, ordering: .releasing)
+                let deadline = ContinuousClock.now + .seconds(25)
+                guard state.spin(until: deadline, { state.started.load(ordering: .acquiring) }) else { return }
+                while state.turn.load(ordering: .relaxed) < threads * rounds, ContinuousClock.now < deadline {
+                    guard state.drainWanted.load(ordering: .relaxed) else {
+                        sched_yield()
+                        continue
+                    }
+                    let count = handoff.drain(perLaneQuota: 32, total: 32) { _, _ in }
+                    state.delivered.add(UInt64(count), ordering: .relaxed)
+                }
+            }.start()
+            let arrivalDeadline = ContinuousClock.now + .seconds(20)
+            while state.arrived.load(ordering: .acquiring) < threads + 1, ContinuousClock.now < arrivalDeadline {
+                Thread.sleep(forTimeInterval: 0.001)
+            }
+            state.started.store(true, ordering: .releasing)
+            let exitDeadline = ContinuousClock.now + .seconds(35)
+            while state.exited.load(ordering: .acquiring) < threads + 1, ContinuousClock.now < exitDeadline {
+                Thread.sleep(forTimeInterval: 0.001)
+            }
+            guard state.exited.load(ordering: .acquiring) == threads + 1 else {
+                Issue.record("hand-over workers did not exit; post-run checks skipped")
+                return
+            }
+            let turns = UInt64(threads * rounds)
+            let scope = Root.fanInCriticalScope
+            print("FanInClaimChainingStress hand-over refused claims: \(handoff.refusedClaimCount)")
+            #expect(roles.allSatisfy { !RefusalCalling.isEmpty($0) })
+            #expect(state.missed.load(ordering: .relaxed) == 0 && state.other.load(ordering: .relaxed) == 0)
+            #expect(state.refused.load(ordering: .relaxed) == turns)
+            #expect(handoff.contendedLaneCount(lane: 0) == 0 && !faults.hasContendedFault)
+            #expect(Root.fanInRecord(faults, scope)
+                    == FaultRecord(scope: scope, kind: .criticalExhausted, count: turns, firstFrame: 0))
+            #expect(handoff.refusedCount(lane: 0, class: .critical) == turns && handoff.refusedNotOwnerCount == 0)
+            #expect(faults.mintedChains == 1 && handoff.owners.first?.laneChainID == chainID)
+            // The joins order every worker before this thread, now the only consumer: draining frees the lane.
+            let rest = handoff.drain(perLaneQuota: 32, total: 32) { _, _ in }
+            let delivered = state.delivered.load(ordering: .relaxed) + UInt64(rest)
+            #expect(delivered == state.admitted.load(ordering: .relaxed))
+            #expect(try RefusalCalling.claim(handoff, &caller!).generation == turns + 1)
+            #expect(handoff.withLaneChainTokenHeld(lane: 0) {})
+        }
+
+        /// One hand-over turn of `laneHandOverAcrossThreadsNeverContends`: waits for `turn`, claims (retrying until
+        /// the drain frees the lane), pushes critical events until the first refusal, releases and passes the turn
+        /// on. `false` at `deadline`.
+        private static func holdLane(_ handoff: FanIn, _ state: LaneHandOverState, turn: Int,
+                                     until deadline: ContinuousClock.Instant,
+                                     caller: inout RefusalCallerToken) -> Bool {
+            guard state.spin(until: deadline, { state.turn.load(ordering: .relaxed) == turn }) else { return false }
+            var claimed: ProducerToken?
+            while claimed == nil, ContinuousClock.now < deadline {
+                claimed = handoff.claimProducer(frame: Int64(turn), caller: &caller)
+                if claimed == nil { sched_yield() }
+            }
+            guard let token = claimed else { return false }
+            state.drainWanted.store(false, ordering: .relaxed)
+            var status = KernelStatus.ok
+            while status == .ok, ContinuousClock.now < deadline {
+                status = handoff.tryPush(UInt64(turn), class: .critical, frame: Int64(turn), token: token,
+                                         caller: &caller)
+                if status == .ok { state.admitted.add(1, ordering: .relaxed) }
+            }
+            if status == .refused(.criticalExhausted) {
+                state.refused.add(1, ordering: .relaxed)
+            } else {
+                state.other.add(1, ordering: .relaxed)
+            }
+            // Before the release, so the next holder's clear, after its acquiring claim, is later.
+            state.drainWanted.store(true, ordering: .relaxed)
+            if handoff.releaseProducer(token, caller: &caller) != .ok { state.other.add(1, ordering: .relaxed) }
+            state.turn.store(turn &+ 1, ordering: .relaxed)
+            return true
         }
     }
 }

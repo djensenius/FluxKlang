@@ -353,6 +353,51 @@ extension RealtimeHandoffTests {
             let single = try Ring(policy: ringPolicy, faults: faults, scope: Root.fanInCriticalScope)
             #expect(single.raisesOn(faults) && !single.raisesOn(twin))
         }
+
+        /// T14 (#190 K-190b). Successive holders of one lane share its one chain. Each holder claims the lane, fills
+        /// it, takes one critical refusal and releases, and a drain frees the lane before the next claim. Claim,
+        /// release and drain mint nothing and keep the lane's chain; the generation advances once per holder; every
+        /// refusal is counted, none contended, and puts the token back; stale holders are refused `.notOwner` and
+        /// raise nothing while a live holder has the lane full. Kills: a chain minted per claim or replaced on
+        /// release; the `put` skipped after a raise; the `tryPush` generation check removed.
+        @Test func laneHolderChurnKeepsOneChain() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
+            let faults = try Root.fanInLatch()
+            let handoff = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 20)
+            let lane = try #require(handoff.owners.first)
+            let (chainID, holders, scope) = (lane.laneChainID, 6, Root.fanInCriticalScope)
+            var stale: [ProducerToken] = []
+            for holder in 1...holders {
+                let token = try RefusalCalling.claim(handoff, &caller!)
+                #expect(token.lane == 0 && token.generation == UInt64(holder))
+                fillLane(handoff, token, caller: &caller!)
+                #expect(handoff.tryPush(1, class: .critical, frame: Int64(holder), token: token, caller: &caller!)
+                        == .refused(.criticalExhausted))
+                #expect(handoff.withLaneChainTokenHeld(lane: 0) {}, "token not put back by holder \(holder)")
+                #expect(handoff.releaseProducer(token, caller: &caller!) == .ok)
+                #expect(Root.drained(handoff, quota: 32, total: 32).count == 20)
+                #expect(faults.mintedChains == 1 && handoff.owners.count == 1 && lane.laneChainID == chainID)
+                #expect(Root.fanInRecord(faults, scope)?.count == UInt64(holder))
+                stale.append(token)
+            }
+            let live = try RefusalCalling.claim(handoff, &caller!)
+            #expect(live.generation == UInt64(holders + 1))
+            fillLane(handoff, live, caller: &caller!)
+            for token in stale {
+                #expect(handoff.tryPush(1, class: .critical, frame: -1, token: token, caller: &caller!)
+                        == .refused(.notOwner))
+                #expect(handoff.releaseProducer(token, caller: &caller!) == .refused(.notOwner))
+            }
+            #expect(handoff.refusedNotOwnerCount == UInt64(2 * holders))
+            #expect(Root.fanInRecord(faults, scope)
+                    == FaultRecord(scope: scope, kind: .criticalExhausted, count: UInt64(holders), firstFrame: 1))
+            #expect(handoff.refusedCount(lane: 0, class: .critical) == UInt64(holders))
+            #expect(handoff.contendedLaneCount(lane: 0) == 0 && !faults.hasContendedFault)
+            #expect(handoff.withLaneChainTokenHeld(lane: 0) {} && faults.mintedChains == 1)
+            #expect(handoff.owners.first === lane && lane.laneChainID == chainID)
+        }
     }
 
     /// T12 (#190 FLP7b). `Thread`s push critical events at once onto two full lanes, two threads per lane: every
