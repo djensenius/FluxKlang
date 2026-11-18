@@ -41,13 +41,3 @@ final class WingApplyTicketBudget: Sendable {
         return 2 * chunks(safetyCount) + chunks(remainingCount) + chunks(safetyCount + remainingCount)
     }
 }
-
-extension WingController {
-    /// The budget for `applyAndVerify(settings, safetySettings:session:minting:)`,
-    /// from the same safety and remaining split that call uses.
-    func directApplyBudget(_ settings: [WingSetting], safetySettings: [WingSetting] = []) -> WingApplyTicketBudget {
-        let plan = directApplyPlan(settings, safetySettings: safetySettings)
-        return WingApplyTicketBudget(limit: WingApplyTicketBudget.limit(safetyCount: plan.safety.count,
-                                                                        remainingCount: plan.remaining.count))
-    }
-}

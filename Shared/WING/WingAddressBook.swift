@@ -10,40 +10,6 @@
 
 import Foundation
 
-/// The strip types FluxKlang addresses on the WING.
-enum WingNodeKind: String, CaseIterable, Sendable, Codable {
-    case channel = "ch"
-    case aux
-    case bus
-    case main
-    case matrix = "mtx"
-    case dca
-
-    /// Number of strips of this kind on a WING Rack.
-    var count: Int {
-        switch self {
-        case .channel: return 40
-        case .aux: return 8
-        case .bus: return 16
-        case .main: return 4
-        case .matrix: return 8
-        case .dca: return 16
-        }
-    }
-
-    /// Human-readable singular label for a strip of this kind.
-    var label: String {
-        switch self {
-        case .channel: return "Channel"
-        case .aux: return "Aux"
-        case .bus: return "Bus"
-        case .main: return "Main"
-        case .matrix: return "Matrix"
-        case .dca: return "DCA"
-        }
-    }
-}
-
 /// Builds WING OSC address strings. All strip indices are 1-based, matching the
 /// numbering used on the console and in the WING Co-Pilot app.
 enum WingAddress {

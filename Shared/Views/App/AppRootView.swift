@@ -35,7 +35,18 @@ struct AppRootView: View {
         .onChange(of: appModel.performanceProjectSession?.project.id) { _, _ in reconcileWorkspaceWindow() }
         // Navigation belongs to this outer root, not a destination or adaptive-width branch.
         .onDisappear {
+            appModel.wingLifecycle.detach(workspaceWindow)
             workspaceOperation { try appModel.closePerformanceProjectWindow(workspaceWindow) }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let message = appModel.wingLifecycle.lastReplacementOutcome?.failureMessage {
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(.regularMaterial)
+            }
         }
         .alert("Workspace unavailable", isPresented: Binding(
             get: { workspaceFailure != nil },

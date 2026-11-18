@@ -31,6 +31,11 @@ struct MenuBarMixer: View {
             Text(appModel.wing.connection.statusLabel)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            if let message = appModel.wingLifecycle.lastReplacementOutcome?.failureMessage {
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
 
             Divider()
 
@@ -39,18 +44,22 @@ struct MenuBarMixer: View {
                     QuickFaderRow(controller: appModel.wing, channel: channel)
                 }
                 Divider()
-                Button("Disconnect") {
-                    Task { await appModel.disconnect() }
-                }
             } else {
                 Text("Quick faders appear here once connected.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            }
+            if appModel.offersDisconnect {
+                Button("Disconnect") {
+                    Task { await appModel.disconnect() }
+                }
+            } else {
                 Button {
                     Task { await appModel.enterDemoMode() }
                 } label: {
                     Label("Enter Demo Mode", systemImage: "play.circle.fill")
                 }
+                .disabled(appModel.wingLifecycle.isBusy)
             }
         }
         .padding(14)

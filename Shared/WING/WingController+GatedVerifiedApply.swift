@@ -1,29 +1,10 @@
 import Foundation
 
-/// The send phases of a grant-gated `applyAndVerify` (#62 AU6), in order: the
-/// safety send and its retry, then the remaining send and the final retry.
-enum WingDirectApplyPhase: Hashable, Sendable, CaseIterable {
-    case safety
-    case safetyRetry
-    case remaining
-    case retry
-}
-
 /// A gated apply's unique settings, the safety ones among them, and the rest.
 struct WingDirectApplyPlan {
     let expected: [WingSetting]
     let safety: [WingSetting]
     let remaining: [WingSetting]
-}
-
-/// Mints one direct-send grant for one chunk of at most
-/// `HostAuthority.directSendBatchLimit` targets of an apply phase, bound to
-/// exactly `targets`, so a phase mints once per chunk. The controller cannot
-/// admit commands itself; the composition root does. Each call spends its own
-/// ticket, refused or not.
-protocol WingDirectGrantMinting: Sendable {
-    func grant(for phase: WingDirectApplyPhase,
-               targets: [DirectSendTarget]) async -> Result<DirectWriteAuthorization, DirectWriteRefusal>
 }
 
 /// What one gated phase did: every entry sent, stopped at a failed entry, or the
@@ -35,6 +16,14 @@ private enum DirectPhaseOutcome {
 }
 
 extension WingController {
+    /// The budget for `applyAndVerify(settings, safetySettings:session:minting:)`,
+    /// from the same safety and remaining split that call uses.
+    func directApplyBudget(_ settings: [WingSetting], safetySettings: [WingSetting] = []) -> WingApplyTicketBudget {
+        let plan = directApplyPlan(settings, safetySettings: safetySettings)
+        return WingApplyTicketBudget(limit: WingApplyTicketBudget.limit(safetyCount: plan.safety.count,
+                                                                        remainingCount: plan.remaining.count))
+    }
+
     /// Grant-gated `applyAndVerify` (#62 AU6; no app callers yet). Same phases,
     /// pacing and verdicts, but each send phase mints a fresh grant per chunk of at
     /// most `HostAuthority.directSendBatchLimit` addresses, just before sending that

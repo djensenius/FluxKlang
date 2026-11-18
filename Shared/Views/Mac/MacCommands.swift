@@ -33,7 +33,7 @@ struct FluxKlangCommands: Commands {
         }
 
         CommandMenu("WING") {
-            Button(appModel.isConnected ? "Disconnect" : "Connect to Last WING") {
+            Button(appModel.offersDisconnect ? "Disconnect" : "Connect to Last WING") {
                 Task { await appModel.toggleConnection() }
             }
             .keyboardShortcut("r", modifiers: .command)

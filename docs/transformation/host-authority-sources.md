@@ -3,9 +3,9 @@
 | Field | Value |
 |---|---|
 | Issue | Part of #62 (slice AU8 design); roadmap #48. #62 remains open |
-| Status | Design only. Nothing in production constructs any value named here yet |
-| Source baseline | main at `41f69372` |
-| Scope | Where each input of the gated WING apply comes from, who owns it, when it changes; the AU8a test plan |
+| Status | AU8 design archive plus AU7c1 planned lifecycle composition (§12); pure Debug/Release checked, hosted compilation pending |
+| Source baseline | Historical citations: `41f69372`; AU7c1 implementation base: `2165503ab27043999cda062c10ba9132a2085262` |
+| Scope | Authority input sources, original AU8a plan, and bounded planned replacement/session/detach composition |
 
 ## 1. Purpose and status
 
@@ -15,12 +15,13 @@ The gated Studio apply exists in source but has no production inputs. `WingApply
 `:20-45`). `HostCommandGate.admitDirect` then requires the admission's host epoch and permission to equal the
 book's live state and the window's role to be `.renders` (`Shared/Host/Authority/HostCommandGate.swift:100-115`).
 
-This document fixes, as decisions, where each of those values will come from in the app, who owns it and what
-invalidates it. It changes no code. Every statement below comes from reading the source at the baseline; nothing
-was built, run or connected to a WING. Citations use `path:line` at the baseline. Names marked *proposed* are not
-existing APIs.
+Sections 2–11 retain the original design and historical `path:line` citations at `41f69372`, not current
+execution claims. Names marked *proposed* describe that baseline. AU8a/AU8b subsequently supplied the canonical
+owner and explicit permission gestures. Section 12 records the current AU7c1 source composition and supersedes
+the historical AU7c window-to-Apply scope. AU7c1 verification is pure Debug/Release and strict lint only (§12),
+not application, native UI or WING execution.
 
-## 2. What exists today
+## 2. What existed at the design baseline
 
 - **No production owner.** No file under `Shared/`, `FluxKlang/` or `FluxKlangMac/` constructs `HostAuthority(`,
   `HostLiveState(`, `DeviceCapabilityDocument(`, `GenerationLedger(` or `WingApplyGrantMinter(`. `HostEpoch(` is
@@ -105,7 +106,7 @@ is historical outcome/last-checked presence only, never authority; canonical API
 
 ## 5. Lifecycle sequences
 
-These sequences describe the design after AU8a–AU8c; none runs today.
+These sequences describe the original full AU8a–AU8c design, not the implemented subset; see §12.
 
 **Launch.** First access to `HostAuthorityOwner.shared` mints a `HostID`, the epoch `(host, .initial)`, a capability
 document and ledger for that epoch, the Studio `ProjectID`, and the `HostAuthority` with `permission: nil`. It
@@ -263,7 +264,7 @@ The user delegated these choices ("make your best assumption"); the coordinator 
 |---|---|---|---|
 | AU8a | Worker | `Shared/Host/Runtime/HostAuthorityOwner.swift` (*proposed*): the owner of section 3, its `shared` instance, the session, apply-time acquire, attach, release, drop, verified-reconnect restore, demo and window hooks, the role grant and revoke input that only AU8b calls, which mints the live fingerprint with the grant revision (decision 2, *proposed*), and the admission provider. No caller changes | Owner at most 150 lines; `FluxKlangTests/HostAuthorityTests+Owner.swift` at most 250 lines, registered by the coordinator |
 | AU8b | Worker | The host-user permission grant owner and a minimal grant and revoke gesture; the only path to a non-`nil` live permission | No peer path, no automatic grant |
-| AU7c | Coordinator | Composition root: construct `shared` at launch, call the owner from `AppModel`'s connect, disconnect and demo functions, thread each scene's `WindowID` into `StudioView` and `applyStudio` | Wiring only; the verified-reconnect signal is a separate follow-up |
+| AU7c1 | Worker; coordinator registers | Shared owner injection, serialized planned replacements, exact session publication and existing root-ID detach (§12) | No StudioView/applyStudio/window-to-Apply wiring; no verified reconnect or activation |
 | AU8d | Worker (follow-up, after AU7c) | Verified-reconnect signal: report from the WING path that a new session is connected and its state re-read, and feed it to the owner's verified-reconnect input | Until it lands, a drop leaves gated writes refused |
 | AU8c | Worker | `applyStudio` calls the gated overload for real sessions; the ungated `applyAndVerify(_:safetySettings:)` stays only for Demo Mode | Needs AU8a, AU8b and AU7c |
 
@@ -312,3 +313,74 @@ network or UI.
 - No persisted host identity, peer host role or remote grant of route scope.
 - No migration of the other direct WING write paths listed in `docs/transformation/baseline.md` (Dispatch gap).
 - No change to `HostAuthority`, the book, the gate or the minter.
+
+## 12. AU7c1 bounded planned lifecycle composition
+
+Part of #62 and roadmap #48; both remain open. Source implementation follows the approved #779 plan.
+Approval was design/source feasibility only. The exact 71-input closure now compiles without missing dependencies.
+Clean Debug/Release each pass 43 canonical tests (57 cases), including 17 lifecycle tests (26 cases); strict lint
+passes all 19 changed Swift files. Canonical root receipts report zero access across all 14 audit operations.
+Independent source/runtime review and hosted AppModel/SwiftUI/AppIntents compilation remain required.
+
+### Actual ownership and callers
+
+- `AppModel+StoreLifecycle.sharedConstruction` explicitly injects
+  `HostWingLifecycle(owner: HostAuthorityOwner.shared)`. Ordinary AppModel initialization instead creates
+  an owner-nil sequencer, including previews/tests; it does not implicitly construct production authority.
+- `AppModel` keeps every controller assignment and its private setter. Its four replacement methods return
+  typed outcomes. Routing/preset methods moved unchanged to `AppModel+Routing`.
+- `HostWingLifecycle` owns ordering, not permission, a lease registry or an engine. `isBusy` and
+  `lastReplacementOutcome` are observable presentation; the latter is historical, never an admission input.
+- Root and menu-bar surfaces present the shared failure. Intents inspect their returned result, not a mutable
+  later controller. Acceptance setup stops before dependent seeding on lifecycle failure.
+- AppModel, MacCommands and MenuBarMixer agree that connecting OR connected offers Disconnect, independently
+  of remembered host. Faders remain connected-only. Safety Disconnect is never busy-disabled: it queues and
+  does not preempt earlier work. ConnectionView's connect/demo controls use the shared busy state.
+
+### Replacement and detach order
+
+Reservation precedes busy notifications. Replacements stay in their caller's structured task and capture the
+old controller only on their FIFO turn. A cancelled queued replacement keeps its place but performs no teardown.
+After teardown begins, canonical `disconnected` and captured-old stop both finish, even on cancellation/refusal.
+Initial release refusal wins over concurrent cancellation and prevents construction, start and publication.
+
+After assigning live/demo, AppModel checks cancellation before entering `connect`/`connectDemo`, returning
+the candidate cleanup handle if cancelled. The final cancellation/current-identity check is the publication
+commit boundary. Live success requires the exact current connected session UUID; natural failure retains its
+detailed failed-controller presentation without publishing or remembering a host.
+
+After canonical publication, identity is rechecked before remembering the host and awaiting the existing
+temporary-move verification. Later cancellation alone does not undo committed success. Identity mismatch stops
+the candidate and calls canonical `disconnected`; any cleanup refusal remains distinct from initial refusal:
+
+- Initial: “The previous connection was stopped. No replacement was started because host release was refused.”
+- Published cleanup refusal: “A replacement connection was published, then stopped after its identity changed.
+  Host-session cleanup was refused.”
+
+The FIFO reservation survives report and busy-reset Observation callbacks, including synchronous detach
+submissions. `detach(existing WindowID)` submits synchronously and returns a retained, joinable completion.
+The outer root uses its existing ID independently of workspace-close success. Detach keeps the lease, removes
+the window/tickets, and does not erase the last replacement outcome.
+
+### Proof boundary and remaining work
+
+`LifecycleComposition` and `LifecycleCompositionRaces` under the canonical HostAuthorityTests root use real
+isolated owners/authorities/minters and inert operation closures. The real refusal fixture opens another project
+with `RunningGraph(prepared: nil)` and acquires its lease; it fabricates no preparation or retirement.
+The post-publication fixture observes the actual published session through a candidate-stop handshake, then
+checks invalidation, exact cleanup refusal, unchanged other-project lease and queue advancement.
+Assignment-cancellation tests use the same `startUnlessCancelled` guard as the actual live/demo adapters,
+with inert start closures. Actual AppModel/SwiftUI/AppIntents compilation remains separate pending qualification.
+
+The dependency-light moves retain unchanged WingNodeKind and WingOutputConnectorBank in one WingAddressTypes
+file, and unchanged direct phase/protocol and budget declarations. The closure retains the real validator,
+PendingPreparation, offline processor/compiler/admission/ScratchArena, FaderMath, ActionPolicy, clocks,
+CryptoKit identity and canonical audit/receipt sink. No shadow declarations or SwiftOSC dependency are allowed.
+
+No beginApply, dropped, verifiedReconnect, completeRestore, production minter construction, lease acquisition,
+engine installation/retirement or recovery execution is introduced. Existing Apply/mixer remain ungated and
+their permission warnings remain true. AU8d and AU8c remain separate, including window-to-Apply wiring.
+Before AU8c, qualify real root lifetime and close-before-paused-Apply ordering: windowClosed does not prevent an
+already-paused beginApply from later acquiring. Root disappearance is not native close qualification.
+WingController.disconnect cancels but does not join its tasks; awaited socket stop is not callback quiescence.
+Nothing here qualifies #191/G2 native reclamation.

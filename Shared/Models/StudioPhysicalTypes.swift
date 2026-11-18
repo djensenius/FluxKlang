@@ -24,29 +24,6 @@ struct StudioConnectionMigrationIssue: Identifiable, Codable, Hashable, Sendable
     }
 }
 
-enum WingOutputConnectorBank: String, CaseIterable, Codable, Hashable, Sendable {
-    case local = "LCL"
-    case aes50A = "A"
-    case aes50B = "B"
-    case aes50C = "C"
-
-    var label: String {
-        switch self {
-        case .local: "Local"
-        case .aes50A: "AES50-A"
-        case .aes50B: "AES50-B"
-        case .aes50C: "AES50-C"
-        }
-    }
-
-    var connectorRange: ClosedRange<Int> {
-        switch self {
-        case .local: 1...8
-        case .aes50A, .aes50B, .aes50C: 1...16
-        }
-    }
-}
-
 struct WingOutputConnector: Codable, Hashable, Sendable {
     var bank: WingOutputConnectorBank
     var index: Int
