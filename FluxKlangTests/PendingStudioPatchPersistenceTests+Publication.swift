@@ -358,7 +358,7 @@ extension PendingStudioPatchPersistenceTests {
         try await PendingPersistenceFixture.run { fixture in
             let built = try await fixture.build()
             let gate = await fixture.forwarding.hold(.beforeSave(2))
-            let reply = fixture.start { await Self.fallbackReply(fixture) }
+            let reply = fixture.start { await Self.collectReply(fixture) }
             try #require(await gate.waitForEntry())
             let refreshed = try #require(fixture.owner.pendingStudioDraft)
             let newer = try await fixture.build(1)
@@ -377,7 +377,7 @@ extension PendingStudioPatchPersistenceTests {
     @Test func unovertakenFallbackValidateShowsItsDraftCards() async throws {
         try await PendingPersistenceFixture.run { fixture in
             _ = try await fixture.build()
-            let collected = await Self.fallbackReply(fixture)
+            let collected = await Self.collectReply(fixture)
             let refreshed = try #require(fixture.owner.pendingStudioDraft)
             #expect(!collected.failed)
             #expect(collected.texts.count == 1)
@@ -388,19 +388,23 @@ extension PendingStudioPatchPersistenceTests {
         }
     }
 
-    private struct FallbackReply: Sendable {
+    private struct CollectedReply: Sendable {
         var texts: [String] = []
         var cards: [[AssistantCard]] = []
         var failed = false
     }
 
     // Drains the whole stream before returning; stream events are not Equatable, so match them by pattern.
-    private static func fallbackReply(_ fixture: PendingPersistenceFixture) async -> FallbackReply {
+    private static func collectReply(
+        _ fixture: PendingPersistenceFixture, from generator: (any AssistantGenerating)? = nil,
+        question: String = "Show the pending draft"
+    ) async -> CollectedReply {
         let request = AssistantGenerationRequest(
-            question: "Show the pending draft", recentMessages: [], summary: "", context: fixture.context)
-        var reply = FallbackReply()
+            question: question, recentMessages: [], summary: "", context: fixture.context)
+        var reply = CollectedReply()
+        let generator = generator ?? AssistantFallbackGenerator(coordinator: fixture.owner)
         do {
-            for try await event in AssistantFallbackGenerator(coordinator: fixture.owner).stream(request) {
+            for try await event in generator.stream(request) {
                 switch event {
                 case .text(let text): reply.texts.append(text)
                 case .cards(let cards): reply.cards.append(cards)
@@ -410,5 +414,74 @@ extension PendingStudioPatchPersistenceTests {
             reply.failed = true
         }
         return reply
+    }
+}
+
+// A Copilot reply is only the model's own text, whatever another request did to the pending draft meanwhile.
+extension PendingStudioPatchPersistenceTests {
+    // Without a draft at the start, the newer build is the only draft the reply could claim.
+    @Test(arguments: [true, false])
+    func copilotReplyOvertakenByNewerBuildShowsOnlyItsText(startsWithDraft: Bool) async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            var built: StudioPatchDraft?
+            if startsWithDraft { built = try await fixture.build() }
+            let http = OvertakingCopilotHTTP { _ = try? await fixture.build(1) }
+            let reply = await Self.copilotReply(fixture, http)
+            let newer = try #require(fixture.owner.pendingStudioDraft)
+            try #require(newer.id != built?.id, "the newer build has its own id")
+            let saved: [StudioPatchDraft?] = startsWithDraft ? [built, newer] : [newer]
+            #expect(!reply.failed)
+            #expect(reply.texts == [OvertakingCopilotHTTP.answer])
+            #expect(reply.cards.isEmpty, "an overtaken Copilot reply shows no other request's draft cards")
+            #expect(await fixture.store.load() == .loaded(newer))
+            #expect(await fixture.forwarding.snapshots == saved)
+            #expect(await http.requests == 1)
+        }
+    }
+
+    @Test func copilotReplyOvertakenBySameIDCommitShowsOnlyItsText() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let built = try await fixture.build()
+            // Same id, different content: a check by id alone would miss this commit.
+            var edited = built
+            try #require(!edited.fragment.nodes.isEmpty)
+            edited.fragment.nodes[0].node.position.x += 40
+            try #require(edited.id == built.id && edited != built)
+            let http = OvertakingCopilotHTTP { [edited] in #expect(await fixture.commit(edited)) }
+            let reply = await Self.copilotReply(fixture, http)
+            #expect(!reply.failed)
+            #expect(reply.texts == [OvertakingCopilotHTTP.answer])
+            #expect(reply.cards.isEmpty, "a Copilot reply overtaken by a commit shows no draft cards")
+            #expect(fixture.owner.pendingStudioDraft == edited)
+            #expect(await fixture.store.load() == .loaded(edited))
+            #expect(await fixture.forwarding.snapshots == [built, edited])
+        }
+    }
+
+    // Characterisation: without a newer draft, the reply was already only the model's text.
+    @Test(arguments: [false, true])
+    func copilotReplyWithoutNewerDraftShowsOnlyItsText(discards: Bool) async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let built = try await fixture.build()
+            let http = OvertakingCopilotHTTP { if discards { await fixture.owner.discardPendingStudioDraft() } }
+            let reply = await Self.copilotReply(fixture, http)
+            let saved: [StudioPatchDraft?] = discards ? [built, nil] : [built]
+            #expect(!reply.failed)
+            #expect(reply.texts == [OvertakingCopilotHTTP.answer])
+            #expect(reply.cards.isEmpty)
+            #expect(fixture.owner.pendingStudioDraft == (discards ? nil : built))
+            #expect(await fixture.store.load() == (discards ? .absent : .loaded(built)))
+            #expect(await fixture.forwarding.snapshots == saved)
+        }
+    }
+
+    // "Is the WING connected?" is read-only, so routing ownership passes it to the model.
+    private static func copilotReply(
+        _ fixture: PendingPersistenceFixture, _ http: OvertakingCopilotHTTP
+    ) async -> CollectedReply {
+        let generator = CopilotAssistantGenerator(
+            configuration: CopilotAssistantConfiguration(token: "token", model: "gpt-4o"),
+            coordinator: fixture.owner, httpClient: http)
+        return await collectReply(fixture, from: generator, question: "Is the WING connected?")
     }
 }

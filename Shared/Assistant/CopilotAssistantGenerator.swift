@@ -136,15 +136,10 @@ struct CopilotAssistantGenerator: AssistantGenerating {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let initialDraft = await coordinator.pendingStudioDraft
                     let text = try await response(to: request)
                     try Task.checkCancellation()
-                    if let draft = await coordinator.pendingStudioDraft, draft != initialDraft {
-                        continuation.yield(.text(AssistantDraftReply.text(for: draft)))
-                        continuation.yield(.cards(Self.cards(for: draft)))
-                    } else {
-                        continuation.yield(.text(text))
-                    }
+                    // No Copilot tool can create a draft, so a reply is only the model's own text.
+                    continuation.yield(.text(text))
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -266,24 +261,6 @@ struct CopilotAssistantGenerator: AssistantGenerating {
         case "studio": .studioGraph(context.graph)
         default: .currentScreen(context.currentScreen)
         }
-    }
-
-    private static func cards(for draft: StudioPatchDraft) -> [AssistantCard] {
-        var cards: [AssistantCard] = [
-            .wiring(
-                summary: draft.logicalRoutingSummary.map(\.value),
-                cableInstructions: draft.cableInstructions.map(\.instruction.value)
-            ),
-            .pendingDraft(
-                id: draft.id,
-                summary: draft.logicalRoutingSummary.map(\.value).joined(separator: "\n"),
-                hasErrors: draft.hasErrors
-            )
-        ]
-        if !draft.validation.isEmpty {
-            cards.append(.conflicts(draft.validation.map(\.message)))
-        }
-        return cards
     }
 
     private static let systemPrompt = """
