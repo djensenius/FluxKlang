@@ -118,3 +118,113 @@ enum LifecycleOwnerBench {
         return nil
     }
 }
+
+/// Opens on the first of several signals and keeps that one, so a fixture wait ends on any outcome.
+@MainActor
+final class LifecycleFirst {
+    private(set) var first: String?
+    private let gate = LifecycleGate()
+
+    func signal(_ name: String) {
+        if first == nil { first = name }
+        gate.open()
+    }
+
+    func wait() async -> String? {
+        await gate.wait()
+        return first
+    }
+}
+
+/// One-shot apply pause: the armed owner checkpoint suspends one apply until `resume` opens.
+@MainActor
+final class LifecycleApplyPause {
+    var point: HostAuthorityOwner.Checkpoint?
+    var reached: LifecycleFirst?
+    /// Runs each time the owner queues a lifecycle call behind its lock.
+    var queued: (@MainActor () -> Void)?
+    let resume = LifecycleGate()
+
+    func visit(_ visited: HostAuthorityOwner.Checkpoint) async {
+        guard visited == point else { return }
+        point = nil
+        reached?.signal("reached")
+        await resume.wait()
+    }
+}
+
+/// A granted owner and a lifecycle whose replacement has published `session`, then holds the FIFO
+/// turn in `finish` until `release` opens. Every wait ends on success or on the failure it would hide.
+@MainActor
+struct LifecycleHeldTurn {
+    struct Unheld: Error {}
+
+    let pause = LifecycleApplyPause()
+    let owner: HostAuthorityOwner
+    let lifecycle: HostWingLifecycle
+    let session = UUID()
+    let release = LifecycleGate()
+    let replacement: Task<HostWingLifecycle.Outcome, Never>
+
+    init() async throws {
+        let (pause, session, release, first) = (self.pause, self.session, self.release, LifecycleFirst())
+        owner = try HostAuthorityOwner(checkpoint: { await pause.visit($0) },
+                                       lifecycleQueued: { Task { @MainActor in pause.queued?() } })
+        _ = try await owner.opened.value.get()
+        _ = try await owner.grant(.host).get()
+        let lifecycle = HostWingLifecycle(owner: owner)
+        let probe = LifecycleProbe()
+        let replacement = Task {
+            await lifecycle.replace {
+                probe.operation(.success(.connected(session)), hooks: .init(finish: {
+                    first.signal("holding")
+                    await release.wait()
+                }))
+            }
+        }
+        (self.lifecycle, self.replacement) = (lifecycle, replacement)
+        Task {
+            let outcome = await replacement.value
+            first.signal("returned \(outcome)")
+        }
+        let holding = await first.wait()
+        guard holding == "holding" else {
+            Issue.record("replacement \(holding ?? "") before holding the turn")
+            throw Unheld()
+        }
+    }
+
+    /// Returns once `window`'s apply is suspended at `point`; nil, recording an issue, if it completed first.
+    func pausedApply(_ window: WindowID, at point: HostAuthorityOwner.Checkpoint)
+        async -> Task<Result<UUID, HostAuthorityOwner.ApplyRefusal>, Never>? {
+        let (owner, first) = (owner, LifecycleFirst())
+        (pause.point, pause.reached) = (point, first)
+        let apply = Task {
+            let result = await owner.beginApply(window: window)
+            first.signal("completed")
+            return result
+        }
+        guard await first.wait() == "reached" else {
+            Issue.record("apply completed before \(point): \(await apply.value)")
+            return nil
+        }
+        return apply
+    }
+
+    /// Joins `completion`'s early fence. If the fence queues for the owner lock first, records an issue
+    /// and resumes the paused apply so that the fence, and the test, can finish.
+    func fence(_ completion: HostWingLifecycle.Completion) async {
+        let first = LifecycleFirst()
+        pause.queued = { first.signal("queued") }
+        Task {
+            await completion.fenced()
+            first.signal("fenced")
+        }
+        if await first.wait() != "fenced" {
+            Issue.record("early fence queued for the owner lock")
+            pause.resume.open()
+        }
+        await completion.fenced()
+        pause.queued = nil
+    }
+}
