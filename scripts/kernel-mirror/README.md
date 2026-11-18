@@ -10,7 +10,12 @@ package has a `FluxKlang` library and a `FluxKlangTests` test target, so the cop
 2. **Release** (`-c release -Xswiftc -enable-testing`): all suites. The log check requires
    `readmissionRenderPathAllocatesNothing()` to report passed, not skipped, so the
    `malloc_logger` allocation probe really ran in an optimized build and counted zero
-   render-path allocations.
+   render-path allocations. It requires the same of the four `FaultRaiseAllocationBounds` probes
+   (`chainTokenRaisePathsAllocateNothing()`, `sysexFaultingAcceptAllocatesNothing()`,
+   `retireBacklogAndContendedRetireAllocateNothing()`, `criticalRefusalAllocatesNothing()`): zero
+   allocations on the fault-chain raise paths they drive (chain token primitives and the contended
+   fallback, SysEx abort and overflow, retire backlog and contended retire, critical refusal and
+   contended critical refusal).
 3. **Thread Sanitizer**: `--sanitize=thread --filter 'RealtimeHandoffTests.*(Cycle|Stress)'`, three
    times. It fails on a nonzero exit or any `WARNING: ThreadSanitizer` line. Each run must also
    report `readmissionRenderPathAllocatesNothing()` as skipped with its Thread Sanitizer reason. The
@@ -25,8 +30,10 @@ trait (`FluxKlangTests/ProductionAccessScope.swift`) records an issue without on
 ## What it does not prove
 
 - It tests the kernel as a **reference model**. It is not real-time certification: there is no
-  audio thread, no deadline measurement and no CoreAudio/CoreMIDI. The allocation probe covers only
-  the paths the test drives. The lock check is a source scan, not a proof.
+  audio thread, no deadline measurement and no CoreAudio/CoreMIDI. The allocation probes cover only
+  the paths the tests drive, only allocations on the calling thread (not `mmap` or other threads),
+  and only after a warm-up run that absorbs one-time runtime work. The lock check is a source scan,
+  not a proof.
 - It is **not #60 qualification**. It never builds or launches the app or an app-hosted test
   bundle, and it says nothing about app startup, services or hardware. `apple-build.yml` stays
   compile-only and `mac-isolated-observation.yml` is unchanged.

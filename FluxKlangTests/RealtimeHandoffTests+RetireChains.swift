@@ -8,6 +8,8 @@ import Testing
 #endif
 
 private typealias Root = RealtimeHandoffTests
+/// Preallocated storage the allocation probes write their statuses to.
+private typealias Statuses = UnsafeMutableBufferPointer<KernelStatus>
 
 /// Shared state for the two-thread retire chain-token stress (#190 FLP5).
 private final class RetireChainStressState: Sendable {
@@ -321,6 +323,177 @@ extension RealtimeHandoffTests {
             #expect(ledger.created.load(ordering: .acquiring) == 2 * Self.callsPerThread)
             #expect(ledger.live == 0)
             #expect(queue.withChainTokenHeld {})
+        }
+    }
+}
+
+extension RealtimeHandoffTests {
+    /// #64 (K-64e): heap allocations on the fault-chain raise paths, counted on this thread through libmalloc's
+    /// `malloc_logger` hook (`allocations`, as in `CycleCarryReadmissionBounds`). Each test checks the hook counts
+    /// (positive control), runs the same paths once on separate objects (warm-up, so one-time runtime work such as
+    /// metadata stays out of the count), counts one run with only those paths inside, then checks outside the probe
+    /// that each path was taken. An optimized build must count zero; an unoptimized one only has to run the probe.
+    /// Host reference-model evidence for the driven paths only, not RT certification. Disabled under Thread
+    /// Sanitizer, whose allocator bypasses the hook, or when another tool holds it.
+    struct FaultRaiseAllocationBounds {
+        /// The SysEx chunks (source, status): an idle `continue` (abort raise), `start`, `start` again (abort
+        /// discard), `end` (delivers 12 bytes); `start`, four `continue`s, a fifth past 32 bytes (overflow), `end`.
+        static let sysexScript: [(UInt32, SysExChunkStatus)] = [
+            (0, .continue), (0, .start), (0, .start), (0, .end), (1, .start), (1, .continue), (1, .continue),
+            (1, .continue), (1, .continue), (1, .continue), (1, .end)
+        ]
+
+        /// Positive control: the hook counts an allocation made on this thread.
+        static func expectHookCounts() throws {
+            let positive = try #require(allocations({
+                UnsafeMutableRawPointer.allocate(byteCount: 64, alignment: 16).deallocate()
+            }))
+            #expect(positive >= 1)
+        }
+
+        /// The allocations `body` makes on this thread while writing `count` statuses to preallocated storage, and
+        /// those statuses.
+        private static func probe(_ count: Int, _ body: (Statuses) -> Void) throws -> (Int, [KernelStatus]) {
+            let statuses = Statuses.allocate(capacity: count)
+            statuses.initialize(repeating: .empty)
+            defer { statuses.deallocate() }
+            let counted = try #require(allocations { body(statuses) })
+            return (counted, Array(statuses))
+        }
+
+        /// Take; a first raise (publishes `first`) and a counted one on a prepared scope; an unprepared raise; a take
+        /// while the token is held; put; `isLatched` on the unprepared scope around `raiseContended()`, then on the
+        /// prepared one. Returns whether that take got nothing and each `isLatched` read as expected.
+        private static func chainPaths(_ faults: FaultChainAuthority, _ chain: FaultChain, _ out: Statuses) -> Bool {
+            let (scope, stray) = (Root.FaultChaining.scope, FaultScope(handoff: 99, target: 0))
+            guard var token = chain.take() else { return false }
+            out[0] = faults.raise(&token, scope, .noPlan, frame: 7)
+            out[1] = faults.raise(&token, scope, .noPlan, frame: 8)
+            out[2] = faults.raise(&token, stray, .noPlan, frame: 9)
+            let heldTakeRefused = Root.FaultChaining.isEmpty(chain)
+            out[3] = chain.put(token)
+            let clearBefore = !faults.isLatched(stray)
+            faults.raiseContended()
+            return heldTakeRefused && clearBefore && faults.isLatched(stray) && faults.isLatched(scope)
+        }
+
+        private static func sysexPaths(_ fixture: SysExFixture, _ out: Statuses) {
+            for (index, (source, status)) in sysexScript.enumerated() {
+                out[index] = fixture.assembler.accept(source: source, status: status, bytes: (1, 2, 3, 4, 5, 6),
+                                                      count: 6, frame: 4)
+            }
+        }
+
+        /// `retire` of `first` (pushed), of `second` into the full queue (`.retireBacklog` raise), and of `second`
+        /// again while the queue's chain token is held (contended).
+        private static func retirePaths(_ queue: DeferredReleaseQueue, _ first: Unmanaged<AnyObject>,
+                                        _ second: Unmanaged<AnyObject>, _ out: Statuses) {
+            out[0] = queue.retire(first, frame: 21)
+            out[1] = queue.retire(second, frame: 22)
+            _ = queue.withChainTokenHeld { out[2] = queue.retire(second, frame: 23) }
+        }
+
+        /// A 17-slot lane (16 reserved) on its own authority, filled with critical events.
+        static func fullRing() throws -> (ring: ReservedCapacityRing<UInt64>, faults: FaultChainAuthority) {
+            let faults = try FaultChainAuthority(scopes: [Root.fanInCriticalScope], chainBudget: 1)
+            let policy = Root.policy(capacity: 17, overflow: .reservedCritical(reserved: 16))
+            let ring = try ReservedCapacityRing<UInt64>(policy: policy, faults: faults, scope: Root.fanInCriticalScope)
+            for value in 0..<17 { #expect(ring.tryPush(UInt64(value), class: .critical, frame: 0) == .ok) }
+            return (ring, faults)
+        }
+
+        /// A critical push into the full ring (refused, raises), a general one (refused, never takes the token) and a
+        /// critical one while the lane chain's token is held (refused, contended).
+        private static func refusalPaths(_ ring: ReservedCapacityRing<UInt64>, _ out: Statuses) {
+            out[0] = ring.tryPush(17, class: .critical, frame: 31)
+            out[1] = ring.tryPush(18, class: .general, frame: 32)
+            _ = ring.withChainTokenHeld { out[2] = ring.tryPush(19, class: .critical, frame: 33) }
+        }
+
+        /// Kills: an allocation in `FaultChain.take` or `put`, `FaultChainAuthority.raise` (first publication, count,
+        /// unknown scope), `raiseContended` or `isLatched`.
+        @Test(.enabled(if: !threadSanitized, "Thread Sanitizer's allocator bypasses malloc_logger"),
+              .enabled(if: mallocLoggerIsFree(), "malloc_logger is already in use"))
+        func chainTokenRaisePathsAllocateNothing() throws {
+            try Self.expectHookCounts()
+            let warm = try Root.FaultChaining.authority(budget: 1)
+            let warmChain = try #require(warm.mintChain())
+            _ = try Self.probe(4) { _ = Self.chainPaths(warm, warmChain, $0) }
+            let faults = try Root.FaultChaining.authority(budget: 1)
+            let chain = try #require(faults.mintChain())
+            var asExpected = false
+            let (counted, statuses) = try Self.probe(4) { asExpected = Self.chainPaths(faults, chain, $0) }
+            #expect(statuses == [.ok, .ok, .refused(.slotOutOfRange), .ok] && asExpected)
+            let records = Root.FaultChaining.records(faults)
+            #expect(records.map(\.count) == [2] && records.map(\.firstFrame) == [7])
+            #expect(faults.unknownScopeFaults == 1 && faults.hasContendedFault && !Root.FaultChaining.isEmpty(chain))
+            #expect(counted == 0 || !optimizedBuild)
+        }
+
+        /// Kills: an allocation on `SysExAssembler.accept`'s abort, overflow or delivery path, or in the token take,
+        /// raise or put it holds across them.
+        @Test(.enabled(if: !threadSanitized, "Thread Sanitizer's allocator bypasses malloc_logger"),
+              .enabled(if: mallocLoggerIsFree(), "malloc_logger is already in use"))
+        func sysexFaultingAcceptAllocatesNothing() throws {
+            try Self.expectHookCounts()
+            let warm = try SysExFixture()
+            _ = try Self.probe(Self.sysexScript.count) { Self.sysexPaths(warm, $0) }
+            let fixture = try SysExFixture()
+            let (counted, statuses) = try Self.probe(Self.sysexScript.count) { Self.sysexPaths(fixture, $0) }
+            #expect(statuses == [.refused(.notOwner), .ok, .ok, .ok, .ok, .ok, .ok, .ok, .ok,
+                                 .refused(.invalidLength), .refused(.invalidLength)])
+            #expect(fixture.assembler.discardedCount == 2 && fixture.assembler.emittedCount == 1)
+            let records = fixture.takeFaults()
+            #expect(records.map(\.scope) == [fixture.scope(0), fixture.scope(1)])
+            #expect(records.map(\.kind) == [.sysexAborted, .sysexOverflow] && records.map(\.count) == [2, 1])
+            #expect(fixture.drain().map { $0.bytes } == [[1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6]])
+            #expect(fixture.assembler.contendedChunkCount == 0 && !fixture.faults.hasContendedFault)
+            #expect(counted == 0 || !optimizedBuild)
+        }
+
+        /// Kills: an allocation on `DeferredReleaseQueue.retire`'s backlog refusal (with its raise) or contended
+        /// refusal.
+        @Test(.enabled(if: !threadSanitized, "Thread Sanitizer's allocator bypasses malloc_logger"),
+              .enabled(if: mallocLoggerIsFree(), "malloc_logger is already in use"))
+        func retireBacklogAndContendedRetireAllocateNothing() throws {
+            try Self.expectHookCounts()
+            let ledger = RetireLedger()
+            let warm = try RetireChaining.queue(RetireChaining.authority(), capacity: 1)
+            let warmObjects = (RetireChaining.retained(0, ledger), RetireChaining.retained(1, ledger))
+            _ = try Self.probe(3) { Self.retirePaths(warm, warmObjects.0, warmObjects.1, $0) }
+            let faults = try RetireChaining.authority()
+            let queue = try RetireChaining.queue(faults, capacity: 1)
+            #expect(queue.reserve())
+            let (first, second) = (RetireChaining.retained(2, ledger), RetireChaining.retained(3, ledger))
+            let (counted, statuses) = try Self.probe(3) { Self.retirePaths(queue, first, second, $0) }
+            #expect(statuses == [.ok, .refused(.full), .refused(.notOwner)])
+            #expect(queue.refusedCount == 1 && queue.contendedRetireCount == 1 && faults.hasContendedFault)
+            let records = Root.FaultChaining.records(faults)
+            #expect(records.map(\.kind) == [.retireBacklog] && records.map(\.firstFrame) == [22])
+            #expect(records.map(\.count) == [1])
+            #expect(warm.reclaim() == 1 && queue.reclaim() == 1)
+            warmObjects.1.release()
+            second.release()
+            #expect(ledger.live == 0 && ledger.allOnControl)
+            #expect(counted == 0 || !optimizedBuild)
+        }
+
+        /// Kills: an allocation on `ReservedCapacityRing`'s critical refusal (`ReservedRingChain.refuse`, with its
+        /// raise or the contended fallback) or its general refusal.
+        @Test(.enabled(if: !threadSanitized, "Thread Sanitizer's allocator bypasses malloc_logger"),
+              .enabled(if: mallocLoggerIsFree(), "malloc_logger is already in use"))
+        func criticalRefusalAllocatesNothing() throws {
+            try Self.expectHookCounts()
+            let warm = try Self.fullRing()
+            _ = try Self.probe(3) { Self.refusalPaths(warm.ring, $0) }
+            let (ring, faults) = try Self.fullRing()
+            let (counted, statuses) = try Self.probe(3) { Self.refusalPaths(ring, $0) }
+            #expect(statuses == [.refused(.criticalExhausted), .refused(.full), .refused(.criticalExhausted)])
+            #expect(ring.refusedCriticalCount == 2 && ring.refusedGeneralCount == 1 && ring.contendedCount == 1)
+            let records = Root.FaultChaining.records(faults)
+            #expect(records.map(\.kind) == [.criticalExhausted] && records.map(\.count) == [1])
+            #expect(records.map(\.firstFrame) == [31] && faults.hasContendedFault)
+            #expect(counted == 0 || !optimizedBuild)
         }
     }
 }
