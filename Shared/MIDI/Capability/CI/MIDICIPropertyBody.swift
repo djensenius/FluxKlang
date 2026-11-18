@@ -3,7 +3,8 @@
 //  FluxKlang
 //
 //  The property data of a MIDI-CI Property Exchange message, decoded by the encoding its header names (#83, slice
-//  M83-PXH2, issue #824): a pure, bounded decode that uses only the standard library. Nothing calls it yet.
+//  M83-PXH2, issue #824): a pure, bounded decode that uses only the standard library. Only
+//  `MIDICIPropertyContent.decode(_:)` calls it, and nothing calls that yet.
 //
 //  Provenance: the Property Exchange specifications (M2-102-UM, the Common Rules, and M2-103-UM, the resources) were
 //  not read. That ASCII property data is 7-bit, and that `zlib+Mcoded7` is compressed before it is Mcoded7 coded, are
@@ -14,8 +15,9 @@
 /// Decodes the property data of one Property Exchange message (`MIDICIPropertyReassembly.propertyData`, which is
 /// still coded as received) by the `MIDICIPropertyEncoding` its header names. ASCII and Mcoded7 are decoded;
 /// `zlib+Mcoded7` and any other name are refused, an empty body included. Rules that depend on the message kind
-/// (`MIDICIPropertyDataKind.hasNoPropertyData`) and the JSON in the decoded bytes are not checked. Nothing calls it
-/// yet.
+/// (`MIDICIPropertyDataKind.hasNoPropertyData`) and the JSON in the decoded bytes are not checked here; the kind rule
+/// is `MIDICIPropertyContent.decode(_:)`'s. Only `MIDICIPropertyContent.decode(_:)` calls it, through
+/// `decodeBody(_:)`, and nothing calls that yet.
 enum MIDICIPropertyBody {
     /// The most property data `decode(_:encoding:)` accepts, inclusive: the reassembler's ceiling, 262,144 bytes.
     static let maximumBytes = MIDICIPropertyReassembler.propertyBytesCeiling
@@ -54,7 +56,8 @@ enum MIDICIPropertyBody {
 
 extension MIDICIPropertyHeader {
     /// Decodes `bytes`, the property data of this header's message, by this header's `encoding` (`.ascii` when
-    /// `mutualEncoding` is absent), as `MIDICIPropertyBody.decode(_:encoding:)` does. Nothing calls it yet.
+    /// `mutualEncoding` is absent), as `MIDICIPropertyBody.decode(_:encoding:)` does. Only
+    /// `MIDICIPropertyContent.decode(_:)` calls it, and nothing calls that yet.
     func decodeBody(_ bytes: [UInt8]) throws(MIDICIPropertyBodyRefusal) -> [UInt8] {
         try MIDICIPropertyBody.decode(bytes, encoding: encoding)
     }

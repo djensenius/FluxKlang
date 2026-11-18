@@ -24,7 +24,7 @@
 /// Bounded: it recurses only into objects and arrays, and refuses any that would go past `maximumDepth` levels. Every
 /// loop step consumes at least one byte. The caller has already limited the input to 2,048 bytes below 0x80; a byte
 /// of 0x80 or more in a string is `invalidString` here only as a defensive guard. Only `MIDICIPropertyHeader.parse(_:)`
-/// calls it, and nothing calls that yet.
+/// calls it; only `MIDICIPropertyContent.decode(_:)` calls that, and nothing calls that yet.
 struct MIDICIPropertyHeaderScanner {
     /// A member's value, as far as `MIDICIPropertyHeader` types it.
     enum Value {
