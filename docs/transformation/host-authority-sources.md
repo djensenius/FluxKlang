@@ -386,8 +386,10 @@ in-flight `beginApply(w)` before it waits for the lifecycle lock; each apply reg
 and unregisters on return, so no closed-window history, permission or authority is cached. Every session recheck,
 including the one before `completeRestore`, then refuses `.windowClosed` (`.noSession` first). A close queued behind
 an apply's lease work still detaches after the refused apply, so the closed window ends unattached. A later apply
-on the same `WindowID` (AppRootView reuses it on reappear) is not fenced. A close that fences during
-`completeRestore` is refused only after that restore is delivered. Mirror-run `OwnerRaces` tests cover this.
+on the same `WindowID` (AppRootView reuses it on reappear) is not fenced. An apply whose window closes during
+`completeRestore` is refused only after that restore is acknowledged (pinned at the test-only
+`.restoreAcknowledging` checkpoint); other in-flight applies of `w` queued behind it are refused at their first
+recheck. Mirror-run `OwnerRaces` tests cover this.
 Still open before AU8c: the sequencer's `detach` reaches the owner only after earlier queued replacements
 (`HostWingLifecycle.swift:122-131`); until then an apply for the closing window is not fenced and stays attached
 until that detach arrives. Root-lifetime (`windowOpened`) registration and window liveness are not modelled.

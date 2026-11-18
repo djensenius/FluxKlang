@@ -60,7 +60,7 @@ actor HostAuthorityOwner {
     private var lifecycleBusy = false
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     /// Internal, init-only test seam; production never suspends at these checkpoints.
-    enum Checkpoint: Sendable { case applyStarting, leaseRead, leaseChecked, leaseReady }
+    enum Checkpoint: Sendable { case applyStarting, leaseRead, leaseChecked, leaseReady, restoreAcknowledging }
     private let checkpoint: (@Sendable (Checkpoint) async -> Void)?
     private let sessionInvalidated: (@Sendable () -> Void)?
     private let lifecycleQueued: (@Sendable () -> Void)?
@@ -203,6 +203,7 @@ actor HostAuthorityOwner {
         while let command = await authority.nextEngineCommand() {
             guard self.session == session, verifiedSession == session else { return }
             guard case .restore(let attempt, let revision, let target, let token) = command else { continue }
+            await checkpoint?(.restoreAcknowledging)
             _ = await authority.restoreCompleted(attempt: attempt, revision: revision, target: target, token: token)
         }
     }
