@@ -242,7 +242,7 @@ extension RealtimeHandoffTests.FaultLatchConstruction {
 
     /// Each match in `text`, keyed `path Type.func kind` (`<none>` when nothing encloses it); a `type` key ends with
     /// its line up to the match. With `within`, only matches inside a type or extension of that name count. The
-    /// name in a `func name(` declaration is not a call.
+    /// name in a `func name(` declaration is not a call, even when `func` ends the line before.
     static func sites(of patterns: [LatchPattern], in text: String, path: String, within: String? = nil) throws
         -> [String: Int] {
         let code = LatchScan.sanitized(text)
@@ -255,9 +255,10 @@ extension RealtimeHandoffTests.FaultLatchConstruction {
         let scopes = try Self.scopes(in: code)
         var found: [String: Int] = [:]
         for (kind, range) in matches {
+            // The whole prefix, as `FaultRaiseInventory.inventory` does, so `func` on an earlier line still counts.
+            let before = source.substring(to: range.location)
+            if before.range(of: #"\bfunc\s+$"#, options: .regularExpression) != nil { continue }
             let start = source.lineRange(for: NSRange(location: range.location, length: 0)).location
-            let lead = source.substring(with: NSRange(start..<range.location))
-            if lead.range(of: #"\bfunc\s+$"#, options: .regularExpression) != nil { continue }
             let enclosing = scopes.filter { $0.body.contains(range.location) }
             if let within, !enclosing.contains(where: { !$0.isFunction && $0.name == within }) { continue }
             let type = enclosing.last { !$0.isFunction }?.name ?? "<none>"
@@ -425,6 +426,12 @@ extension RealtimeHandoffTests.FaultLatchConstruction {
                 func mintChain() -> FaultChain? { nil }
                 func mintChains(count: Int) -> [FaultChain]? { nil }
                 static func makeLanes(_ count: Int) {}
+                func
+                    mintChain(scope: FaultScope) -> FaultChain? { nil }
+                func
+                    mintChains(scopes: [FaultScope]) -> [FaultChain]? { nil }
+                static func
+                    makeLanes(_ policy: HandoffPolicy) {}
                 func describe() -> String {
                     let plain = "FaultLatch(scopes: s) Self(scopes: s) .init(scopes: s) \" mintChain() [FaultLatch]"
                     let raw = #"Unmanaged<FaultLatch> latch "# + "\(note("FaultChainAuthority(scopes:"))"
