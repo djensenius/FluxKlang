@@ -387,34 +387,6 @@ extension PendingStudioPatchPersistenceTests {
             #expect(collected.cards.first?.contains(own) == true, "an unovertaken validate shows its own draft card")
         }
     }
-
-    private struct CollectedReply: Sendable {
-        var texts: [String] = []
-        var cards: [[AssistantCard]] = []
-        var failed = false
-    }
-
-    // Drains the whole stream before returning; stream events are not Equatable, so match them by pattern.
-    private static func collectReply(
-        _ fixture: PendingPersistenceFixture, from generator: (any AssistantGenerating)? = nil,
-        question: String = "Show the pending draft"
-    ) async -> CollectedReply {
-        let request = AssistantGenerationRequest(
-            question: question, recentMessages: [], summary: "", context: fixture.context)
-        var reply = CollectedReply()
-        let generator = generator ?? AssistantFallbackGenerator(coordinator: fixture.owner)
-        do {
-            for try await event in generator.stream(request) {
-                switch event {
-                case .text(let text): reply.texts.append(text)
-                case .cards(let cards): reply.cards.append(cards)
-                }
-            }
-        } catch {
-            reply.failed = true
-        }
-        return reply
-    }
 }
 
 // A Copilot reply is only the model's own text, whatever another request did to the pending draft meanwhile.
@@ -474,14 +446,49 @@ extension PendingStudioPatchPersistenceTests {
             #expect(await fixture.forwarding.snapshots == saved)
         }
     }
+}
 
-    // "Is the WING connected?" is read-only, so routing ownership passes it to the model.
-    private static func copilotReply(
-        _ fixture: PendingPersistenceFixture, _ http: OvertakingCopilotHTTP
-    ) async -> CollectedReply {
-        let generator = CopilotAssistantGenerator(
-            configuration: CopilotAssistantConfiguration(token: "token", model: "gpt-4o"),
-            coordinator: fixture.owner, httpClient: http)
-        return await collectReply(fixture, from: generator, question: "Is the WING connected?")
+// A Pending Draft card opens review only while its own draft is pending; otherwise navigation is unchanged.
+extension PendingStudioPatchPersistenceTests {
+    @Test func draftCardOpensReviewOnlyForItsOwnPendingDraft() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let older = try await fixture.build()
+            let newer = try await fixture.build(1)
+            try #require(newer.id != older.id, "the newer build has its own id")
+            #expect(!fixture.owner.isPendingDraft(older.id))
+            #expect(fixture.owner.isPendingDraft(newer.id))
+            _ = await fixture.owner.perform(.openHelp(.studio), context: fixture.context)
+            #expect(!fixture.owner.openReview(ofDraft: older.id), "a replaced draft's card is inert")
+            #expect(fixture.owner.navigationTarget == .help(.studio), "an inert card keeps another target")
+            #expect(fixture.owner.openReview(ofDraft: newer.id))
+            #expect(fixture.owner.navigationTarget == .reviewPendingDraft)
+            await fixture.owner.discardPendingStudioDraft()
+            _ = await fixture.owner.perform(.openHelp(.studio), context: fixture.context)
+            #expect(!fixture.owner.isPendingDraft(newer.id))
+            #expect(!fixture.owner.openReview(ofDraft: newer.id), "a discarded draft's card is inert")
+            #expect(fixture.owner.navigationTarget == .help(.studio), "an inert card leaves navigation unchanged")
+            #expect(await fixture.forwarding.snapshots == [older, newer, nil])
+        }
+    }
+
+    @Test func draftCardDuringHeldCommitOpensOnlyThePendingDraft() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let built = try await fixture.build()
+            let committed = fixture.draft(1)
+            try #require(committed.id != built.id, "the committed draft has its own id")
+            let gate = await fixture.forwarding.hold(.beforeSave(2))
+            let commit = fixture.start { await fixture.commit(committed) }
+            try #require(await gate.waitForEntry())
+            // The build is still the settled draft, but only the committed draft is pending.
+            #expect(fixture.owner.pendingStudioDraft == committed)
+            #expect(!fixture.owner.openReview(ofDraft: built.id), "the settled draft's card is inert")
+            #expect(fixture.owner.navigationTarget == nil)
+            #expect(fixture.owner.openReview(ofDraft: committed.id))
+            await gate.release()
+            #expect(await commit.value)
+            #expect(fixture.owner.navigationTarget == .reviewPendingDraft)
+            #expect(await fixture.store.load() == .loaded(committed))
+            #expect(await fixture.forwarding.snapshots == [built, committed])
+        }
     }
 }

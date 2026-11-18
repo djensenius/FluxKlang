@@ -304,7 +304,7 @@ call. An overtaken result (`.pendingDraft(nil)`) or any other result gives no ca
 reply that says "There is no pending Studio draft." no longer shows, or saves to history,
 the wiring and pending-draft cards of another request's draft. The text, coordinator,
 store, Siri donation, commit path and card UI are unchanged; the Review Draft button still
-opens whatever draft is current.
+opened whatever draft was current (P14b9 below addresses that).
 
 Tests cover a typed wiring draft overtaken by a newer build while its save is held (the
 reply has no cards; pending and stored drafts are the newer build), a later unovertaken
@@ -314,7 +314,7 @@ that shows its own pending-draft card.
 
 Not covered: Copilot and Foundation Models generator cards (they compared
 `pendingStudioDraft` themselves; P14b8 below removes that), Review Draft opening the current
-draft rather than the card's draft, exclusion across coordinators, store instances or
+draft rather than the card's draft (P14b9 below addresses that), exclusion across coordinators, store instances or
 processes, and migration activation. As in P14b6, drafts are compared by value, so a draft
 replaced and then restored to an equal value still shows its cards.
 
@@ -344,6 +344,49 @@ the iOS `FluxKlangTests` target run from a checkout, and a SwiftPM mirror. The M
 target does not include it, and it is skipped wherever the sources are not reachable. A
 future draft-creating tool must carry its own result, as P14b7 does.
 
-Not covered: Review Draft opening the current draft rather than the card's draft, whether
-commit reports a failed save, exclusion across coordinators, store instances or processes,
+Not covered: Review Draft opening the current draft rather than the card's draft (P14b9 below
+addresses that), whether commit reports a failed save, exclusion across coordinators, store instances or processes,
 history already saved with another request's cards, and migration activation.
+
+## P14b9 / #830 — Pending Draft cards open review only for their own draft
+
+Part of #830 and #122; both remain open. A Pending Draft card already stored its draft id
+(`AssistantCard.pendingDraft(id:summary:hasErrors:)`), but `AssistantCardView` discarded it,
+and its Review Draft button set `navigationTarget = .reviewPendingDraft` unconditionally.
+Studio's review sheet shows whatever `pendingStudioDraft` is, so a card for draft A opened
+draft B's review, with B's Accept button, once B had replaced A from chat, Siri or a prepared
+commit. After a discard or an accept the tap showed no review and no message, yet it still
+replaced any other navigation target, such as Help.
+
+`AssistantCoordinator` now has `isPendingDraft(_:)` and `openReview(ofDraft:)`. The latter
+sets `navigationTarget = .reviewPendingDraft` only when the id is the pending draft's id;
+otherwise it returns `false` and leaves navigation unchanged, so it never clears or
+overwrites another target such as Help. The card shows Review Draft, and the "Resolve
+validation errors" line, only while its draft is pending. Otherwise it shows the caption
+"This draft is no longer pending." (accessibility identifier
+`assistant.draftReviewCard.inactive`), following `AssistantActionReviewCard`'s inert card.
+The active button keeps `assistant.draftReviewCard`. The `.openReview` tool used by Siri
+has no card and keeps opening the current draft. Store, commit path, chat controller,
+generators and saved history are unchanged.
+
+Matching is by id, not by value. Draft ids are derived from the request's parameters
+(`StudioWiringAdvisor` and `StudioMultiRouteDraftBuilder`), and revalidation keeps the id,
+so an identical later request (in any conversation, even after an accept or a discard)
+re-activates every older card for it, and a revalidated draft or a same-id edited commit
+still opens from the older card. Telling those apart would need a different id or value in the persisted
+card. This filters navigation only; it does not grant a draft any lifetime, and the review
+sheet still re-reads `pendingStudioDraft` when it opens. Cards are inert until `load()`
+publishes the stored draft at launch.
+
+Tests use the real store and forwarding fixture: a card for a replaced draft is inert and
+leaves Help as the target, the newer draft's card opens review, and after a discard and Help
+navigation the card is inert and Help stays the target; during a commit held before its
+save, the settled build's card is inert and the committed (pending) draft's card opens
+review, which survives the completed commit. The view branch is compiled by the hosted
+Apple build, not executed.
+
+Not covered: Studio's own live pending-draft card, the active card's "Resolve validation
+errors" line (it reflects the card's saved snapshot, not a revalidated draft), a review sheet that switches to a
+replacement while open, the saved text of earlier replies, whether commit reports a failed
+save, exclusion across coordinators, store instances or processes, and migration
+activation.
