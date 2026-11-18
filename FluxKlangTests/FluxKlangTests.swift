@@ -138,7 +138,8 @@ struct FluxKlangTests {
     }
 
     /// Demo replies carry no transport session, so only the connected-state guard drops a reply
-    /// that the single listener drains while a reconnect is still suspended in `start`.
+    /// that the single listener drains while a reconnect is still suspended in `start`. `start` stays
+    /// paused until the transport confirms the listener handled the early reply.
     @Test @MainActor func demoReplyWhileReconnectingIsIgnored() async throws {
         let transport = AssistantRecordingWingTransport()
         let controller = WingController(transport: transport, mode: .demo)
@@ -150,7 +151,7 @@ struct FluxKlangTests {
             try await AssistantBackendFixture.waitAsync { await transport.startWaiting }
             #expect(controller.connection == .connecting)
             await transport.emit("/reconnect/early", .int(1))
-            await Task.yield()
+            try await AssistantBackendFixture.wait { transport.listenerDrained }
             await transport.releaseStart()
             await reconnect.value
             await transport.emit("/reconnect/fence", .int(2))

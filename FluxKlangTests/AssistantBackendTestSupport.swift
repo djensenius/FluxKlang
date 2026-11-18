@@ -72,9 +72,23 @@ enum AssistantBackendFixture {
 
 enum BackendTestError: Error { case timeout, send }
 
+/// The one base iterator behind `AssistantRecordingWingTransport.incoming`, counting yields and consumer pulls.
+private final class IncomingDrainProbe: @unchecked Sendable {
+    private var iterator: AsyncStream<WingIncoming>.Iterator
+    private let counts = Mutex((yielded: 0, pulls: 0))
+    init(_ base: AsyncStream<WingIncoming>) { iterator = base.makeAsyncIterator() }
+    var drained: Bool { counts.withLock { $0.pulls > $0.yielded } }
+    func willYield() { counts.withLock { $0.yielded += 1 } }
+    func next() async -> WingIncoming? {
+        counts.withLock { $0.pulls += 1 }
+        return await iterator.next()
+    }
+}
+
 /// Replies and writes exist only in this recording actor. Never opens a socket.
 actor AssistantRecordingWingTransport: WingTransporting {
     private nonisolated let stream: AsyncStream<WingIncoming>
+    private nonisolated let drainProbe: IncomingDrainProbe
     private nonisolated let incomingReads = Mutex(0)
     /// Counts reads so tests can pin the controller's single lifetime listener (#750).
     nonisolated var incoming: AsyncStream<WingIncoming> {
@@ -82,6 +96,9 @@ actor AssistantRecordingWingTransport: WingTransporting {
         return stream
     }
     nonisolated var incomingReadCount: Int { incomingReads.withLock { $0 } }
+    /// True once the single consumer has asked for an element beyond every one yielded. The controller's
+    /// listener body (`ingest`) is synchronous, so each yielded reply has then been fully handled.
+    nonisolated var listenerDrained: Bool { drainProbe.drained }
     private let continuation: AsyncStream<WingIncoming>.Continuation
     private var currentSessionID: UUID?
     private var currentPeerHosts: Set<String> = []
@@ -131,7 +148,11 @@ actor AssistantRecordingWingTransport: WingTransporting {
     private(set) var stopCount = 0
 
     init() {
-        (stream, continuation) = AsyncStream.makeStream()
+        let (base, continuation) = AsyncStream<WingIncoming>.makeStream()
+        let probe = IncomingDrainProbe(base)
+        self.continuation = continuation
+        drainProbe = probe
+        stream = AsyncStream(unfolding: { await probe.next() })
         values = Dictionary(
             uniqueKeysWithValues: (1...40).map {
                 (WingAddress.name(.channel, $0), WingValue.string($0 == 7 ? "Lead" : ""))
@@ -276,14 +297,19 @@ actor AssistantRecordingWingTransport: WingTransporting {
         } else if address.hasSuffix("/in/conn/grp"), let group = value.stringValue {
             reply = [.string(group), .float(0), .string(group)]
         } else { reply = [value] }
-        continuation.yield(WingIncoming(address: address, values: reply, host: "192.0.2.10",
+        send(WingIncoming(address: address, values: reply, host: "192.0.2.10",
             port: WingNetwork.defaultPort, transportSessionID: currentSessionID))
+    }
+    /// Every reply goes through here so the drain probe counts it before the listener can see it.
+    private func send(_ message: WingIncoming) {
+        drainProbe.willYield()
+        continuation.yield(message)
     }
     func emit(
         _ address: String, _ value: WingValue, host: String = "192.0.2.10",
         port: UInt16 = WingNetwork.defaultPort, session: UUID? = nil, date: Date = Date()
     ) {
-        continuation.yield(
+        send(
             WingIncoming(
                 address: address, value: value, host: host, port: port,
                 transportSessionID: session ?? currentSessionID, receivedAt: date))
