@@ -369,7 +369,9 @@ extension RealtimeHandoffTests {
         /// critical events until the first refusal and releases. The turn counter is relaxed, so successive holders
         /// on different threads are ordered only by the handoff and the lane chain's slot. Every turn's refusal is
         /// counted through the one lane chain and none contends (TSan, `--filter Stress`). Kills: a missing
-        /// acquire or release on the claim, release or free path (TSan); a chain minted per claim; a skipped `put`.
+        /// acquire or release on the claim or release CAS (TSan); a chain minted per claim or replaced on
+        /// release; a skipped `put`. A relaxed free store in the drain survives here (no holder reads what the
+        /// drain wrote); `stressClaimChurnKeepsLanesExclusive` catches it.
         @Test(.timeLimit(.minutes(1)))
         func laneHandOverAcrossThreadsNeverContends() throws {
             let (threads, rounds) = (Self.handOverThreads, Self.handOverRounds)
