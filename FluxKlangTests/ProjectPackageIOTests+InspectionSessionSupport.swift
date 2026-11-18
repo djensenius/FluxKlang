@@ -178,6 +178,7 @@ final class InspectionSessionFixture {
     let session: ProjectPackageInspectionSession
     private var requests: [ProjectPackageInspectionRequest] = []
     private var completionObservers: [Task<Void, Never>] = []
+    private var models: [PerformancePackageInspectionWindow] = []
 
     init() throws {
         let scratch = try PackageIOTestSupport.scratch()
@@ -208,6 +209,13 @@ final class InspectionSessionFixture {
         return request
     }
 
+    /// Cleanup joins every completion the model started, including superseded ones.
+    @discardableResult
+    func track(_ model: PerformancePackageInspectionWindow) -> PerformancePackageInspectionWindow {
+        models.append(model)
+        return model
+    }
+
     func retain(
         _ window: ProjectPackageInspectionSession.Registration
     ) async throws -> ProjectPackageInspection {
@@ -234,6 +242,7 @@ final class InspectionSessionFixture {
     private func cleanUp() async {
         probe.releaseAll()
         for request in requests { await request.join() }
+        for model in models { await model.join() }
         for observer in completionObservers { await observer.value }
         #expect(probe.observations.withLock { $0.active } == 0)
         #expect(probe.observations.withLock { $0.witnesses } == 0)

@@ -123,4 +123,235 @@ extension ProjectPackageIOTests {
             for refusal in Refusal.allCases { #expect(Mirror(reflecting: refusal).children.isEmpty) }
         }
     }
+
+    private typealias Model = PerformancePackageInspectionWindow
+    private typealias Content = PerformanceWorkspaceContent
+
+    @MainActor @Test func inspectionWindowPublishesAfterCompletionAndPreservesStarter() async throws {
+        try await InspectionSessionFixture.run { fixture in
+            let session = fixture.session
+            let window = WindowID(uuid: UUID())
+            let starter = try PerformanceProjectSession(window: window)
+            try starter.setStereoConnectionEnabled(false)
+            try starter.undo()
+            let before = (starter.project, starter.base, starter.snapshot, starter.navigation)
+            let model = fixture.track(Model(owner: session, window: window))
+            #expect(model.status == .idle)
+            #expect(!model.isInspecting)
+            #expect(session.windowCount == 1)
+            fixture.probe.stages.withLock { $0 = [.decoded] }
+            model.open(at: fixture.original)
+            #expect(model.status == .opening)
+            #expect(model.isOpening && model.isInspecting)
+            let request = try #require(session.acquisition?.request)
+            try await fixture.waitForEntry(fixture.probe.decoded, of: request)
+            #expect(model.inspection == nil)
+            #expect(Content.resolve(starter: starter, window: window, isInspecting: model.isInspecting)
+                == .inspection(returnTitle: "Return to Unsaved Project"))
+            fixture.probe.decoded.release()
+            await model.join()
+            #expect(model.status == .idle)
+            #expect(!model.isOpening)
+            let published = try #require(model.inspection)
+            #expect(try session.inspection(in: session.openWindow(window)) == published)
+            #expect(session.retainedCount == 1)
+            model.returnToUnsavedProject()
+            #expect(model.inspection == nil)
+            #expect(!model.isInspecting)
+            #expect(session.retainedCount == 0)
+            #expect(Content.resolve(starter: starter, window: window, isInspecting: model.isInspecting) == .editor)
+            #expect(before == (starter.project, starter.base, starter.snapshot, starter.navigation))
+            #expect(starter.snapshot.history.redoCount == 1)
+        }
+    }
+
+    @MainActor @Test func inspectionWindowRefusalsNeverDisturbOrQueue() async throws {
+        try await InspectionSessionFixture.run { fixture in
+            let session = fixture.session
+            let model = fixture.track(Model(owner: session, window: WindowID(uuid: UUID())))
+            model.open(at: fixture.original)
+            await model.join()
+            let original = try #require(model.inspection)
+            fixture.probe.stages.withLock { $0 = [.decoded] }
+            let other = try fixture.begin(session.openWindow(WindowID(uuid: UUID())))
+            try await fixture.waitForEntry(fixture.probe.decoded, of: other)
+            model.open(at: fixture.replacement)
+            #expect(model.status == .unavailable(.busy))
+            #expect(model.inspection == original)
+            #expect(!model.isOpening)
+            fixture.probe.decoded.release()
+            await other.join()
+            fixture.probe.stages.withLock { $0 = [.beforeLoader] }
+            model.open(at: fixture.replacement)
+            let pending = try #require(session.acquisition?.request)
+            try await fixture.waitForEntry(fixture.probe.beforeLoader, of: pending)
+            model.open(at: fixture.original)
+            #expect(model.status == .unavailable(.busy))
+            #expect(model.isOpening)
+            #expect(model.inspection == original)
+            #expect(session.acquisition?.request === pending)
+            fixture.probe.beforeLoader.release()
+            await model.join()
+            #expect(model.status == .idle)
+            let replacement = try #require(model.inspection)
+            #expect(replacement != original)
+            let third = fixture.track(Model(owner: session, window: WindowID(uuid: UUID())))
+            third.open(at: fixture.original)
+            #expect(third.status == .unavailable(.retainedCapacity))
+            #expect(third.inspection == nil && !third.isOpening)
+            // A refused fresh window stays visible until Return.
+            #expect(third.isInspecting)
+            third.returnToUnsavedProject()
+            #expect(!third.isInspecting)
+            #expect(Content.resolve(starter: nil, window: WindowID(uuid: UUID()), isInspecting: third.isInspecting)
+                == .empty)
+            #expect(session.acquisition == nil)
+            #expect(model.inspection == replacement)
+            #expect(fixture.probe.observations.withLock { $0.calls } == 3)
+            #expect(fixture.probe.observations.withLock { $0.maximumActive } == 1)
+        }
+    }
+
+    @MainActor @Test func inspectionWindowFailureAndCancelKeepPreviousPayload() async throws {
+        try await InspectionSessionFixture.run { fixture in
+            let session = fixture.session
+            let model = fixture.track(Model(owner: session, window: WindowID(uuid: UUID())))
+            model.open(at: fixture.original)
+            await model.join()
+            let original = try #require(model.inspection)
+            model.open(at: fixture.scratch.appendingPathComponent("absent"))
+            await model.join()
+            #expect(model.status == .refused(.notFound))
+            #expect(model.inspection == original)
+            #expect(model.isInspecting)
+            fixture.probe.stages.withLock { $0 = [.beforeLoader] }
+            model.open(at: fixture.replacement)
+            let pending = try #require(session.acquisition?.request)
+            try await fixture.waitForEntry(fixture.probe.beforeLoader, of: pending)
+            model.cancelOpening()
+            #expect(model.status == .cancelling)
+            #expect(model.isOpening)
+            #expect(session.acquisition?.phase == .draining)
+            #expect(model.inspection == original)
+            fixture.probe.beforeLoader.release()
+            await model.join()
+            #expect(model.status == .cancelled)
+            #expect(!model.isOpening)
+            #expect(model.inspection == original)
+            #expect(session.acquisition == nil)
+            model.cancelOpening()
+            #expect(model.status == .cancelled)
+        }
+    }
+
+    @MainActor @Test func inspectionWindowReturnDuringOpeningRejectsLateSuccess() async throws {
+        try await InspectionSessionFixture.run { fixture in
+            let session = fixture.session
+            let window = WindowID(uuid: UUID())
+            let starter = try PerformanceProjectSession(window: window)
+            let model = fixture.track(Model(owner: session, window: window))
+            model.open(at: fixture.original)
+            await model.join()
+            fixture.probe.stages.withLock { $0 = [.decoded] }
+            model.open(at: fixture.replacement)
+            let pending = try #require(session.acquisition?.request)
+            try await fixture.waitForEntry(fixture.probe.decoded, of: pending)
+            model.returnToUnsavedProject()
+            #expect(model.status == .idle)
+            #expect(model.inspection == nil)
+            #expect(!model.isOpening && !model.isInspecting)
+            #expect(session.retainedCount == 0)
+            #expect(session.acquisition?.phase == .draining)
+            fixture.probe.decoded.release()
+            await model.join()
+            #expect(pending.outcome == .cancelled)
+            #expect(model.status == .idle)
+            #expect(model.inspection == nil)
+            #expect(!model.isInspecting)
+            #expect(try session.inspection(in: session.openWindow(window)) == nil)
+            #expect(Content.resolve(starter: starter, window: window, isInspecting: model.isInspecting) == .editor)
+        }
+    }
+
+    @MainActor @Test func inspectionWindowCloseRetiresRegistrationAndIgnoresLateCompletion() async throws {
+        try await InspectionSessionFixture.run { fixture in
+            let session = fixture.session
+            let window = WindowID(uuid: UUID())
+            let model = fixture.track(Model(owner: session, window: window))
+            model.open(at: fixture.original)
+            await model.join()
+            fixture.probe.stages.withLock { $0 = [.decoded] }
+            model.open(at: fixture.replacement)
+            let pending = try #require(session.acquisition?.request)
+            try await fixture.waitForEntry(fixture.probe.decoded, of: pending)
+            model.close()
+            #expect(session.windowCount == 0)
+            #expect(session.retainedCount == 0)
+            #expect(session.acquisition?.phase == .draining)
+            #expect(model.inspection == nil && model.status == .idle)
+            #expect(!model.isInspecting && !model.isOpening)
+            model.close()
+            model.open(at: fixture.original)
+            #expect(session.acquisition?.request === pending)
+            fixture.probe.decoded.release()
+            await model.join()
+            #expect(pending.outcome == .cancelled)
+            #expect(model.inspection == nil && model.status == .idle)
+            #expect(session.acquisition == nil)
+            #expect(fixture.probe.observations.withLock { $0.calls } == 2)
+            let reopened = fixture.track(Model(owner: session, window: window))
+            #expect(reopened.status == .idle)
+            #expect(session.windowCount == 1)
+            #expect(try session.inspection(in: session.openWindow(window)) == nil)
+            reopened.open(at: fixture.original)
+            await reopened.join()
+            #expect(reopened.inspection != nil)
+            try session.closeWindow(session.openWindow(window))
+            reopened.returnToUnsavedProject()
+            #expect(reopened.status == .unavailable(.invalidRegistration))
+            #expect(reopened.inspection == nil)
+            #expect(!reopened.isInspecting && !reopened.isOpening)
+            reopened.open(at: fixture.original)
+            #expect(session.acquisition == nil)
+            #expect(fixture.probe.observations.withLock { $0.calls } == 3)
+        }
+    }
+
+    @MainActor @Test func inspectionWindowCapacityRefusalIsTypedAndInert() async throws {
+        try await InspectionSessionFixture.run { fixture in
+            let session = fixture.session
+            for _ in 0..<Session.windowLimit { _ = try session.openWindow(WindowID(uuid: UUID())) }
+            let window = WindowID(uuid: UUID())
+            let model = fixture.track(Model(owner: session, window: window))
+            #expect(model.status == .unavailable(.windowCapacity))
+            #expect(!model.isInspecting)
+            model.open(at: fixture.original)
+            model.cancelOpening()
+            model.returnToUnsavedProject()
+            model.close()
+            await model.join()
+            #expect(model.status == .unavailable(.windowCapacity))
+            #expect(model.inspection == nil && !model.isOpening)
+            #expect(session.acquisition == nil)
+            #expect(session.windowCount == Session.windowLimit)
+            #expect(fixture.probe.observations.withLock { $0.calls } == 0)
+            #expect(Content.resolve(starter: nil, window: window, isInspecting: model.isInspecting) == .empty)
+        }
+    }
+
+    @MainActor @Test func workspaceContentPrefersInspectionWithTruthfulReturn() throws {
+        let window = WindowID(uuid: UUID())
+        let other = WindowID(uuid: UUID())
+        #expect(Content.resolve(starter: nil, window: window, isInspecting: false) == .empty)
+        #expect(Content.resolve(starter: nil, window: window, isInspecting: true)
+            == .inspection(returnTitle: "Close Inspection"))
+        let starter = try PerformanceProjectSession(window: window)
+        #expect(Content.resolve(starter: starter, window: window, isInspecting: false) == .editor)
+        #expect(Content.resolve(starter: starter, window: window, isInspecting: true)
+            == .inspection(returnTitle: "Return to Unsaved Project"))
+        #expect(Content.resolve(starter: starter, window: other, isInspecting: false) == .retained)
+        #expect(Content.resolve(starter: starter, window: other, isInspecting: true)
+            == .inspection(returnTitle: "Return to Unsaved Project"))
+        #expect(starter.navigation.windowProjects == [window: starter.project.id])
+    }
 }
