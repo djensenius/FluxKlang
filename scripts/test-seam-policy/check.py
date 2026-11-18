@@ -5,7 +5,8 @@ The same self-check also covers `fault_latch_raw_raise` (#190): production code 
 not call the plain `FaultLatch.raise(scope, kind, frame:)`; authority raises
 (`raise(&token, ...)`) and `raiseContended()` stay allowed. A third rule,
 `fault_latch_authority_raise`, allows authority raises only in the four
-lane-owner files listed in its `excluded:` entries.
+lane-owner files listed in its `excluded:` entries. A fourth, `fault_latch_construction`,
+allows `FaultLatch(` only in `FaultLatch+Chains.swift` (K-190c).
 
 The seams remain compiled in app modules. This type-blind, non-adversarial policy
 does not defend against lint suppressions or configuration edits. Its declaration
@@ -33,6 +34,7 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 RULE = "fault_latch_test_seams"
 RAW_RAISE_RULE = "fault_latch_raw_raise"
 AUTHORITY_RAISE_RULE = "fault_latch_authority_raise"
+CONSTRUCTION_RULE = "fault_latch_construction"
 # The lane owners, in .swiftlint.yml order; again not read from the rule.
 AUTHORITY_ALLOWLIST = (
     "Shared/Audio/Kernel/Memory/DeferredRelease.swift",
@@ -287,6 +289,7 @@ class Check:
         }], (sentinel,))
         self.check_raw_raise()
         self.check_authority_raise()
+        self.check_construction()
         self.manifest["outcome"] = "PASS"
         print("PASS fault-seam-policy self-check: 200 negatives, positives, other-rule sentinel")
 
@@ -349,9 +352,18 @@ class Check:
         self.lint("raw-raise-root-tests-exempt", exempt, ("FluxKlangTests/RawRaisePositives.swift",))
         # The one legitimate plain call carries a narrow, reviewable disable comment.
         source = "Shared/Audio/Kernel/Memory/FaultLatch+Chains.swift"
-        self.copy_input(source, "Shared/RealFaultLatchChains.swift")
-        self.lint("raw-raise-real-chains", [], ("Shared/RealFaultLatchChains.swift",))
         lines = (REPOSITORY / source).read_text(encoding="utf-8").splitlines()
+        # Fourth rule (fault_latch_construction): the file's one `FaultLatch(` passes only at its own path.
+        built = [i for i, row in enumerate(lines) if "FaultLatch(" in row]
+        if len(built) != 1:
+            raise RuntimeError("FaultLatch+Chains.swift must keep exactly one FaultLatch( construction")
+        construction = {"line": built[0] + 1, "character": lines[built[0]].index("FaultLatch(") + 1,
+                        "rule_id": CONSTRUCTION_RULE, "severity": "Error"}
+        self.copy_input(source, source)
+        self.lint("construction-real-chains", [], (source,))
+        self.copy_input(source, "Shared/RealFaultLatchChains.swift")
+        self.lint("raw-raise-real-chains", [dict(construction, file="Shared/RealFaultLatchChains.swift")],
+                  ("Shared/RealFaultLatchChains.swift",))
         disables = [i for i, row in enumerate(lines)
                     if f"swiftlint:disable:next {RAW_RAISE_RULE}" in row]
         if len(disables) != 1 or "latch.raise(" not in lines[disables[0] + 1]:
@@ -362,7 +374,9 @@ class Check:
             "file": "Shared/MutatedFaultLatchChains.swift", "line": disables[0] + 1,
             "character": lines[disables[0]].index("raise(") + 1,
             "rule_id": RAW_RAISE_RULE, "severity": "Error",
-        }], ("Shared/MutatedFaultLatchChains.swift",))
+        }, dict(construction, file="Shared/MutatedFaultLatchChains.swift",
+                line=construction["line"] - (disables[0] < built[0]))],
+            ("Shared/MutatedFaultLatchChains.swift",))
         print("PASS fault-seam-policy self-check: raw-raise positives, negatives, exemptions")
 
     def check_authority_raise(self):
@@ -438,6 +452,39 @@ class Check:
             "rule_id": RAW_RAISE_RULE, "severity": "Error",
         }], ("Shared/AuthorityRaiseNegatives.swift",))
         print("PASS fault-seam-policy self-check: authority-raise allowlist, positives, negatives")
+
+    def check_construction(self):
+        # Fourth rule (fault_latch_construction): spelled-out `FaultLatch(` and `FaultLatch.init(`, also split
+        # over lines; the real FaultLatch+Chains.swift is checked in check_raw_raise.
+        positives = (
+            "    _ = try? FaultLatch(scopes: [])",
+            "    _ = try? FaultLatch.init(scopes: [])",
+            "    _ = try? FaultLatch\n        .init(scopes: [])",
+        )
+        body = ["func constructionPositives() {"]
+        sites = []
+        for text in positives:
+            # The diagnostic is on the `FaultLatch` token, the first line of each form.
+            sites.append(len(body))
+            body.extend(text.splitlines())
+        body.append("}")
+        source = "\n".join(body) + "\n"
+        # A lookalike of the excluded path is not excluded.
+        for path in ("Shared/ConstructionPositives.swift",
+                     "Shared/Audio/Kernel/Memory/XFaultLatch+Chains.swift"):
+            write(self.root / path, source)
+            self.lint(f"construction-positives-{Path(path).stem}", [{
+                "file": path, "line": i + 1, "character": body[i].index("FaultLatch") + 1,
+                "rule_id": CONSTRUCTION_RULE, "severity": "Error",
+            } for i in sites], (path,))
+        write(self.root / "FluxKlangTests/ConstructionPositives.swift", source)
+        self.lint("construction-root-tests-exempt", [], ("FluxKlangTests/ConstructionPositives.swift",))
+        negatives = ["func constructionNegatives() {", "    // FaultLatch(scopes: [])",
+                     '    _ = "FaultLatch(scopes: [])"', "    _ = MyFaultLatch()", "    _ = FaultLatchNote()",
+                     "    _ = FaultLatch.PreparationError.self", "}"]
+        write(self.root / "Shared/ConstructionNegatives.swift", "\n".join(negatives) + "\n")
+        self.lint("construction-negatives", [], ("Shared/ConstructionNegatives.swift",))
+        print("PASS fault-seam-policy self-check: construction positives, negatives, exemption, lookalike path")
 
 
 def main():

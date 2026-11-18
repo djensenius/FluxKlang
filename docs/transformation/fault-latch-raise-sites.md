@@ -343,12 +343,14 @@ in section 3 that shares one latch counts toward the same K, along with every
 chain that raises on an unprepared scope. The latch holds one bound for all of
 them. A proof for one site does not cover the others.
 
-Which sites share a latch in the code today: no production code constructs a
-`FaultLatch`. `grep -rn 'FaultLatch(' Shared FluxKlang FluxKlangMac` finds no
-call; the constructor calls are in tests (for example
-`FluxKlangTests/RealtimeHandoffTests+Faults.swift:21`, `:56`, `:78`). So no site
-shares a latch in production code today; the question is open for any later
-wiring. What the types allow: `FanInHandoff` hands one latch to every lane's
+Which sites share a latch in the code today: production code constructs a
+`FaultLatch` in exactly one place, `FaultChainAuthority.init`
+(`Memory/FaultLatch+Chains.swift:70` at `6ec532c3`), into its `private let latch`
+(`:49`), which it never hands out; the other constructor calls are in tests (for
+example `FluxKlangTests/RealtimeHandoffTests+Faults.swift:21`, `:56`, `:78`).
+K-190c pins both facts in source (section 9). So a latch is shared only by the
+raisers of its one authority, and which sites share an authority is the open
+wiring question. What the types allow: `FanInHandoff` hands one latch to every lane's
 `ReservedCapacityRing` (`FanInHandoff.swift:340`), so S2 and S4 share it inside
 one handoff (since FLP6 they do not: S2 raises on the handoff's separate claim
 authority, `FanInHandoff.swift:339`, and only the lanes' S4 raises share `faults`,
@@ -436,7 +438,14 @@ section 4):
   single-producer `pushed`, not the raise contract. The real set of holders is
   still open.
 - [ ] Global: the sum over every raiser that shares one latch, including raisers
-  on unprepared scopes (`unknownScopeFaults`), is below 2^39.
+  on unprepared scopes (`unknownScopeFaults`), is below 2^39. K-190c holds it
+  per latch lifetime at the reference-model level: only `FaultChainAuthority.init`
+  builds a latch, the latch never leaves its authority except as
+  `FaultObservation`'s raise-less owner, and chains are minted only
+  at the keyed control-side sites (section 9). So every raise on a latch, unknown
+  scopes included, goes through R0 with a chain token, and K <= `chainBudget` <=
+  2^16 < 2^39. Still open: real callers, and each site's chains fitting its
+  authority's budget (R2).
 - [ ] C: the same bound for each `FanInRefusalCounter` user (`refusedClaims`,
   `refusedNotOwner`, `KernelAdmissionRefusals` counters), over each counter's
   own lifetime. K-RC2 bounds K by role construction; real callers stay open.
@@ -512,9 +521,129 @@ S1, S3 and standalone S4 hold no `RefusalCallerToken`, by design: K-RC2 covers
 only `FanInRefusalCounter` writers (section 4), and their raises are bounded by
 their chains, not by caller roles.
 
+### 9.1 Latch construction, non-escape and mint sites (K-190c)
+
+K-190c (#821) pins in source three facts that K-190a left to convention. Lines
+are at `6ec532c3`, relative to `Shared/Audio/Kernel`. The check is
+`RealtimeHandoffTests.FaultLatchConstruction`
+(`FluxKlangTests/RealtimeHandoffTests+FaultChains.swift`; its scan and
+self-tests are in `+SysExChains.swift` because of the 500-line limit). It reuses
+K-190a's sanitizer, declaration regex and body finder, and keys each match
+`relpath Type.func kind` as above:
+
+- T1, `faultLatchIsBuiltOnlyByTheAuthorityInit()`: `FaultLatch(`,
+  `FaultLatch.init(`, `FaultLatch.self` or `.Type`, a call of a lower-case
+  static member (a factory such as `FaultLatch.spare(`), and an inferred
+  `.init(scopes:` anywhere in the kernel, plus `Self(`, a bare `.init(` or
+  `self.init(` inside any type or extension named `FaultLatch`. The result must
+  be exactly one construction, in `FaultChainAuthority.init`
+  (`Memory/FaultLatch+Chains.swift:70`). Outside `FaultLatch`, `self.init(` is
+  delegation (the authority's convenience `init`), not a latch construction.
+- T2, `faultLatchIsHeldOnlyByItsOwners()`: every `FaultLatch` in a type position
+  (not followed by `.` or `(`), keyed with its line. The result must be exactly:
+  - the class declaration;
+  - the authority's `private let latch` (`:49`);
+  - `FaultObservation`'s `fileprivate let owner` (`Memory/FaultLatch.swift:45`),
+    which can outlive the authority but exposes no raise;
+  - its borrowed `isObservation(of latch: FaultLatch)` parameter (`:50`), an
+    identity comparison that stores nothing;
+  - the two test-seam owners (`:275`, `:300`), which `fault_latch_test_seams`
+    guards.
+
+  So any of these fails it: a return, an optional, a collection,
+  `Unmanaged<FaultLatch>`, an accessor, a changed access level, a cast, an alias,
+  or an `extension FaultLatch`.
+
+  T2 also pins every `latch` token inside `FaultChainAuthority` (bare, `self.`,
+  after a `.`, in a key path or backticked), so an escape that never names the
+  type, such as `func rawRaise() -> (FaultScope, FaultKind, Int64) ->
+  KernelStatus { latch.raise }` or a closure capturing `latch`, adds a key or
+  raises a count. The 11 tokens, in 9 keys, are:
+  - the `PreparationError.latch` case (`Memory/FaultLatch+Chains.swift:33`);
+  - the declaration (`:49`) and `unknownScopeFaults` (`:146`), both keyed
+    `FaultChainAuthority.<none>`;
+  - in `init`, the build (`:70`) and its `.latch(error)` rethrow (`:72`);
+  - one each in `isObservation`, `raise`, `isLatched`, `pending`, `observe` and
+    `acknowledge` (`:106` to `:143`).
+- T3, `chainsAreMintedOnlyAtTheKeyedSites()`: the `mintChain(` and `mintChains(`
+  calls must be exactly the five owner sites plus the authority's own
+  `mintChain` delegating to `mintChains`. The five owner sites are:
+  - `SysExAssembler.init`;
+  - `DeferredReleaseQueue.init`;
+  - the ring's convenience `init` (`Memory/ReservedCapacityRing+Chains.swift:64`);
+  - `FanInClaimChain.init`;
+  - `FanInHandoff.makeLanes`.
+
+  Also, `makeLanes(` and `(minting:` must appear only in `FanInHandoff.init`
+  (`Memory/FanInHandoff.swift:301` to `:302`). `ReservedRingChain(` must appear
+  only in the ring's designated `init` (`Memory/ReservedCapacityRing.swift:136`),
+  which wraps an already minted chain and refuses another authority's
+  (`.foreignChain`).
+- T4, `productionBuildsNoFaultChainAuthority()`: `FaultChainAuthority(`,
+  `FaultChainAuthority.init(` and an inferred `.init(scopes:` under `Shared`
+  (kernel included) and the app trees `FluxKlang` and `FluxKlangMac`. The
+  expected set, `productionAuthorities`, is empty. Each real-caller slice adds
+  its own construction there deliberately (#190 item 5). Outside the kernel T4
+  also runs T1's construction patterns and T2's holder pattern and expects no
+  match, so an alias, a factory, the metatype or a backticked `FaultLatch` there
+  fails it, not only the spelled-out forms the lint rule sees. From the
+  repository (its root has `project.yml`) the scanned trees must be exactly
+  `Shared`, `FluxKlang` and `FluxKlangMac`, so a moved or missing app tree fails
+  rather than going unscanned. The kernel mirror has only the mirrored `Shared`
+  sources, so there they must be exactly `Shared`.
+
+Self-tests (`latchScanFlagsConstructionsAndAuthorities`,
+`latchScanFlagsEveryWayToHoldALatch`, `latchScanFlagsMintsOutsideTheirSites`,
+`latchScanIgnoresCommentsStringsAndLookalikes`) trip T1 to T4 on synthetic red
+sources, including `self.init(` in an `extension FaultLatch`, a factory call,
+and `latch` escaping the authority through `self.latch.raise`, a capture and a
+key path. They keep comments, strings, interpolations, `func` declarations and
+lookalike names (`FaultLatchNote`, `MyFaultLatch`, `remakeLanes`,
+`mintChainCount`, `unlatch`, `latchRef`) green. The Debug kernel-mirror job
+requires T1 to T4 to pass.
+
+The repo-wide tripwire is the SwiftLint custom rule `fault_latch_construction`.
+It rejects spelled-out `FaultLatch(` and `FaultLatch.init(`, also split over
+lines, in identifier tokens (so not in comments or strings) in every Swift file
+except `Memory/FaultLatch+Chains.swift`; root `FluxKlangTests/` disables it.
+`scripts/test-seam-policy/check.py` asserts that the real file is clean at its
+own path and fires the rule once when copied elsewhere. Its fixtures fire the
+rule on the plain, `.init` and split-line forms, also at the lookalike path
+`Memory/XFaultLatch+Chains.swift`; keep it quiet on a comment, a string,
+`MyFaultLatch(`, `FaultLatchNote(` and `FaultLatch.PreparationError`; and
+check the root-tests exemption.
+
+Result, per latch lifetime and for the reference model only: every latch that
+production code can construct belongs to one authority. Every raise on it,
+unknown scopes included, goes through R0 with the token of a chain minted at a
+keyed control-side site. So K <= `chainBudget` <= 2^16 < 2^39 (Global, section 8).
+
+The scans are type-blind and cannot see:
+- a type-erased holder (`AnyObject`, `Any`), an unsafe cast or reflection
+  (`Mirror`);
+- generic construction through a protocol requirement (`T(scopes:)` with `T`
+  inferred);
+- an inferred `.init(` of `ReservedRingChain`, or of `FanInClaimChain` without
+  `minting:` as its first label;
+- a construction or mint inside a string interpolation, which the sanitizer
+  blanks with the string (as for K-190a's raises);
+- an unapplied method reference passed on and called later: `faults.mintChain`
+  or `faults.mintChains` (T3 needs the `(`), or a latch's `raise` where the latch
+  is not named `latch`, such as `owner.raise` in `FaultObservation` (no type
+  name, no `latch` token, no call). Inside `FaultChainAuthority`, T2's `latch`
+  set does catch an unapplied `latch.raise` or a captured `latch`;
+- backtick-quoted member names (`` FaultLatch.`init`( ``, `` `Self`( ``,
+  `` faults.`mintChain`( ``); a backticked `FaultLatch` or `latch` is caught;
+- macro expansions;
+- in the kernel mirror only, the excluded
+  `Processors/OfflineAudioRoutingProcessor.swift` and the app trees. T1 to T4
+  cover them when the tests run from the repository; the SwiftLint rule, run on
+  the repository, covers only spelled-out `FaultLatch(` and `FaultLatch.init(`.
+
 Still open, and not claimed here: per-site chain, lifetime-bound and ordering
 proofs for real callers, including the real set of S4 lane holders; the global
-bound for unknown-scope raises on a latch shared beyond one authority; AU or MIDI
+bound for real callers (K-190c holds it only per latch lifetime in the reference
+model) and each site's chains fitting its authority's budget (R2); AU or MIDI
 callback cardinality; whether the "stop pushing before release" contract moves to
 #64; and any hot-path integration (section 8). K-190b closed only the
 reference-model S4b/S4c ordering between successive lane holders.
