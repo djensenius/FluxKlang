@@ -33,3 +33,38 @@ extension MIDIEndpointProtocol {
         }
     }
 }
+
+/// What one CoreMIDI binding receives and what its endpoint could lose on the way (#81, #83; media-contract §9.1).
+/// Pure: a function of the mapped endpoint protocol and the input backend's batch format. Nothing here is observed.
+struct CoreMIDIReceiveFidelity: Sendable, Equatable {
+    let endpoint: MIDIEndpointProtocol
+    /// The input backend's batch format. `midi1UMP` means `receive` is declared by the port; `bytes` means it is
+    /// SDK convention.
+    let format: MIDIPacketBatch.Format
+    /// The protocol the input port receives: MIDI 1.0 for both backends. The UMP backend's port is created with
+    /// `MIDIProtocolID._1_0`. The byte backend's port declares no protocol; reading its MIDI 1.0 bytes as a MIDI 1.0
+    /// receive is the SDK's legacy convention, not a property CoreMIDI reports.
+    let receive: MIDIPortProtocol
+    /// False exactly when the endpoint protocol is `unknown`.
+    let verified: Bool
+    /// §9.1 `translatedBy == os`, derived and never observed: the endpoint protocol (`unknown` counts as `midi1`)
+    /// differs from `receive`. Whether CoreMIDI converts exactly then is media-contract open question 8.
+    let translatedByOS: Bool
+    /// What a derived MIDI 2.0 → 1.0 translation could lose (`MIDICapabilityResolver.midi2ToMIDI1Losses`); empty when
+    /// no translation is derived. Possible losses only: nothing is counted. `receive` is always `midi1`, so a derived
+    /// translation is always downward. Meaningful only when `verified`: for an `unknown` endpoint it is empty because
+    /// no translation is derived, but the real losses are unknown, not none.
+    let possibleTranslationLosses: [UMPTranslationLossReason]
+
+    init(endpoint: MIDIEndpointProtocol, format: MIDIPacketBatch.Format) {
+        self.endpoint = endpoint
+        self.format = format
+        switch format {
+        case .bytes, .midi1UMP: receive = .midi1
+        }
+        verified = endpoint != .unknown
+        let assumed: MIDIPortProtocol = endpoint == .midi2 ? .midi2 : .midi1
+        translatedByOS = assumed != receive
+        possibleTranslationLosses = translatedByOS ? MIDICapabilityResolver.midi2ToMIDI1Losses : []
+    }
+}

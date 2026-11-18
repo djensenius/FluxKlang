@@ -961,6 +961,7 @@ targets:
       - path: FluxKlangTests/PerformanceProjectSessionTests.swift
       - path: FluxKlangTests/PerformanceDraftReviewTests.swift
       - path: FluxKlangTests/PendingStudioPatchPersistenceTests.swift
+      - path: FluxKlangTests/PendingStudioPatchPersistenceTests+Publication.swift
       - path: FluxKlangTests/PendingStudioPatchPersistenceTestSupport.swift
       - path: FluxKlangTests/PerformanceWiringEditorTests.swift
       - path: FluxKlangTests/WorkspaceNavigationTests.swift

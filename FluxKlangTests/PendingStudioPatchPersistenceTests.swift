@@ -462,7 +462,7 @@ extension PendingStudioPatchPersistenceTests {
             #expect(read.observation == .load(.loaded(draft)))
             #expect(mutation.observation == .mutation(snapshot: newerDraft, outcome: .writeCompleted))
             #expect(fixture.owner.latestStorageAttempt === mutation)
-            // No assertion that late publication or the current file is authoritative.
+            #expect(fixture.owner.pendingStudioDraft == newerDraft)
         }
     }
 

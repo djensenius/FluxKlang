@@ -270,7 +270,9 @@ extension HostAuthorityTests {
             let probe = LifecycleProbe()
             #expect(lifecycle.owner == nil)
             _ = await lifecycle.replace { probe.operation(.success(.acceptanceFailure)) }
-            await lifecycle.detach(Bench.window).wait()
+            let completion = lifecycle.detach(Bench.window)
+            await completion.fenced()
+            await completion.wait()
             #expect(lifecycle.lastReplacementOutcome == .success(.acceptanceFailure))
             #expect(!lifecycle.isBusy && probe.finished == 1)
         }

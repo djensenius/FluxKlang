@@ -139,6 +139,21 @@ is emitted. No OS protocol conversion behaviour was verified: media-contract ope
 passive hardware inventory lists the LCXL3's endpoints as MIDI 1.0, so `midi1` is expected from it, but this
 reader has not been run against the device and that value is not measured.
 
+## Per-binding receive fidelity (#791, M81-EP2)
+
+`CoreMIDIReceiveFidelity` combines a binding's mapped endpoint protocol with the input backend's batch format into
+the media-contract §9.1 fields the #81 row asks for (`endpointProtocol`, `portProtocol`, here `receive`, and
+`translatedBy`), and keeps that `format`. Both backends receive `midi1`. The UMP port is created with
+`MIDIProtocolID._1_0`, so `midi1UMP` marks a declared receive; the legacy byte port declares no protocol, so for
+`bytes` treating it as a MIDI 1.0 receive is SDK convention, not a reported property. `verified` is false only
+for `unknown`, and the possible losses mean something only when it is true: an `unknown` endpoint's are unknown,
+not none. `translatedByOS` is derived as in §9.1 (unknown counts as `midi1`) and is never observed, so open
+question 8 stays open. When it is derived, the possible losses are exactly
+`MIDICapabilityResolver.midi2ToMIDI1Losses`, which the tests check against what the real down-translator reports;
+otherwise none. `CoreMIDIEndpointBindings.receiveFidelity(format:)` lists it per binding with ref and token, in
+enumeration order. Nothing consumes it yet: no input, controller, UI or `formatChange` wiring. It is pure; the
+LCXL3's value is not measured.
+
 ## Evidence boundary
 
 See `fault-latch-platform-callbacks.md` for the absence of an Apple self-serialization guarantee. SDK

@@ -216,3 +216,23 @@ Initial Debug observed local directory preservation; parent symlinks, name/paren
 races, trailing slashes and arbitrary filesystems remain unqualified. No durability,
 writer exclusion, authority, migration activation, failure UI, post-acceptance
 rollback or native/provider qualification is added.
+
+## P14b4 / #790 — superseded pending-draft loads do not publish
+
+Part of #122 and #48; both remain open. `AssistantCoordinator.load()` still completes
+its own storage attempt with the actual read outcome, then publishes only if that
+attempt is still the same coordinator's `latestStorageAttempt` (object identity).
+A superseded load leaves the pending draft, settled draft, routing submission and
+navigation untouched. Store, outcomes, disk and UI code are unchanged; the observable
+pending draft deliberately no longer shows a superseded load. If a newer load fails,
+neither publishes: a read older than a failed newer read is intentionally not trusted.
+
+Real-store tests with the existing forwarding gates cover a late load versus a newer
+commit, a completed discard (no in-memory resurrection), a newer load, and a later
+cancelled commit restoring the newer settled draft retained across the stale load.
+
+The check is per-coordinator identity only. A load that *starts* while a mutation is
+in flight becomes the latest attempt and still publishes when it completes; closing
+that window is a follow-up. Other coordinators, store instances and processes are not
+excluded, and no admission/revocation, durability, authority, migration activation,
+failure UI, AppModel or provider/card freshness is claimed.

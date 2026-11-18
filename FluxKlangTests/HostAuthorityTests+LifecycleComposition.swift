@@ -234,6 +234,71 @@ extension HostAuthorityTests {
             #expect(after.queue.isEmpty)
         }
 
+        @Test(.timeLimit(.minutes(1)),
+              arguments: [HostAuthorityOwner.Checkpoint.applyStarting, .leaseRead, .leaseChecked, .leaseReady])
+        func queuedDetachFencesPausedApply(point: HostAuthorityOwner.Checkpoint) async throws {
+            let held = try await LifecycleHeldTurn()
+            guard let apply = await held.pausedApply(Bench.window, at: point) else { return }
+            let completion = held.lifecycle.detach(Bench.window)
+            await held.fence(completion)
+            #expect(held.lifecycle.isBusy)
+            held.pause.resume.open()
+            #expect(await apply.value == .failure(.windowClosed))
+            // Paused past the lease check, it acquired before its recheck and stays attached until the turn.
+            let attached = point == .leaseChecked || point == .leaseReady
+            #expect(await held.owner.authority.snapshot().lease?.windows == (attached ? [Bench.window] : nil))
+            held.release.open()
+            #expect(await held.replacement.value == .success(.connected(held.session)))
+            await completion.wait()
+            #expect(await held.owner.authority.snapshot().lease?.windows == (attached ? [] : nil))
+            #expect(await held.owner.session == held.session && !held.lifecycle.isBusy)
+        }
+
+        @Test(.timeLimit(.minutes(1))) func earlyFenceKeepsDetachOnItsTurn() async throws {
+            let held = try await LifecycleHeldTurn()
+            #expect(await held.owner.beginApply(window: Bench.window) == .success(held.session))
+            let completion = held.lifecycle.detach(Bench.window)
+            await held.fence(completion)
+            // Only the fence ran early: the window stays attached while the replacement holds the turn.
+            #expect(await held.owner.authority.snapshot().lease?.windows == [Bench.window])
+            #expect(held.lifecycle.isBusy)
+            held.release.open()
+            #expect(await held.replacement.value == .success(.connected(held.session)))
+            await completion.wait()
+            #expect(await held.owner.authority.snapshot().lease?.windows == [])
+            #expect(!held.lifecycle.isBusy)
+        }
+
+        @Test(.timeLimit(.minutes(1))) func queuedDetachDoesNotFenceAnotherWindow() async throws {
+            let held = try await LifecycleHeldTurn()
+            let other = WindowID(validated: "win.other")
+            guard let apply = await held.pausedApply(other, at: .applyStarting) else { return }
+            let completion = held.lifecycle.detach(Bench.window)
+            await held.fence(completion)
+            held.pause.resume.open()
+            #expect(await apply.value == .success(held.session))
+            held.release.open()
+            #expect(await held.replacement.value == .success(.connected(held.session)))
+            await completion.wait()
+            #expect(await held.owner.authority.snapshot().lease?.windows == [other])
+        }
+
+        @Test(.timeLimit(.minutes(1))) func reappearedRootAppliesAfterQueuedDetach() async throws {
+            let held = try await LifecycleHeldTurn()
+            let completion = held.lifecycle.detach(Bench.window)
+            await held.fence(completion)
+            // The fence keeps no history: an apply after it succeeds and is detached on the turn.
+            #expect(await held.owner.beginApply(window: Bench.window) == .success(held.session))
+            #expect(await held.owner.authority.snapshot().lease?.windows == [Bench.window])
+            held.release.open()
+            #expect(await held.replacement.value == .success(.connected(held.session)))
+            await completion.wait()
+            #expect(await held.owner.authority.snapshot().lease?.windows == [])
+            // AppRootView keeps its WindowID across disappear/reappear.
+            #expect(await held.owner.beginApply(window: Bench.window) == .success(held.session))
+            #expect(await held.owner.authority.snapshot().lease?.windows == [Bench.window])
+        }
+
         @Test func historicalSuccessNeverAuthorizesAndMinterReadsFreshPermission() async throws {
             let owner = try await Bench.owner()
             let lifecycle = Lifecycle(owner: owner)
