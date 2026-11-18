@@ -92,7 +92,8 @@ jobs:
           n=$(bash "$GITHUB_WORKSPACE/scripts/kernel-mirror/check-log.sh" "$LOGS/debug.log" \
             'readmissionRenderSourcesHaveNoLockOrArrayToken()' \
             'retirementCarryHandoffRetireSourceHasNoArrayOrLockToken()' \
-            'carryRecordSourceContainsNoArrayMutation()')
+            'carryRecordSourceContainsNoArrayMutation()' \
+            'faultRaiseInventoryMatchesTheDocumentedSites()')
           echo "| Debug | $n | source scans ran |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Release, allocation probe
