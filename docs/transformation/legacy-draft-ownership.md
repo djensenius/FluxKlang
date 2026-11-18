@@ -265,3 +265,29 @@ lost at the next launch. A save that never completes keeps the count above zero 
 suppresses load publication for that coordinator. The count is per coordinator: other coordinators, store instances and processes are not excluded, and no
 admission/revocation, durability, authority, migration activation, failure UI, AppModel,
 Siri, startup wiring or provider/card freshness is claimed.
+
+## P14b6 / #800 — overtaken build and validate results report no draft
+
+Part of #122 and #48; both remain open. In `AssistantCoordinator.perform`,
+`.buildStudioDraft` and `.validatePendingStudioDraft` set the pending draft and await
+`persistPendingDraft()`. After that await, each returns its draft only if
+`pendingStudioDraft` still equals it (full `==`, not `id`: validation keeps the id and a
+commit may reuse it). If a discard, a newer build or validate, or a prepared-routing commit
+replaced it during the save, the result is `.pendingDraft(nil)`. It never reports the
+current draft instead, because that belongs to a different request. Pending and settled
+drafts, persistence, the store, outcome types and commit semantics are unchanged.
+
+Consumers already handle `.pendingDraft(nil)`. The Siri build intent says it could not
+create a Studio draft and neither opens review nor switches to Studio. The fallback
+responder text says there is no pending Studio draft. Acceptance refuses (it already
+re-checked `pendingStudioDraft`). The Copilot and Foundation Models generators do not read
+these results; they compare `pendingStudioDraft` themselves.
+
+Real-store tests with the existing forwarding gates cover a build overtaken by a discard,
+a validate overtaken by a commit of a same-id edited draft, a build overtaken by a newer
+build (which reports its own draft), and unovertaken build and validate results.
+
+Not covered: freshness of chat-controller or fallback cards (they still read
+`pendingStudioDraft` after the call), whether commit reports a failed save, exclusion
+across coordinators, store instances or processes, and migration activation. Equality is
+by value, so a draft replaced and then restored to an equal value is still reported.

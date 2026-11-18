@@ -266,3 +266,88 @@ extension PendingStudioPatchPersistenceTests {
         }
     }
 }
+
+// A build or validate reports its draft only if no other mutation replaced it during the save.
+extension PendingStudioPatchPersistenceTests {
+    @Test func buildOvertakenByDiscardReportsNoDraft() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let gate = await fixture.forwarding.hold(.beforeSave(1))
+            let build = fixture.start { await fixture.owner.perform(Self.buildTool(fixture), context: fixture.context) }
+            try #require(await gate.waitForEntry())
+            let built = try #require(fixture.owner.pendingStudioDraft)
+            await fixture.owner.discardPendingStudioDraft()
+            await gate.release()
+            let result = await build.value
+            #expect(Self.reportedDraft(result) == .some(nil), "an overtaken build never reports its draft")
+            #expect(fixture.owner.pendingStudioDraft == nil)
+            #expect(await fixture.store.load() == .absent)
+            #expect(await fixture.forwarding.snapshots == [built, nil, nil])
+        }
+    }
+
+    @Test func validateOvertakenByCommitReportsNoDraft() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            _ = try await fixture.build()
+            let gate = await fixture.forwarding.hold(.beforeSave(2))
+            let validate = fixture.start {
+                await fixture.owner.perform(.validatePendingStudioDraft, context: fixture.context)
+            }
+            try #require(await gate.waitForEntry())
+            let refreshed = try #require(fixture.owner.pendingStudioDraft)
+            // Same id, different content: only full equality can tell the commit apart.
+            var edited = refreshed
+            try #require(!edited.fragment.nodes.isEmpty)
+            edited.fragment.nodes[0].node.position.x += 40
+            try #require(edited.id == refreshed.id && edited != refreshed)
+            #expect(await fixture.commit(edited))
+            await gate.release()
+            let result = await validate.value
+            #expect(Self.reportedDraft(result) == .some(nil), "an overtaken validate never reports refreshed")
+            #expect(fixture.owner.pendingStudioDraft == edited)
+            #expect(await fixture.store.load() == .loaded(edited))
+            #expect(await fixture.forwarding.snapshots.dropFirst() == [refreshed, edited, edited])
+        }
+    }
+
+    @Test func buildOvertakenByNewerBuildReportsNoDraft() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let gate = await fixture.forwarding.hold(.beforeSave(1))
+            let first = fixture.start { await fixture.owner.perform(Self.buildTool(fixture), context: fixture.context) }
+            try #require(await gate.waitForEntry())
+            let older = try #require(fixture.owner.pendingStudioDraft)
+            let second = await fixture.owner.perform(Self.buildTool(fixture, source: 1), context: fixture.context)
+            let newer = try #require(fixture.owner.pendingStudioDraft)
+            try #require(newer != older)
+            #expect(Self.reportedDraft(second) == .some(newer), "the newer build reports its own draft")
+            await gate.release()
+            let result = await first.value
+            #expect(Self.reportedDraft(result) == .some(nil), "the older build never reports another draft")
+            #expect(fixture.owner.pendingStudioDraft == newer)
+            #expect(await fixture.store.load() == .loaded(newer))
+            #expect(await fixture.forwarding.snapshots == [older, newer, newer])
+        }
+    }
+
+    @Test func unovertakenBuildAndValidateReportTheirDraft() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let build = await fixture.owner.perform(Self.buildTool(fixture), context: fixture.context)
+            let built = try #require(fixture.owner.pendingStudioDraft)
+            #expect(Self.reportedDraft(build) == .some(built))
+            let validate = await fixture.owner.perform(.validatePendingStudioDraft, context: fixture.context)
+            let refreshed = try #require(fixture.owner.pendingStudioDraft)
+            #expect(Self.reportedDraft(validate) == .some(refreshed))
+            #expect(await fixture.store.load() == .loaded(refreshed))
+            #expect(await fixture.forwarding.snapshots == [built, refreshed])
+        }
+    }
+
+    private static func buildTool(_ fixture: PendingPersistenceFixture, source: Int = 0) -> AssistantTool {
+        .buildStudioDraft(.init(sourceInstrumentIDs: [fixture.context.equipment[source].id]))
+    }
+
+    // `.some(nil)` is an explicit "no draft"; plain `nil` means the result was not a pending-draft result.
+    private static func reportedDraft(_ result: AssistantToolResult) -> StudioPatchDraft?? {
+        guard case .pendingDraft(let draft) = result else { return nil }
+        return .some(draft)
+    }
+}
