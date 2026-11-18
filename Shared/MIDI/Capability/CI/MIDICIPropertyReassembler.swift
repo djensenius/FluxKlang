@@ -56,7 +56,8 @@ struct MIDICIPropertyReassembly: Equatable, Sendable {
 /// Reassembles the chunks of Property Exchange data messages (M2-101-UM v1.2, section 8 and Table 29) into one
 /// `MIDICIPropertyReassembly`. Pure: no timers, no I/O, no clock. Requests are keyed by source MUID and request id.
 /// A message of chunk 1 of 1 completes at once and never takes a slot; otherwise chunk 1 opens a slot, chunks
-/// 2...count must follow in order, and the last one frees the slot and returns the result.
+/// 2...count must follow in order, and the last one frees the slot and returns the result. The outbound inverse,
+/// which cuts one message into such chunks, is `MIDICIPropertyChunker`.
 ///
 /// The rules are conservative because the Common Rules for Property Exchange (M2-102) and Mcoded7 (M2-103) were not
 /// available: chunks must arrive strictly in order, the chunk count, the kind and the absence of header data after
