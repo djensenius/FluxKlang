@@ -5,8 +5,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
-/// #83 "bounded profile/property discovery" (profiles only: property exchange has no codec yet) and "Unique ID alone
-/// is not universal identity": MIDI-CI bytes → `MIDICIMessage` / `MIDICIProfileMessage` → answer → negotiation.
+/// #83 "bounded profile/property discovery" (profiles, and the Property Exchange Capabilities Reply; property data is
+/// not collected) and "Unique ID alone is not universal identity": MIDI-CI bytes → `MIDICIMessage` /
+/// `MIDICIProfileMessage` / `MIDICIPropertyCapabilityMessage` → answer → negotiation.
 extension UMPCapabilityTests {
     private static let midi2Packets = [endpointMIDI2, block0, block1]
 
@@ -134,5 +135,175 @@ extension UMPCapabilityTests {
         #expect(firstPeer.ciIdentity == firstInfo.identity)
         #expect(secondPeer.ciIdentity == secondInfo.identity)
         #expect(firstPeer != secondPeer)
+    }
+
+    // MARK: - Property Exchange Capabilities
+
+    /// MUID 0x088CD111: neither the host nor the device.
+    private static let strangerMUID: [UInt8] = [0x11, 0x22, 0x33, 0x44]
+
+    /// Property Exchange Capabilities bytes, written by hand: `7E, device, 0D, subID, format` then source,
+    /// destination and body. One body byte is CI 1.1 (format 01); three are CI 1.2 (format 02).
+    private static func property(
+        _ subID: UInt8 = 0x31, device: UInt8 = 0x7F, source: [UInt8] = deviceMUID, destination: [UInt8] = hostMUID,
+        body: [UInt8] = [0x04, 0x00, 0x00]
+    ) -> [UInt8] {
+        [0x7E, device, 0x0D, subID, body.count == 1 ? 0x01 : 0x02] + source + destination + body
+    }
+
+    /// The adapter's refusal for `payload`, or nil when it is not refused; a decoder refusal is thrown.
+    private static func refusal(
+        collecting payload: [UInt8], into discovery: inout MIDICapabilityDiscovery
+    ) throws -> MIDICapabilityDiscoveryRefusal? {
+        do {
+            try collect(ci: payload, into: &discovery)
+            return nil
+        } catch let refusal as MIDICapabilityDiscoveryRefusal {
+            return refusal
+        }
+    }
+
+    @Test func propertyCapabilitiesReplyBytesAreCollectedFromThePeer() throws {
+        #expect(Self.property() == Self.propertyReply)
+        var discovery = try Self.discovery(Self.midi2Packets, ci: [Self.reply, Self.profileReply])
+        let before = discovery
+        #expect(before.propertyCapabilities == nil)
+        let outcome = try Self.collect(ci: Self.propertyReply, into: &discovery)
+        #expect(outcome == .recorded)
+        let kept = try #require(discovery.propertyCapabilities)
+        #expect(kept.simultaneousRequests == 4)
+        let version = try #require(kept.version)
+        #expect(version == (try MIDICIPropertyExchangeVersion.make(major: 0, minor: 0)))
+        // Kept beside the facts: the facts, the negotiation and the peer are those of the same bytes without it.
+        #expect(discovery.facts == before.facts)
+        #expect(discovery.peer == before.peer)
+        #expect(try Self.negotiate(Self.midi2Packets, ci: [Self.reply, Self.profileReply, Self.propertyReply])
+            == Self.negotiate(Self.midi2Packets, ci: [Self.reply, Self.profileReply]))
+    }
+
+    @Test func aCI11PropertyCapabilitiesReplyKeepsNoVersion() throws {
+        #expect(Self.property(body: [0x04]) == Self.propertyReply11)
+        var discovery = try Self.discovery(Self.midi2Packets, ci: [Self.reply])
+        let outcome = try Self.collect(ci: Self.propertyReply11, into: &discovery)
+        #expect(outcome == .recorded)
+        let kept = try #require(discovery.propertyCapabilities)
+        #expect(kept.simultaneousRequests == 4)
+        #expect(kept.version == nil)
+        // The CI 1.2 form of the same count carries a version, so it is another Reply.
+        let after = discovery
+        let refusal = try Self.refusal(collecting: Self.propertyReply, into: &discovery)
+        #expect(refusal == .conflictingPropertyCapabilities(try MIDICIMUID.make(0x0765_4321)))
+        #expect(discovery == after)
+    }
+
+    @Test func propertyCapabilitiesBeforeTheDiscoveryReplyAreIgnored() throws {
+        var discovery = try Self.discovery(Self.midi2Packets)
+        let before = discovery
+        let early = try Self.collect(ci: Self.propertyReply, into: &discovery)
+        #expect(early == .ignored(.beforeDiscoveryReply))
+        #expect(discovery == before)
+        // Not even at another address: there is no peer yet to refuse it for.
+        let elsewhere = try Self.collect(ci: Self.property(device: 0x00), into: &discovery)
+        #expect(elsewhere == .ignored(.beforeDiscoveryReply))
+        #expect(discovery == before)
+        try Self.collect(ci: Self.reply, into: &discovery)
+        let late = try Self.collect(ci: Self.propertyReply, into: &discovery)
+        #expect(late == .recorded)
+    }
+
+    /// The source MUID is checked before the address: a stranger at 0x7E is ignored, not refused.
+    @Test func propertyCapabilitiesFromAnotherMUIDAreIgnoredWhateverTheAddress() throws {
+        let stranger = try MIDICIMUID.make(0x088C_D111)
+        var discovery = try Self.discovery(Self.midi2Packets, ci: [Self.reply])
+        let before = discovery
+        for device: UInt8 in [0x7E, 0x7F, 0x00] {
+            let payload = Self.property(device: device, source: Self.strangerMUID)
+            let outcome = try Self.collect(ci: payload, into: &discovery)
+            #expect(outcome == .ignored(.otherMUID(stranger)), "device \(device)")
+            #expect(discovery == before, "device \(device)")
+        }
+    }
+
+    @Test func withAHostMUIDPropertyCapabilitiesAddressedElsewhereAreIgnored() throws {
+        let elsewhere = Self.property(destination: Self.strangerMUID)
+        let ignored = MIDICapabilityDiscoveryOutcome.ignored(.otherDestination(try MIDICIMUID.make(0x088C_D111)))
+        let fresh = MIDICapabilityDiscovery(host: try MIDICIMUID.make(0x0123_4567))
+        var discovery = fresh
+        // The destination comes first, even before the peer is known.
+        let early = try Self.collect(ci: elsewhere, into: &discovery)
+        #expect(early == ignored)
+        #expect(discovery == fresh)
+        try Self.collect(ci: Self.reply, into: &discovery)
+        let before = discovery
+        let outcome = try Self.collect(ci: elsewhere, into: &discovery)
+        #expect(outcome == ignored)
+        #expect(discovery == before)
+        let broadcast = try Self.collect(ci: Self.property(destination: Self.broadcastMUID), into: &discovery)
+        #expect(broadcast == .recorded)
+        // Without a host MUID no destination is checked.
+        var open = try Self.discovery([], ci: [Self.reply])
+        let unchecked = try Self.collect(ci: elsewhere, into: &open)
+        #expect(unchecked == .recorded)
+    }
+
+    @Test func propertyCapabilitiesAwayFromTheFunctionBlockAreRefused() throws {
+        var discovery = try Self.discovery(Self.midi2Packets, ci: [Self.reply])
+        for device: UInt8 in [0x00, 0x7E] {
+            let before = discovery
+            let refusal = try Self.refusal(collecting: Self.property(device: device), into: &discovery)
+            #expect(refusal == .propertyCapabilitiesNotAtFunctionBlock(device: try SysExDeviceID(device)))
+            #expect(discovery == before)
+        }
+        #expect(discovery.propertyCapabilities == nil)
+        // Once one is kept, an otherwise identical Reply away from 0x7F is still refused and changes nothing.
+        try Self.collect(ci: Self.propertyReply, into: &discovery)
+        let kept = discovery
+        let refusal = try Self.refusal(
+            collecting: Self.property(device: 0x00, body: [0x05, 0x00, 0x00]), into: &discovery)
+        #expect(refusal == .propertyCapabilitiesNotAtFunctionBlock(device: try SysExDeviceID(0x00)))
+        #expect(discovery == kept)
+    }
+
+    @Test func aPropertyCapabilitiesRepeatIsIdempotentAndADifferentOneIsRefused() throws {
+        var discovery = try Self.discovery(Self.midi2Packets, ci: [Self.reply, Self.propertyReply])
+        let first = discovery
+        let repeated = try Self.collect(ci: Self.propertyReply, into: &discovery)
+        #expect(repeated == .repeated)
+        #expect(discovery == first)
+        let conflict = MIDICapabilityDiscoveryRefusal.conflictingPropertyCapabilities(try MIDICIMUID.make(0x0765_4321))
+        for body: [UInt8] in [[0x05, 0x00, 0x00], [0x04, 0x00, 0x01]] {
+            let refusal = try Self.refusal(collecting: Self.property(body: body), into: &discovery)
+            #expect(refusal == conflict, "body \(body)")
+            #expect(discovery == first, "body \(body)")
+        }
+        let kept = try #require(discovery.propertyCapabilities)
+        #expect(kept.simultaneousRequests == 4)
+        #expect(kept.version == (try MIDICIPropertyExchangeVersion.make(major: 0, minor: 0)))
+    }
+
+    /// The Inquiry decodes through `MIDICIPropertyCapabilityMessage`; a NAK to it (original sub-id 0x30) is a
+    /// `MIDICIMessage` NAK. Neither is collected, before or after a Reply.
+    @Test func thePropertyCapabilitiesInquiryAndItsNAKAreNotCollected() throws {
+        let inquiries = [
+            Self.property(0x30, source: Self.hostMUID, destination: Self.deviceMUID),
+            Self.property(0x30)
+        ]
+        let nak = Self.prefix(0x7F) + Self.deviceMUID + Self.hostMUID + [0x30, 0x00, 0x00, 0, 0, 0, 0, 0, 0x00, 0x00]
+        guard case .nak = try MIDICIMessage.decode(payload: nak, limits: .standard) else {
+            Issue.record("not a NAK")
+            return
+        }
+        var discovery = try Self.discovery(Self.midi2Packets, ci: [Self.reply])
+        for kept in [false, true] {
+            if kept { try Self.collect(ci: Self.propertyReply, into: &discovery) }
+            let before = discovery
+            for payload in inquiries + [nak] {
+                let outcome = try Self.collect(ci: payload, into: &discovery)
+                #expect(outcome == .ignored(.notCollected), "\(payload)")
+                #expect(discovery == before, "\(payload)")
+            }
+        }
+        let survivor = try #require(discovery.propertyCapabilities)
+        #expect(survivor.simultaneousRequests == 4)
     }
 }

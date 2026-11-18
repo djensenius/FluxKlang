@@ -14,14 +14,17 @@ import Testing
 /// - `+Fallback`: no CI answer or a CI NAK gives `legacyByteStream`; a MIDI 1.0-only peer records the downgrade, and
 ///   `possibleTranslationLosses` is checked against what the translator really reports ("legacy works without CI",
 ///   "fidelity loss/downgrade explicit").
-/// - `+Exchange`: MIDI-CI Discovery, Discovery Reply and Reply to Profile Inquiry bytes → answer → negotiation; the
-///   profile bound; how identity is keyed ("bounded profile discovery", "Unique ID alone is not universal identity").
-/// API availability and property exchange are not covered: no production API for either exists yet.
+/// - `+Exchange`: MIDI-CI Discovery, Discovery Reply, Reply to Profile Inquiry and Reply to Property Exchange
+///   Capabilities bytes → answer → negotiation; the profile bound; how identity is keyed ("bounded profile
+///   discovery", "Unique ID alone is not universal identity"). The Property Exchange Capabilities Reply is collected
+///   beside the facts and leaves them unchanged.
+/// API availability is not covered: no production API for it exists yet. Property exchange is covered only as far as
+/// the capabilities handshake; property data is not.
 ///
 /// Decoded messages become `MIDICapabilityFacts` through the production adapter, `MIDICapabilityDiscovery` (#572);
 /// `discovery(_:ci:)` below only decodes and feeds it, in order. Every word and byte below was written by hand
-/// from the layouts documented in `UMPStreamMessage+Decode.swift`, `MIDICIMessage.swift` and
-/// `MIDICIProfileMessage.swift`, never produced by an encoder.
+/// from the layouts documented in `UMPStreamMessage+Decode.swift`, `MIDICIMessage.swift`,
+/// `MIDICIProfileMessage.swift` and `MIDICIPropertyCapabilityMessage.swift`, never produced by an encoder.
 @Suite("UMP capability", .productionAccessAudit)
 struct UMPCapabilityTests {
     typealias Facts = MIDICapabilityFacts
@@ -107,6 +110,17 @@ struct UMPCapabilityTests {
         return prefix(0x21) + deviceMUID + hostMUID + list(start..<middle) + list(middle..<(middle + disabled))
     }
 
+    /// CI 1.2 Reply to Property Exchange Capabilities from the device to this host at the function block: 4
+    /// simultaneous requests, Property Exchange version 0.0 (16 bytes).
+    static let propertyReply: [UInt8] = [
+        0x7E, 0x7F, 0x0D, 0x31, 0x02, 0x21, 0x06, 0x15, 0x3B, 0x67, 0x0A, 0x0D, 0x09, 0x04, 0x00, 0x00
+    ]
+    /// CI 1.1 Reply to Property Exchange Capabilities from the device to this host at the function block: 4
+    /// simultaneous requests and no version (14 bytes).
+    static let propertyReply11: [UInt8] = [
+        0x7E, 0x7F, 0x0D, 0x31, 0x01, 0x21, 0x06, 0x15, 0x3B, 0x67, 0x0A, 0x0D, 0x09, 0x04
+    ]
+
     // MARK: - Pipeline helpers
 
     static func limits() throws -> UMPStreamLimits {
@@ -117,14 +131,23 @@ struct UMPCapabilityTests {
         try UMPStreamMessage.decode(UMPPacket(words: words), limits: limits())
     }
 
-    /// Decodes a MIDI-CI payload with the decoder its sub-id 2 selects (0x20 to 0x27: the profile messages). Profile
+    /// Decodes a MIDI-CI payload with the decoder its sub-id 2 selects (0x20 to 0x27: the profile messages; 0x30 and
+    /// 0x31: the Property Exchange Capabilities Inquiry and Reply) and returns what the adapter did with it. Profile
     /// messages arrive on UMP group 0, the group these single-group fixtures use.
-    static func collect(ci payload: [UInt8], into discovery: inout MIDICapabilityDiscovery) throws {
-        if payload.count > 3, (0x20...0x27).contains(payload[3]) {
+    @discardableResult
+    static func collect(
+        ci payload: [UInt8], into discovery: inout MIDICapabilityDiscovery
+    ) throws -> MIDICapabilityDiscoveryOutcome {
+        let subID = payload.count > 3 ? payload[3] : nil
+        switch subID {
+        case .some(0x20...0x27):
             let message = try MIDICIProfileMessage.decode(payload: payload, limits: .standard)
-            try discovery.collect(message, on: .group(UMPGroup(0)))
-        } else {
-            try discovery.collect(MIDICIMessage.decode(payload: payload, limits: .standard))
+            return try discovery.collect(message, on: .group(UMPGroup(0)))
+        case .some(0x30...0x31):
+            let message = try MIDICIPropertyCapabilityMessage.decode(payload: payload, limits: .standard)
+            return try discovery.collect(message)
+        default:
+            return try discovery.collect(MIDICIMessage.decode(payload: payload, limits: .standard))
         }
     }
 

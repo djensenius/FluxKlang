@@ -134,7 +134,7 @@ final class WingController {
     func connectDemo() async {
         await connect(host: "demo")
     }
-    /// Disconnects and tears down the keep-alive and listener.
+    /// Disconnects and tears down the keep-alive; the lifetime listener ignores replies until reconnected.
     func disconnect() async {
         invalidateConfirmations()
         connection = .disconnected
@@ -408,12 +408,14 @@ final class WingController {
         } catch { return false }
     }
 
+    /// One lifetime listener: cancelling the iterating task terminates the stream and concurrent
+    /// iterators split its elements, so reconnects keep it and `ingest` drops other sessions' replies (#750).
     private func startListening() {
+        guard listenTask == nil else { return }
         let incoming = transport.incoming
-        let session = sessionID
         listenTask = Task { [weak self] in
             for await message in incoming {
-                guard let self, !Task.isCancelled, self.sessionID == session else { break }
+                guard let self else { break }
                 ingest(message)
             }
         }
@@ -470,8 +472,6 @@ final class WingController {
         liveObservations.stop()
         keepAliveTask?.cancel()
         keepAliveTask = nil
-        listenTask?.cancel()
-        listenTask = nil
         refreshTask?.cancel()
         refreshTask = nil
     }
