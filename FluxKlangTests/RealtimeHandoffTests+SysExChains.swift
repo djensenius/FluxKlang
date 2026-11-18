@@ -309,6 +309,10 @@ extension RealtimeHandoffTests.FaultLatchConstruction {
                         .init
                 }
             }
+            typealias Spare = FaultLatch
+            typealias SplitSpare =
+                FluxKlang.FaultLatch
+            typealias Kind = FaultLatch.Type
             extension FaultLatch {
                 static func spare(_ scopes: [FaultScope]) throws -> FaultLatch { try Self(scopes: scopes) }
                 static func copy(_ scopes: [FaultScope]) throws -> FaultLatch { try .init(scopes: scopes) }
@@ -319,10 +323,12 @@ extension RealtimeHandoffTests.FaultLatchConstruction {
             }
             """#
         // The split `FaultLatch\n.init(scopes:` counts as both a spelled-out and an inferred construction; an
-        // unapplied `FaultLatch.init`, `Self.init`, `self.init` or `.init` counts as a construction too.
+        // unapplied `FaultLatch.init`, `Self.init`, `self.init` or `.init` counts as a construction too, and so do the
+        // metatype and a `typealias` of `FaultLatch` itself (`FaultLatch.Type` counts once, as the metatype).
         #expect(try Self.sites(of: Self.constructions, in: source, path: "L.swift") == [
             "L.swift Lane.init latch": 4, "L.swift Lane.init inferred": 2, "L.swift Lane.init metatype": 1,
-            "L.swift Lane.init factory": 1, "L.swift FaultLatch.copy inferred": 1
+            "L.swift Lane.init factory": 1, "L.swift FaultLatch.copy inferred": 1, "L.swift <none>.<none> alias": 2,
+            "L.swift <none>.<none> metatype": 1
         ])
         #expect(try Self.sites(of: Self.selfConstructions, in: source, path: "L.swift", within: "FaultLatch") == [
             "L.swift FaultLatch.spare self": 1, "L.swift FaultLatch.copy init": 1, "L.swift FaultLatch.twin self": 1,
@@ -332,8 +338,13 @@ extension RealtimeHandoffTests.FaultLatchConstruction {
         let audit = "let authority = try FaultChainAuthority\n    .init(scopes: scopes, chainBudget: 2)\n"
             + "func make() throws -> FaultChainAuthority { try .init(scopes: scopes) }\n"
             + "let makeAuthority = FaultChainAuthority.init\n"
+            // Copilot's two forms on PR #825: a metatype and an alias, each then called without naming the type.
+            + "let authorityType = FaultChainAuthority.self; try authorityType(scopes: [], chainBudget: 1)\n"
+            + "typealias Authority = FaultChainAuthority; try Authority(scopes: [], chainBudget: 1)\n"
+            + "typealias Split =\n    Kernel.FaultChainAuthority\nlet kind: FaultChainAuthority.Type? = nil\n"
         #expect(try Self.sites(of: Self.authorities, in: audit, path: "A.swift") == [
-            "A.swift <none>.<none> authority": 2, "A.swift <none>.<none> inferred": 1, "A.swift <none>.make inferred": 1
+            "A.swift <none>.<none> authority": 2, "A.swift <none>.<none> inferred": 1, "A.swift <none>.<none> alias": 2,
+            "A.swift <none>.<none> metatype": 2, "A.swift <none>.make inferred": 1
         ])
     }
 
@@ -387,13 +398,19 @@ extension RealtimeHandoffTests.FaultLatchConstruction {
                     let makeChain = ReservedRingChain.init
                     let makeSplit = ReservedRingChain
                         .init
+                    let ringType = ReservedRingChain.self
+                    let ringKind: ReservedRingChain.Type? = nil
                 }
             }
+            typealias Ring = ReservedRingChain
+            typealias SplitRing =
+                ReservedRingChain
             """#
         #expect(try Self.sites(of: Self.mints, in: source, path: "F.swift") == [
             "F.swift FanInHandoff.claimProducer mintChain": 1, "F.swift FanInHandoff.buildLanes makeLanes": 1,
             "F.swift FanInHandoff.releaseProducer claimChain": 1, "F.swift FanInHandoff.releaseProducer mintChains": 1,
-            "F.swift FanInHandoff.releaseProducer ringChain": 3
+            "F.swift FanInHandoff.releaseProducer ringChain": 3, "F.swift FanInHandoff.releaseProducer metatype": 2,
+            "F.swift <none>.<none> alias": 2
         ])
     }
 
@@ -420,6 +437,10 @@ extension RealtimeHandoffTests.FaultLatchConstruction {
             struct FaultLatchNote { let note = MyFaultLatch(); let other = FaultLatchy() }
             let state = (FaultLatch.initialState, FaultLatchInit(), FaultChainAuthority.initialBudget)
             let ring = (ReservedRingChain.initialCapacity, ReservedRingChainInit())
+            typealias Failure = FaultLatch.PreparationError; typealias Refusal = FaultChainAuthority
+                .PreparationError; typealias Notes = (FaultLatchNote, FaultChainAuthorityNote, ReservedRingChainNote)
+            typealias Slot = ReservedRingChain.Slot; typealias Hook = (FaultChainAuthority) -> Void
+            let probes = (FaultLatch.selfTest, FaultChainAuthority.Types, ReservedRingChain.selfCheck)
             func remakeLanes() { faultLatch(); premintChain(); mintChainCount(); ReservedRingChainNote() }
             extension FaultLatchNote { func make() -> Self { Self() } static func spare() -> Self { .init() } }
             """#
