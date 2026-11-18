@@ -548,6 +548,7 @@ targets:
       - path: FluxKlangTests/MIDICIMessageTests+ProcessInquiryReport.swift
       - path: FluxKlangTests/MIDICIMessageTests+PropertyData.swift
       - path: FluxKlangTests/MIDICIMessageTests+PropertyDataRules.swift
+      - path: FluxKlangTests/MIDICIPropertyReassemblerTests.swift
       - path: FluxKlangTests/MIDICIMessageTests+ProfileDetails.swift
       - path: FluxKlangTests/MIDICIMessageTests+ProfileDetailsRules.swift
       - path: FluxKlangTests/MIDICIMcoded7Tests.swift
