@@ -189,3 +189,20 @@ final class PendingPersistenceFixture {
         try #require(owner.latestStorageAttempt)
     }
 }
+
+// Answers every request with the same text. The first request first runs another request's draft mutation.
+actor OvertakingCopilotHTTP: AssistantHTTPClient {
+    static let answer = "Own Copilot answer."
+    private let overtake: @MainActor @Sendable () async -> Void
+    private(set) var requests = 0
+    init(overtake: @escaping @MainActor @Sendable () async -> Void) { self.overtake = overtake }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        requests += 1
+        if requests == 1 { await overtake() }
+        let body = #"{"choices":[{"message":{"role":"assistant","content":"\#(Self.answer)"}}]}"#
+        let url = try #require(request.url)
+        let response = try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
+        return (Data(body.utf8), response)
+    }
+}

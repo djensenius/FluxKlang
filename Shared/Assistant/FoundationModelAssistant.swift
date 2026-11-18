@@ -171,7 +171,6 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let initialDraft = await coordinator.pendingStudioDraft
                     guard !AssistantServiceIsolation.deniesLiveServices else {
                         ProductionAccessAudit.shared.record(.denied, for: .assistantModelGenerator, mirroring: mirror)
                         throw AssistantServiceIsolation.AccessError.denied
@@ -202,13 +201,10 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
                     )
                     let prompt = boundedPrompt(request)
                     ProductionAccessAudit.shared.record(.apiEntered, for: .assistantModelGenerator, mirroring: mirror)
+                    // No session tool can create a draft, so a reply is only the model's own text.
                     for try await snapshot in session.streamResponse(to: prompt) {
                         try Task.checkCancellation()
                         continuation.yield(.text(snapshot.content))
-                    }
-                    if let draft = await coordinator.pendingStudioDraft, draft != initialDraft {
-                        continuation.yield(.text(AssistantDraftReply.text(for: draft)))
-                        continuation.yield(.cards(Self.cards(for: draft)))
                     }
                     continuation.finish()
                 } catch {
@@ -234,24 +230,6 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
         User:
         \(String(request.question.prefix(2_000)))
         """
-    }
-
-    private static func cards(for draft: StudioPatchDraft) -> [AssistantCard] {
-        var cards: [AssistantCard] = [
-            .wiring(
-                summary: draft.logicalRoutingSummary.map(\.value),
-                cableInstructions: draft.cableInstructions.map(\.instruction.value)
-            ),
-            .pendingDraft(
-                id: draft.id,
-                summary: draft.logicalRoutingSummary.map(\.value).joined(separator: "\n"),
-                hasErrors: draft.hasErrors
-            )
-        ]
-        if !draft.validation.isEmpty {
-            cards.append(.conflicts(draft.validation.map(\.message)))
-        }
-        return cards
     }
 }
 

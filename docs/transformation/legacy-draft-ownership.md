@@ -281,7 +281,7 @@ Consumers already handle `.pendingDraft(nil)`. The Siri build intent says it cou
 create a Studio draft and neither opens review nor switches to Studio. The fallback
 responder text says there is no pending Studio draft. Acceptance refuses (it already
 re-checked `pendingStudioDraft`). The Copilot and Foundation Models generators do not read
-these results; they compare `pendingStudioDraft` themselves.
+these results; they compared `pendingStudioDraft` themselves (P14b8 below removes that).
 
 Real-store tests with the existing forwarding gates cover a build overtaken by a discard,
 a validate overtaken by a commit of a same-id edited draft, a build overtaken by a newer
@@ -312,8 +312,38 @@ typed draft that shows its own card, a fallback validate overtaken by a newer bu
 its save is held (one text event, no cards event), and an unovertaken fallback validate
 that shows its own pending-draft card.
 
-Not covered: Copilot and Foundation Models generator cards (they compare
-`pendingStudioDraft` themselves), Review Draft opening the current draft rather than the
-card's draft, exclusion across coordinators, store instances or processes, and migration
-activation. As in P14b6, drafts are compared by value, so a draft replaced and then
-restored to an equal value still shows its cards.
+Not covered: Copilot and Foundation Models generator cards (they compared
+`pendingStudioDraft` themselves; P14b8 below removes that), Review Draft opening the current
+draft rather than the card's draft, exclusion across coordinators, store instances or
+processes, and migration activation. As in P14b6, drafts are compared by value, so a draft
+replaced and then restored to an equal value still shows its cards.
+
+## P14b8 / #822 — Copilot and Foundation Models replies show only their own text
+
+Part of #122 and #48; both remain open. Neither generator can create a draft: Copilot
+advertises only help and inspect, and its retired build tool only returns the routing
+clarification; the Foundation Models session has only read-only tools. Both still
+snapshotted the pending draft before their HTTP or model await. If it differed afterwards,
+they replaced the reply with "Created a review-only … draft" and showed that draft's cards.
+Every such change belonged to another request: a typed wiring draft, a Siri build or commit,
+a review revalidation, or a prepared commit. The generators no longer read the pending draft,
+and their now-unused card helpers are removed. A reply is the model's own text with no draft
+cards. Both keep their `coordinator` property, so initializers are unchanged. Coordinator,
+store, Siri, commit path, chat controller, `AssistantDraftReply` and card UI are unchanged.
+
+Tests use the real store and forwarding fixture with an in-process HTTP stub that performs
+the overtaking mutation during the Copilot request: a newer build, both over an earlier
+draft and with no draft at the start, a same-id edited commit (which a check by id alone
+would miss), and, as characterisation, a discard and no overtake. Foundation Models
+streaming is denied in every test host and has no seam, so that change is compile-checked,
+not executed. A source scan in `AssistantModelGeneratorIsolationTests` fails if either
+generator file names `pendingStudioDraft`, even in a comment, or calls into its
+coordinator at all. A renamed or moved generator file fails the scan. The scan reads the
+sources through the test file's own path, so it runs only where they sit beside the tests:
+the iOS `FluxKlangTests` target run from a checkout, and a SwiftPM mirror. The Mac test
+target does not include it, and it is skipped wherever the sources are not reachable. A
+future draft-creating tool must carry its own result, as P14b7 does.
+
+Not covered: Review Draft opening the current draft rather than the card's draft, whether
+commit reports a failed save, exclusion across coordinators, store instances or processes,
+history already saved with another request's cards, and migration activation.

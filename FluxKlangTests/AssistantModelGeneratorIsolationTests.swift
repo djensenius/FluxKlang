@@ -73,4 +73,47 @@ struct AssistantModelGeneratorIsolationTests {
         #expect(snapshot.count(.factoryEvaluated, for: .assistantModelGenerator) == 0)
         #expect(snapshot.count(.apiEntered, for: .assistantModelGenerator) == 0)
     }
+
+    // MARK: - Source scan
+
+    /// The directory is found by a file that is not under scan, so a renamed or moved generator file fails the test
+    /// instead of skipping it.
+    private nonisolated static func sourceDirectory(from path: String = #filePath) -> URL? {
+        let here = URL(fileURLWithPath: path).deletingLastPathComponent()
+        let candidates = ["../Shared/Assistant", "../../Sources/FluxKlang/Shared/Assistant"]
+        let marker = "AssistantCoordinator.swift"
+        return candidates
+            .map { here.appendingPathComponent($0).standardizedFileURL }
+            .first { FileManager.default.fileExists(atPath: $0.appendingPathComponent(marker).path) }
+    }
+
+    private nonisolated static let sourcesAreReachable = sourceDirectory() != nil
+
+    /// Neither generator has a tool that can create a draft, so neither may read the coordinator's pending draft to
+    /// shape its reply: any change it saw there would belong to another request. Neither may call into the
+    /// coordinator at all, which also rules out reading the draft through another member. Foundation Models streaming
+    /// is denied in every test host, so this scan stands in for running it. The search is over the raw text, so a
+    /// comment that names the property is found too. It is skipped when the sources are not next to the tests.
+    @Test(.enabled(if: Self.sourcesAreReachable, "the assistant sources are not next to the tests"))
+    func modelGeneratorsDoNotReadThePendingDraft() throws {
+        let directory = try #require(Self.sourceDirectory(), "the assistant sources are not next to the tests")
+        let generators = [
+            ("FoundationModelAssistant.swift", "struct FoundationModelAssistantGenerator"),
+            ("CopilotAssistantGenerator.swift", "struct CopilotAssistantGenerator")
+        ]
+        var draftReads: [String] = []
+        var coordinatorCalls: [String] = []
+        for (name, declaration) in generators {
+            let file = directory.appendingPathComponent(name)
+            try #require(FileManager.default.fileExists(atPath: file.path), "\(name) was renamed or moved")
+            let text = try String(contentsOf: file, encoding: .utf8)
+            #expect(text.contains(declaration), "\(name) declares its generator")
+            if text.contains("pendingStudioDraft") { draftReads.append(name) }
+            if text.range(of: #"\bcoordinator\s*\."#, options: .regularExpression) != nil {
+                coordinatorCalls.append(name)
+            }
+        }
+        #expect(draftReads.isEmpty, "a model generator reads the pending draft")
+        #expect(coordinatorCalls.isEmpty, "a model generator calls into the assistant coordinator")
+    }
 }
