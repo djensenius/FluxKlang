@@ -443,3 +443,68 @@ integration. If the bound cannot be established for a real caller, the counter o
 record algorithm must be revised and revalidated. It must not be weakened (for
 example by dropping a cap check, widening a bound without argument, or treating
 the doc comment as the proof), and #64's acceptance is not waived.
+
+## 9. Current raise-site inventory (K-190a)
+
+K-190a (#806) discharges only #190's first acceptance item: the inventory of every
+production raise site. Sections 3 to 8 keep their `ad8cc8a9` citations; this
+section cites main at `e4e98eae`. Every site is in `Shared/Audio/Kernel` and is
+reached only from the reference model and its tests.
+
+The check is `RealtimeHandoffTests.FaultRaiseInventory`
+(`FluxKlangTests/RealtimeHandoffTests+FaultChainsStress.swift`).
+`faultRaiseInventoryMatchesTheDocumentedSites()` scans every `.swift` file under
+`Shared/Audio/Kernel` (or the kernel mirror's copy), with comments and string
+literals blanked. It counts `raise(`, `raiseContended(` and `laneChain`/`claimChain`
+`.refuse(` calls, skipping `func` declarations, and keys each one by file,
+innermost type and innermost `func`/`init`/`deinit`. The result must equal the 13
+rows below, each once, so an added, removed, duplicated, moved or renamed site
+fails it, and the failure message names the added and missing keys. The Debug
+kernel-mirror job requires that test to pass, so a skipped run fails the job. The
+mirror excludes `Processors/OfflineAudioRoutingProcessor.swift`
+(`scripts/kernel-mirror/manifest.txt`), so CI never scans that file; it has no
+raise today. It is a regex scan, not a parser: a raise inside a string
+interpolation `\(…)` is masked; a chain `refuse(` through a property not named
+`laneChain` or `claimChain`, or a method reference without a call (`x.raise`), is
+not counted; and the test does not see callers outside `Shared/Audio/Kernel`.
+
+Bound and edge: "by construction (FLPn), reference model only" where that slice
+already established it (sections 3.1 to 3.4 and
+[fault-latch-chain-tokens.md](fault-latch-chain-tokens.md) sections 3, 5 and 7);
+otherwise **UNPROVED** (the same meaning as **UNPROVEN** in section 1). A
+contended fallback is one idempotent releasing store
+of a sticky flag. It is not a `FaultLatch.raise`, so it needs no chain
+(chain-tokens section 5). Every real AU or MIDI caller is **UNPROVED**: none
+exists.
+
+| ID | Current file:line | Type.func | Kind | Context | Chain identity | Lifetime bound | Ordering edge | Real caller |
+|---|---|---|---|---|---|---|---|---|
+| R0 | `Memory/FaultLatch+Chains.swift:114` | `FaultChainAuthority.raise` | `raise` (the only plain `FaultLatch.raise`) | Hot path, a token holder (`:108`) | The token's chain (`inout FaultChainToken`) | K <= `chainBudget` <= 2^16 per authority, including unknown scopes: by construction (FLP3), reference model only | Slot release/acquire and `inout` exclusivity: by construction (FLP3), reference model only | **UNPROVED** (reached only through S1 to S4) |
+| S1a | `Events/SysExAssembler.swift:203` | `SysExAssembler.accept` | contended | Producer only (`:191`); one context at a time (`:28`) | None (failed take) | Not needed: sticky store (FLP4), reference model only | Not needed (FLP4), reference model only | **UNPROVED** (MIDI receive, #81) |
+| S1b | `Events/SysExAssembler.swift:322` | `SysExAssembler.extend` | `raise` (private wrapper) | Inside `accept`, token held | The assembler's one chain | By construction (FLP4), reference model only | By construction (FLP4), reference model only | **UNPROVED** (#81) |
+| S1c | `Events/SysExAssembler.swift:389` | `SysExAssembler.discard` | `raise` (private wrapper) | Inside `accept`, token held | The assembler's one chain | By construction (FLP4), reference model only | By construction (FLP4), reference model only | **UNPROVED** (#81) |
+| S1d | `Events/SysExAssembler.swift:396` | `SysExAssembler.raise` | `raise` (R0) | Inside `accept`, token held | The assembler's one chain | By construction (FLP4), reference model only | By construction (FLP4), reference model only | **UNPROVED** (#81) |
+| S2a | `Memory/FanInHandoff+Chains.swift:43` | `FanInClaimChain.refuse` | contended | A refused claim only (`:34`) | None (failed take) | Not needed: sticky store (FLP6), reference model only | Not needed (FLP6), reference model only | **UNPROVED** |
+| S2b | `Memory/FanInHandoff+Chains.swift:47` | `FanInClaimChain.refuse` | `raise` (R0) | A refused claim only (`:34`) | The handoff's one claim chain on `claimFaults` | By construction (FLP6), reference model only | By construction (FLP6), reference model only | **UNPROVED** |
+| S2c | `Memory/FanInHandoff.swift:348` | `FanInHandoff.claimProducer` | `claimChain.refuse` (S2a/S2b) | Any producer context (`:331`), holding a `RefusalCallerToken` for the counter (K-RC2) | The handoff's one claim chain | By construction (FLP6), reference model only | By construction (FLP6), reference model only | **UNPROVED** |
+| S3a | `Memory/DeferredRelease.swift:144` | `DeferredReleaseQueue.retire` | contended | Render (`:132`; one render thread, `:52`) | None (failed take) | Not needed: sticky store (FLP5), reference model only | Not needed (FLP5), reference model only | **UNPROVED** (render caller) |
+| S3b | `Memory/DeferredRelease.swift:152` | `DeferredReleaseQueue.retire` | `raise` (R0) | Render (`:132`) | The queue's one chain | By construction (FLP5), reference model only | By construction (FLP5), reference model only | **UNPROVED** (render caller) |
+| S4a | `Memory/ReservedCapacityRing+Chains.swift:44` | `ReservedRingChain.refuse` | contended | A critical refusal only (`:35`) | None (failed take) | Not needed: sticky store (FLP7b), reference model only | Not needed (FLP7b), reference model only | **UNPROVED** |
+| S4b | `Memory/ReservedCapacityRing+Chains.swift:49` | `ReservedRingChain.refuse` | `raise` (R0) | A critical refusal only (`:35`) | The lane's (or standalone ring's) one chain on `faults` | By construction (FLP7b; R2: `faults` budgets one unit per lane), reference model only | Between refusals on one lane: by construction (FLP7b), reference model only. Between successive lane holders: **UNPROVED** (the "stop pushing before release" contract stays) | **UNPROVED** |
+| S4c | `Memory/ReservedCapacityRing.swift:253` | `ReservedCapacityRing.refuse` | `laneChain.refuse` (S4a/S4b) | Producer only (`:244`), the critical branch | The lane's one chain | By construction (FLP7b), reference model only | As S4b | **UNPROVED** |
+
+Paths are relative to `Shared/Audio/Kernel`. The declarations `FaultLatch.raise`
+(`Memory/FaultLatch.swift:235`), `FaultChainAuthority.raise` (`:111`) and
+`raiseContended` (`:119`) are not call sites. Unknown or invalid scope is a branch
+inside `FaultLatch.raise`, reached only through R0. Kernel-cycle recovery adds no
+raise site (`Events/KernelCycle.swift:199`). Invalid fan-in tokens only bump a
+refusal counter (section 4).
+
+S1, S3 and standalone S4 hold no `RefusalCallerToken`, by design: K-RC2 covers
+only `FanInRefusalCounter` writers (section 4), and their raises are bounded by
+their chains, not by caller roles.
+
+Still open, and not claimed here: per-site chain, lifetime-bound and ordering
+proofs for real callers; the global bound for unknown-scope raises on a latch
+shared beyond one authority; AU or MIDI callback cardinality; and any hot-path
+integration (section 8).

@@ -28,6 +28,10 @@ private final class ChainStressState: Sendable {
     let mintedIds = Mutex<[[[UInt64]]]>([])
 }
 
+private extension UInt16 {
+    init(ascii scalar: Unicode.Scalar) { self.init(scalar.value) }
+}
+
 /// A plain (non-atomic) counter that only a token holder touches: the slot's release/acquire pair is its only
 /// synchronization, so a lost update (or a TSan report) means the chain's happens-before edge is missing.
 private final class TokenGuardedCount: @unchecked Sendable {
@@ -190,6 +194,307 @@ extension RealtimeHandoffTests {
                 }
                 #expect(authority.mintedChains == budget)
             }
+        }
+    }
+}
+
+/// A declaration body in `FaultRaiseInventory`'s scan: UTF-16 offsets from its `{` to its `}`.
+private struct RaiseScope {
+    let name: String
+    let isFunction: Bool
+    let body: Range<Int>
+}
+
+/// Blanks comments and string literals for `FaultRaiseInventory`'s scan.
+private struct LiteralMask {
+    var units: [UInt16]
+    var index = 0
+
+    func peek(_ text: String, at offset: Int = 0) -> Bool {
+        index + offset <= units.count && units[(index + offset)...].starts(with: text.utf16)
+    }
+
+    mutating func blank(_ range: Range<Int>) {
+        for position in range where units[position] != UInt16(ascii: "\n") {
+            units[position] = UInt16(ascii: " ")
+        }
+    }
+
+    /// Code to the end of input, or, for an interpolation, past the `)` that closes it.
+    mutating func code(interpolation: Bool) {
+        var depth = 0
+        while index < units.count {
+            let start = index
+            if peek("//") {
+                while index < units.count, units[index] != UInt16(ascii: "\n") { index += 1 }
+                blank(start..<index)
+            } else if peek("/*") {
+                blockComment()
+            } else if let hashes = rawHashes() {
+                string(hashes: hashes)
+            } else {
+                index += 1
+                if interpolation, units[start] == UInt16(ascii: "(") { depth += 1 }
+                if interpolation, units[start] == UInt16(ascii: ")") {
+                    if depth == 0 { return }
+                    depth -= 1
+                }
+            }
+        }
+    }
+
+    mutating func blockComment() {
+        let start = index
+        var depth = 0
+        repeat {
+            if peek("/*") {
+                depth += 1
+                index += 2
+            } else if peek("*/") {
+                depth -= 1
+                index += 2
+            } else {
+                index += 1
+            }
+        } while depth > 0 && index < units.count
+        blank(start..<min(index, units.count))
+    }
+
+    /// The `#` count when a string literal starts here, else `nil`.
+    func rawHashes() -> Int? {
+        var hashes = 0
+        while peek("#", at: hashes) { hashes += 1 }
+        return peek("\"", at: hashes) ? hashes : nil
+    }
+
+    mutating func string(hashes: Int) {
+        let start = index
+        let pounds = String(repeating: "#", count: hashes)
+        index += hashes
+        let close = (peek("\"\"\"") ? "\"\"\"" : "\"") + pounds
+        index += close.count - hashes
+        while index < units.count, !peek(close) {
+            if peek("\\" + pounds) {
+                index += 1 + hashes
+                if peek("(") {
+                    index += 1
+                    code(interpolation: true)
+                    continue
+                }
+            }
+            index += 1
+        }
+        index = min(index + close.utf16.count, units.count)
+        blank(start..<index)
+    }
+}
+
+extension RealtimeHandoffTests {
+    /// K-190a (#190 acceptance item 1 only): every raise site under `Shared/Audio/Kernel`, keyed by file, enclosing
+    /// type and function, and kind, is exactly the inventory in fault-latch-raise-sites.md section 9. A regex scan
+    /// of source with comments and string literals blanked, not a parser: a raise inside an interpolation is masked.
+    struct FaultRaiseInventory {
+        /// `relpath Type.func kind`, each once: `raise` and `contended` (`raiseContended`) calls, and `chainRefuse`
+        /// (`laneChain`/`claimChain` `.refuse`), the calls that reach a chain's raise from its owner.
+        static let expected: [String: Int] = Dictionary(uniqueKeysWithValues: [
+            "Memory/FaultLatch+Chains.swift FaultChainAuthority.raise raise", // R0
+            "Events/SysExAssembler.swift SysExAssembler.accept contended", // S1
+            "Events/SysExAssembler.swift SysExAssembler.extend raise",
+            "Events/SysExAssembler.swift SysExAssembler.discard raise",
+            "Events/SysExAssembler.swift SysExAssembler.raise raise",
+            "Memory/FanInHandoff+Chains.swift FanInClaimChain.refuse raise", // S2
+            "Memory/FanInHandoff+Chains.swift FanInClaimChain.refuse contended",
+            "Memory/FanInHandoff.swift FanInHandoff.claimProducer chainRefuse",
+            "Memory/DeferredRelease.swift DeferredReleaseQueue.retire raise", // S3
+            "Memory/DeferredRelease.swift DeferredReleaseQueue.retire contended",
+            "Memory/ReservedCapacityRing+Chains.swift ReservedRingChain.refuse raise", // S4
+            "Memory/ReservedCapacityRing+Chains.swift ReservedRingChain.refuse contended",
+            "Memory/ReservedCapacityRing.swift ReservedCapacityRing.refuse chainRefuse"
+        ].map { ($0, 1) })
+
+        static let calls = [
+            ("raise", #"\braise\s*\("#), ("contended", #"\braiseContended\s*\("#),
+            ("chainRefuse", #"\b(?:laneChain|claimChain)\s*\.\s*refuse\s*\("#)
+        ]
+
+        /// `func`, `init` or `deinit` (groups 1, 2), or a type or extension name, generics stripped (group 3).
+        static let declaration = #"(?<![\w.])(?:func\s+([A-Za-z_]\w*)|(init|deinit)(?!\w)|"#
+            + #"(?:class|struct|enum|actor|extension)\s+(?!(?:func|var|let|init|subscript)\b)([A-Za-z_][\w.]*))"#
+
+        static func kernelRoot(from path: String = #filePath) -> URL? {
+            let here = URL(fileURLWithPath: path).deletingLastPathComponent()
+            let candidates = ["../Shared/Audio/Kernel", "../../Sources/FluxKlang/Shared/Audio/Kernel"]
+            return candidates
+                .map { here.appendingPathComponent($0).standardizedFileURL }
+                .first { FileManager.default.fileExists(atPath: $0.appendingPathComponent(sentinel).path) }
+        }
+
+        static let sentinel = "Memory/FaultLatch+Chains.swift"
+        static let kernelIsReachable = kernelRoot() != nil
+
+        /// Every call in every `.swift` file under `root`, counted by key.
+        static func inventory(under root: URL) throws -> [String: Int] {
+            let all = FileManager.default.enumerator(atPath: root.path)?.allObjects as? [String] ?? []
+            var found: [String: Int] = [:]
+            for path in all.filter({ $0.hasSuffix(".swift") }).sorted() {
+                let text = try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
+                found.merge(try inventory(of: text, path: path), uniquingKeysWith: +)
+            }
+            return found
+        }
+
+        /// The calls in `text`, keyed `path Type.func kind`; `<none>` when no type or function encloses one.
+        static func inventory(of text: String, path: String) throws -> [String: Int] {
+            let code = sanitized(text)
+            let scopes = try Self.scopes(in: code)
+            let length = (code as NSString).length
+            var found: [String: Int] = [:]
+            for (kind, pattern) in calls {
+                for match in try NSRegularExpression(pattern: pattern).matches(in: code, range: NSRange(0..<length)) {
+                    let start = match.range.location
+                    let before = (code as NSString).substring(to: start)
+                    if before.range(of: #"\bfunc\s+$"#, options: .regularExpression) != nil { continue }
+                    let enclosing = scopes.filter { $0.body.contains(start) }
+                    let type = enclosing.last { !$0.isFunction }?.name ?? "<none>"
+                    let function = enclosing.last { $0.isFunction }?.name ?? "<none>"
+                    found["\(path) \(type).\(function) \(kind)", default: 0] += 1
+                }
+            }
+            return found
+        }
+
+        /// Each declaration with a body, in source order (so the last enclosing one is the innermost). A body is
+        /// the first `{` outside `(…)`/`[…]` before the next declaration, to its matching `}`; a requirement
+        /// without one has none.
+        fileprivate static func scopes(in code: String) throws -> [RaiseScope] {
+            let units = Array(code.utf16)
+            let matches = try NSRegularExpression(pattern: declaration)
+                .matches(in: code, range: NSRange(0..<units.count))
+            var scopes: [RaiseScope] = []
+            for (index, match) in matches.enumerated() {
+                let limit = index + 1 < matches.count ? matches[index + 1].range.location : units.count
+                guard let body = Self.body(units, from: NSMaxRange(match.range), before: limit) else { continue }
+                let group = (1...3).first { match.range(at: $0).location != NSNotFound } ?? 3
+                let name = (code as NSString).substring(with: match.range(at: group))
+                scopes.append(RaiseScope(name: name, isFunction: group < 3, body: body))
+            }
+            return scopes
+        }
+
+        static func body(_ units: [UInt16], from start: Int, before limit: Int) -> Range<Int>? {
+            var depth = 0
+            for index in start..<max(start, limit) {
+                switch units[index] {
+                case UInt16(ascii: "("), UInt16(ascii: "["): depth += 1
+                case UInt16(ascii: ")"), UInt16(ascii: "]"): depth -= 1
+                case UInt16(ascii: "}") where depth == 0: return nil
+                case UInt16(ascii: "{") where depth == 0:
+                    var braces = 0
+                    for end in index..<units.count {
+                        if units[end] == UInt16(ascii: "{") { braces += 1 }
+                        if units[end] == UInt16(ascii: "}") { braces -= 1 }
+                        if braces == 0 { return index..<end }
+                    }
+                    return nil
+                default: break
+                }
+            }
+            return nil
+        }
+
+        /// `text` with every comment (`//`, nested `/* */`, doc) and string literal (`"…"`, `"""…"""`, `#"…"#`,
+        /// interpolations included) blanked to spaces; newlines stay, so offsets and lines are unchanged.
+        static func sanitized(_ text: String) -> String {
+            var mask = LiteralMask(units: Array(text.utf16))
+            mask.code(interpolation: false)
+            return String(decoding: mask.units, as: UTF16.self)
+        }
+
+        @Test(.enabled(if: Self.kernelIsReachable, "the kernel sources are not next to the tests"))
+        func faultRaiseInventoryMatchesTheDocumentedSites() throws {
+            let root = try #require(Self.kernelRoot())
+            let found = try Self.inventory(under: root)
+            let added = found.filter { $0.value > Self.expected[$0.key, default: 0] }
+                .map { "\($0.key) x\($0.value)" }.sorted()
+            let missing = Self.expected.filter { $0.value > found[$0.key, default: 0] }
+                .map { "\($0.key) x\(found[$0.key, default: 0])" }.sorted()
+            #expect(found == Self.expected, "added: \(added); missing: \(missing)")
+        }
+
+        @Test func faultRaiseScannerIgnoresCommentsStringsAndDeclarations() throws {
+            let source = #"""
+                struct Lane {
+                    // $0.raise(&token, scope, kind, frame: frame)
+                    /* outer /* nested $0.raise(&token) */ raiseContended() */
+                    /// laneChain.refuse(scope, frame: frame)
+                    func raise(_ token: inout Int) {}
+                    func raiseContended () {}
+                    func describe() -> String {
+                        let plain = "$0.raise(&token, scope, kind, frame: frame) \" raiseContended()"
+                        let raw = #"$0.raiseContended() "# + "\(note("raise(&token)")) claimChain.refuse("
+                        return plain + raw + """
+                            laneChain.refuse(scope, frame: frame) "" raise(
+                            """
+                    }
+                }
+                """#
+            #expect(try Self.inventory(of: source, path: "L.swift").isEmpty)
+            #expect(Self.sanitized(source).filter { $0 == "\n" }.count == source.filter { $0 == "\n" }.count)
+        }
+
+        @Test func faultRaiseScannerFindsSplitAndBareCalls() throws {
+            let source = #"""
+                final class Queue {
+                    func retire() {
+                        _ = authority
+                            .raise(&token, scope, .retireBacklog, frame: frame)
+                        raise (index, kind, frame, &token)
+                        authorityRef._withUnsafeGuaranteedRef { $0.raiseContended() }
+                        laneChain
+                            .refuse(scope, frame: frame)
+                    }
+                }
+                """#
+            #expect(try Self.inventory(of: source, path: "Q.swift") == [
+                "Q.swift Queue.retire raise": 2, "Q.swift Queue.retire contended": 1,
+                "Q.swift Queue.retire chainRefuse": 1
+            ])
+        }
+
+        @Test func faultRaiseScannerKeysByEnclosingTypeAndFunction() throws {
+            let source = #"""
+                protocol Raising {
+                    func raise(_ value: Int)
+                }
+                struct Ring<Element: BitwiseCopyable>: Raising {
+                    init() { raise(1) }
+                    func raise(_ value: Int) { $0.raise(&token) }
+                }
+                extension Ring where Element == Int {
+                    func flush(_ body: () -> Void = { }) {
+                        items.forEach { _ in authority.raiseContended() }
+                    }
+                    deinit { laneChain.refuse(scope, frame: 0) }
+                }
+                enum Loose {
+                    static let fault: Void = authority.raiseContended()
+                }
+                """#
+            #expect(try Self.inventory(of: source, path: "R.swift") == [
+                "R.swift Ring.init raise": 1, "R.swift Ring.raise raise": 1, "R.swift Ring.flush contended": 1,
+                "R.swift Ring.deinit chainRefuse": 1, "R.swift Loose.<none> contended": 1
+            ])
+            let renamed = source.replacingOccurrences(of: "func flush(", with: "func drain(")
+            #expect(try Self.inventory(of: renamed, path: "R.swift")["R.swift Ring.drain contended"] == 1)
+            #expect(try Self.inventory(of: renamed, path: "R.swift")["R.swift Ring.flush contended"] == nil)
+        }
+
+        @Test func faultRaiseScannerCountsDuplicates() throws {
+            let source = "struct Chain {\n    func refuse() {\n        $0.raise(&token)\n        $0.raise(&token)\n"
+                + "        $0.raiseContended()\n    }\n}\n"
+            #expect(try Self.inventory(of: source, path: "D.swift") == [
+                "D.swift Chain.refuse raise": 2, "D.swift Chain.refuse contended": 1
+            ])
         }
     }
 }
