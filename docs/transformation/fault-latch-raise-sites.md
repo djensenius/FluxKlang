@@ -231,9 +231,11 @@ of the same shape (`:14` to `:28`): at most K < 2^39 logical chains over the
 counter's lifetime, non-reentrant, each completed `bump` before the chain's next,
 migration only through happens-before. Its `bump` (`:44`) is not a `raise`.
 `FaultLatch` does not report it, and the doc comment says so: "The invalid-token
-paths raise no `FaultLatch` fault, so the latch neither limits nor reports them;
-a failed claim does raise `.producerSlotsExhausted`, but the count's bound does
-not rely on it" (`FanInHandoff.swift:167` to `:170`).
+paths raise no fault, so no latch limits or reports them; a failed claim does
+raise `.producerSlotsExhausted` through the claim chain (or latches its contended
+fault), but the count's bound does not rely on it: the claim chain bounds the
+raises on `claimFaults`, not this counter's callers" (`FanInHandoff.swift:167` to
+`:170`).
 
 `FanInHandoff` owns two:
 
