@@ -640,6 +640,10 @@ The scans are type-blind and cannot see:
   cover them when the tests run from the repository; the SwiftLint rule, run on
   the repository, covers only spelled-out `FaultLatch(` and `FaultLatch.init(`.
 
+The reverse holds too: the type-blind `inferred` pattern flags any inferred
+`.init(scopes:` in the kernel (T1) or the production trees (T4), even of an
+unrelated type. That fails safe; spell such a call out as `SomeType(scopes:)`.
+
 Still open, and not claimed here: per-site chain, lifetime-bound and ordering
 proofs for real callers, including the real set of S4 lane holders; the global
 bound for real callers (K-190c holds it only per latch lifetime in the reference
