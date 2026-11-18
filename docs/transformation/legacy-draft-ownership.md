@@ -184,3 +184,35 @@ Review must not mistake diagnostic unsafe observations for desired regression te
 No permanent tests asserting those observations are added by P14b1. #122 remains
 open for writer exclusion, authoritative loading, failure handoff, bookmarks and
 document lifecycle; #48 is not completed by this prerequisite.
+
+## P14b3 / #785 — nonrecursive removal source, qualification pending
+
+Part of #785 and #122; #122/#48 remain open. Historical observations remain above.
+Nil-save now uses one `Darwin.unlinkat(AT_FDCWD, path, 0)` with closure-scoped
+filesystem representation and immediate failure-errno capture. Non-file URLs and
+nil representations return bounded `.other` without a syscall. If Foundation decodes
+an embedded NUL into `path`, the guard likewise returns `.other` without a syscall.
+On the coordinator-probed Swift 6.4.2 / macOS 27.2.1, `%00` stays literal in both
+`path` and the filesystem representation: `unlinkat` targets the literal name
+(ENOENT means already absent), never the prefix. Tests select their expectation
+from observed decoding; this is not a universal Foundation behavior claim. The
+decoded-NUL guard is therefore defense in depth that this platform cannot reach.
+Zero means delete completed, ENOENT means already absent; other errors retain the
+existing bounded POSIX classification. EPERM is not a directory-specific result.
+There is no recursive fallback, retry, type preflight or parent pinning.
+
+Source coverage is added for populated then empty owned directories, final symlinks
+to files/directories/missing targets, hard links, malformed URL prefixes and a real
+failed discard held after IO while a different real draft commits. Link absence
+uses owned-parent enumeration, not follow-link existence alone. Forwarding gates,
+coordinator and load/write behavior are unchanged. Initial Debug compiled but failed
+the former exact-decoded-NUL fixture assertion; the platform-aware correction was
+independently source-reviewed and its rerun is pending.
+
+The promise is application-level nonrecursive one-name removal, not universal
+directory refusal. XNU `xnu-12377.1.9` research is not shipping-OS qualification;
+directory-hardlink and compound-filesystem exceptions preclude that guarantee.
+Initial Debug observed local directory preservation; parent symlinks, name/parent
+races, trailing slashes and arbitrary filesystems remain unqualified. No durability,
+writer exclusion, authority, migration activation, failure UI, post-acceptance
+rollback or native/provider qualification is added.

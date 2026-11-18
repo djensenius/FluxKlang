@@ -6,7 +6,7 @@ protocol CoreMIDIEndpointDirectory: Sendable {
     func sources() -> [CoreMIDIEndpointRecord]
 }
 
-/// Reads each source and its identity properties from CoreMIDI. Construct and call it only after the caller's testing
+/// Reads each source and its properties from CoreMIDI. Construct and call it only after the caller's testing
 /// guard; every CoreMIDI call is recorded as `.apiEntered` for `.midiInput` first.
 struct LiveCoreMIDIEndpointDirectory: CoreMIDIEndpointDirectory {
     let auditMirror: ProductionAccessAudit?
@@ -24,7 +24,8 @@ struct LiveCoreMIDIEndpointDirectory: CoreMIDIEndpointDirectory {
                 manufacturer: string(kMIDIPropertyManufacturer, of: source),
                 model: string(kMIDIPropertyModel, of: source),
                 driverOwner: string(kMIDIPropertyDriverOwner, of: source),
-                isOffline: integer(kMIDIPropertyOffline, of: source).map { $0 != 0 }
+                isOffline: integer(kMIDIPropertyOffline, of: source).map { $0 != 0 },
+                protocolID: integer(kMIDIPropertyProtocolID, of: source)
             )
         }
     }

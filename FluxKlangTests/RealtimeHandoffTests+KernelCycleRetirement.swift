@@ -58,9 +58,12 @@ extension RealtimeHandoffTests {
         /// which its unresolved loss is empty. Kills: stateful drops not counted; the stale flag never set; the loss
         /// not handed to the replacement.
         @Test func pendingProgramChangeDroppedAtRetirementIsCountedAndInherited() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(128, programFive), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(128, programFive), token, caller: &caller!) == .ok)
             let (before, early) = rig.run(0, 64)
             #expect(early.isEmpty && before.pending == 1)
             let loss = rig.cycle.retire()
@@ -77,10 +80,15 @@ extension RealtimeHandoffTests {
         /// A `control` change at 100 and a `rampTo` at 110 pending at retirement are stateful drops too; the
         /// replacement inherits them and (KCR1) re-admits both in its first block. Kills: stateful drops not counted.
         @Test func pendingControlAndRampDroppedAtRetirementAreStateful() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(100, .control(channel: 0, controller: 7, value: 9)), token) == .ok)
-            #expect(rig.push(cycleEvent(110, .rampTo(parameter: 1, value: 1, durationFrames: 0)), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(100, .control(channel: 0, controller: 7, value: 9)), token, caller: &caller!)
+                    == .ok)
+            #expect(rig.push(cycleEvent(110, .rampTo(parameter: 1, value: 1, durationFrames: 0)), token,
+                             caller: &caller!) == .ok)
             #expect(rig.run(0, 64).0.pending == 2)
             let loss = rig.cycle.retire()
             #expect(counts(loss) == [0, 1, 0, 1, 0] && loss.stateful == 2 && loss.receiverStateMayBeStale)
@@ -97,21 +105,27 @@ extension RealtimeHandoffTests {
         /// two `noteOff`s are not drops but still record their tombstones, so a `noteOn(60)` at 105 arriving later at
         /// the replacement is superseded. Kills: a `noteOff` counted as a drop; `retire()` recording no tombstone.
         @Test func mixedPendingEventsGiveExactCountsAndNoteOffsStillRecordTombstones() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 32)
-            let first = try #require(rig.events.claimProducer()), second = try #require(rig.events.claimProducer())
+            let first = try RefusalCalling.claim(rig.events, &caller!)
+            let second = try RefusalCalling.claim(rig.events, &caller!)
             let pending: [(Int64, KernelEventPayload)] = [
                 (100, noteOn(61)), (110, noteOff(60)), (115, noteOn(62)),
                 (120, .control(channel: 0, controller: 1, value: 3)), (125, programFive),
                 (130, .rampTo(parameter: 2, value: 1, durationFrames: 64)), (140, .clockPulse), (150, noteOff(61))
             ]
-            for (frame, payload) in pending { #expect(rig.push(cycleEvent(frame, payload), second) == .ok) }
+            for (frame, payload) in pending {
+                #expect(rig.push(cycleEvent(frame, payload), second, caller: &caller!) == .ok)
+            }
             #expect(rig.run(0, 64).0.pending == 8)
             let loss = rig.cycle.retire()
             #expect(counts(loss) == [2, 1, 1, 1, 1] && loss.stateful == 3 && loss.receiverStateMayBeStale)
             let replacement = try successor(of: rig)
             #expect(replacement.inheritedRetirementLoss == loss)
             #expect(runBlock(replacement, 64).1 == [.control(channel: 0, controller: 1, value: 3), programFive])
-            #expect(rig.push(cycleEvent(105, noteOn(60)), first) == .ok)
+            #expect(rig.push(cycleEvent(105, noteOn(60)), first, caller: &caller!) == .ok)
             let (late, emitted) = runBlock(replacement, 128)
             #expect(emitted == [.rampTo(parameter: 2, value: 1, durationFrames: 64)] && late.discardedSuperseded == 1)
             for note in UInt8(60)...62 { #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: note)) }
@@ -121,9 +135,12 @@ extension RealtimeHandoffTests {
         /// the next replacement inherits zero, not the earlier retirement's `program` drop (which the middle cycle
         /// re-admitted at 128). Kills: a zero loss not handed over (an earlier loss inherited again).
         @Test func retirementWithNothingPendingHandsOverAZeroLoss() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(128, programFive), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(128, programFive), token, caller: &caller!) == .ok)
             #expect(rig.run(0, 64).0.pending == 1)
             rig.cycle.retire()
             let middle = try successor(of: rig)
@@ -140,10 +157,13 @@ extension RealtimeHandoffTests {
         /// state is not stale); a second does nothing and returns no loss, and the replacement inherits the first
         /// loss, not a double count. Kills: a repeated `retire()` counting again.
         @Test func secondRetireCountsNothingAgain() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(100, noteOn(64)), token) == .ok)
-            #expect(rig.push(cycleEvent(120, .clockPulse), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(100, noteOn(64)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(120, .clockPulse), token, caller: &caller!) == .ok)
             #expect(rig.run(0, 64).0.pending == 2)
             let loss = rig.cycle.retire()
             #expect(counts(loss) == [1, 0, 0, 0, 1] && loss.stateful == 0 && !loss.receiverStateMayBeStale)
@@ -159,14 +179,17 @@ extension RealtimeHandoffTests {
         /// receiver state, and the replacement inherits them. Kills: stateful drops not counted; the stale flag
         /// never set; the loss not handed to the replacement.
         @Test func silencedCycleRetiringDropsTheStateEventsItKept() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let due: [KernelEventPayload] = [noteOn(61), .control(channel: 0, controller: 7, value: 9), programFive,
                                              .rampTo(parameter: 1, value: 1, durationFrames: 0), .clockPulse,
                                              noteOff(60)]
             for faulted in [true, false] {
                 let rig = try CycleRig(laneCapacity: 32)
-                let token = try #require(rig.events.claimProducer())
+                let token = try RefusalCalling.claim(rig.events, &caller!)
                 for (index, payload) in due.enumerated() {
-                    #expect(rig.push(cycleEvent(Int64(10 * index + 5), payload), token) == .ok)
+                    #expect(rig.push(cycleEvent(Int64(10 * index + 5), payload), token, caller: &caller!) == .ok)
                 }
                 if faulted {
                     #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
@@ -187,12 +210,15 @@ extension RealtimeHandoffTests {
         /// proved empty are marked flushed: the one decided is discarded, never sounded; the one still pending at
         /// retirement is counted under `noteOns`, not stateful.
         @Test func flushedNoteOnPendingAtRetirementCountsAsANoteOn() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
             rig.cycle.retire()
             let replacement = try successor(of: rig)
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(100, noteOn(70)), token) == .ok)
-            #expect(rig.push(cycleEvent(140, noteOn(71)), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(100, noteOn(70)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(140, noteOn(71)), token, caller: &caller!) == .ok)
             #expect(runBlock(replacement, 0).0.pending == 2)
             let (decided, emitted) = runBlock(replacement, 64)
             #expect(emitted.isEmpty && decided.discardedWhileSilenced == 1 && decided.pending == 1)
@@ -209,11 +235,14 @@ extension RealtimeHandoffTests {
         /// cycle on new slots still starts at 0. Kills: the replacement resetting the shared values; values written
         /// only to a per-cycle cache; a completed ramp's target not kept.
         @Test func completedRampValueSurvivesReplacementAndSeedsTheNextRamp() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 32)
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             for (frame, parameter, duration) in [(Int64(0), UInt32(3), Int64(128)), (10, 1, 0), (20, 2, 20)] {
                 let ramp = KernelEventPayload.rampTo(parameter: parameter, value: 1, durationFrames: duration)
-                #expect(rig.push(cycleEvent(frame, ramp), token) == .ok)
+                #expect(rig.push(cycleEvent(frame, ramp), token, caller: &caller!) == .ok)
             }
             let (first, _) = runBlock(rig.cycle, 0)
             #expect(first.dispatched == 3 && first.pending == 0 && rig.ramps.activeCount == 1)
@@ -221,7 +250,8 @@ extension RealtimeHandoffTests {
             #expect(rig.cycle.retire() == KernelRetirementLoss())
             let replacement = try successor(of: rig)
             #expect([0, 1, 2, 3].map { replacement.parameterValue($0) } == [0, 1, 1, 0.5])
-            #expect(rig.push(cycleEvent(64, .rampTo(parameter: 1, value: 0, durationFrames: 128)), token) == .ok)
+            #expect(rig.push(cycleEvent(64, .rampTo(parameter: 1, value: 0, durationFrames: 128)), token,
+                             caller: &caller!) == .ok)
             let (next, _) = runBlock(replacement, 64)
             #expect(next.dispatched == 1 && next.refused == 0)
             #expect([1, 2, 3].map { replacement.parameterValue($0) } == [0.5, 1, 1])
@@ -246,9 +276,12 @@ extension RealtimeHandoffTests {
         /// re-admitted by the replacement at frame 128; the inherited loss is unchanged. Kills: no event recorded;
         /// the carry not handed over; the loss changed.
         @Test func retirementCarryHandoffProgramPendingAtRetirementIsEmittedByTheReplacementAtItsFrame() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(128, programFive), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(128, programFive), token, caller: &caller!) == .ok)
             let (before, early) = rig.run(0, 64)
             #expect(early.isEmpty && before.pending == 1)
             let loss = rig.cycle.retire()
@@ -266,9 +299,12 @@ extension RealtimeHandoffTests {
         /// An event already due when the replacement starts (a `control` stamped 100, replacement first frame 192
         /// after a one-block gap) is dispatched at 192, not at 100. Kills: the event not carried.
         @Test func retirementCarryHandoffAlreadyDueEventIsEmittedAtTheReplacementsFirstFrame() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(100, controlNine), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(100, controlNine), token, caller: &caller!) == .ok)
             #expect(rig.run(0, 64).0.pending == 1)
             _ = rig.cycle.retire()
             let replacement = try successor(of: rig)
@@ -282,15 +318,21 @@ extension RealtimeHandoffTests {
         /// `noteOff` tombstones are as before. Kills: a `noteOn`, `noteOff` or clock pulse recorded; the buffer
         /// visited in reverse; loss counting skipped for recorded events.
         @Test func retirementCarryHandoffMixedPendingKeepsOnlyStatefulEventsInBufferOrder() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 32)
-            let first = try #require(rig.events.claimProducer()), second = try #require(rig.events.claimProducer())
+            let first = try RefusalCalling.claim(rig.events, &caller!)
+            let second = try RefusalCalling.claim(rig.events, &caller!)
             let ramp = KernelEventPayload.rampTo(parameter: 2, value: 1, durationFrames: 64)
             let stateChange = KernelEventPayload.control(channel: 0, controller: 1, value: 3)
             let pending: [(Int64, KernelEventPayload)] = [
                 (100, noteOn(61)), (110, noteOff(60)), (115, noteOn(62)), (125, programFive),
                 (130, ramp), (140, .clockPulse), (145, noteOff(61)), (150, stateChange)
             ]
-            for (frame, payload) in pending { #expect(rig.push(cycleEvent(frame, payload), second) == .ok) }
+            for (frame, payload) in pending {
+                #expect(rig.push(cycleEvent(frame, payload), second, caller: &caller!) == .ok)
+            }
             #expect(rig.run(0, 64).0.pending == 8)
             let loss = rig.cycle.retire()
             #expect(counts(loss) == [2, 1, 1, 1, 1] && loss.stateful == 3)
@@ -299,7 +341,7 @@ extension RealtimeHandoffTests {
             let expected = [cycleEvent(125, programFive), cycleEvent(130, ramp), cycleEvent(150, stateChange)]
             #expect(carry.count == 3 && carry.events == expected)
             #expect(runBlock(replacement, 64).1 == [programFive])
-            #expect(rig.push(cycleEvent(105, noteOn(60)), first) == .ok)
+            #expect(rig.push(cycleEvent(105, noteOn(60)), first, caller: &caller!) == .ok)
             let (late, emitted) = runBlock(replacement, 128)
             #expect(emitted == [ramp, stateChange] && late.discardedSuperseded == 1)
         }
@@ -309,9 +351,12 @@ extension RealtimeHandoffTests {
         /// `.freshFanIn` cycle inherits an empty carry. Kills: the carry not overwritten when empty; a repeated
         /// `retire()` recording.
         @Test func retirementCarryHandoffAnEmptyRetirementOverwritesAnEarlierCarry() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(128, programFive), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(128, programFive), token, caller: &caller!) == .ok)
             #expect(rig.run(0, 64).0.pending == 1)
             _ = rig.cycle.retire()
             let middle = try successor(of: rig)
@@ -331,13 +376,16 @@ extension RealtimeHandoffTests {
         /// order, the rest are counted in `droppedForCapacity` and nothing is overwritten; the loss still counts all
         /// 300. Kills: overwrite of the oldest; a drop not counted; recording stopping early.
         @Test func retirementCarryHandoffOverflowCountsDroppedForCapacityAndKeepsTheFirstEvents() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 320, blockCapacity: 300, perLaneQuota: 300)
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             let total = KernelRetirementCarry.capacity + 44
             var expected = KernelRetirementCarry()
             for index in 0..<total {
                 let event = cycleEvent(1_000 + Int64(index), .control(channel: 0, controller: 7, value: UInt32(index)))
-                #expect(rig.push(event, token) == .ok)
+                #expect(rig.push(event, token, caller: &caller!) == .ok)
                 expected.record(event)
             }
             #expect(rig.run(0, 64).0.pending == total)
@@ -353,10 +401,13 @@ extension RealtimeHandoffTests {
         /// A pending `noteOn` and clock pulse are counted as before and never carried. Kills: the carry's
         /// stateful filter bypassed.
         @Test func retirementCarryHandoffNoteOnsAndTimingPulsesAreNeverCarried() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(100, noteOn(64)), token) == .ok)
-            #expect(rig.push(cycleEvent(120, .clockPulse), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(100, noteOn(64)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(120, .clockPulse), token, caller: &caller!) == .ok)
             #expect(rig.run(0, 64).0.pending == 2)
             let loss = rig.cycle.retire()
             #expect(counts(loss) == [1, 0, 0, 0, 1])
@@ -367,13 +418,16 @@ extension RealtimeHandoffTests {
         /// A silenced cycle (latched, or muted by a panic) keeps its stateful events buffered and carries exactly
         /// those at retirement, as many as the loss counts. Kills: capture skipped on the silenced path.
         @Test func retirementCarryHandoffSilencedCycleCarriesTheStateEventsItKept() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let ramp = KernelEventPayload.rampTo(parameter: 1, value: 1, durationFrames: 0)
             let due: [KernelEventPayload] = [noteOn(61), controlNine, programFive, ramp, .clockPulse, noteOff(60)]
             for faulted in [true, false] {
                 let rig = try CycleRig(laneCapacity: 32)
-                let token = try #require(rig.events.claimProducer())
+                let token = try RefusalCalling.claim(rig.events, &caller!)
                 for (index, payload) in due.enumerated() {
-                    #expect(rig.push(cycleEvent(Int64(10 * index + 5), payload), token) == .ok)
+                    #expect(rig.push(cycleEvent(Int64(10 * index + 5), payload), token, caller: &caller!) == .ok)
                 }
                 if faulted {
                     #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)

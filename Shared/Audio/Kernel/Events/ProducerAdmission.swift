@@ -34,19 +34,20 @@ struct ProducerAdmission: Sendable {
         self.refusals = refusals
     }
 
-    /// Producer only. Admits `event` at `now`, then pushes it on `token`'s lane of `events`.
+    /// Producer only. Admits `event` at `now`, then pushes it on `token`'s lane of `events`. Every refusal it
+    /// counts, an admission refusal here or a `.notOwner` in `tryPush`, borrows `caller` (#768 K-RC2).
     mutating func push(_ event: KernelEvent, now: Int64, into events: FanInHandoff<KernelEvent>,
-                       token: ProducerToken) -> KernelStatus {
+                       token: ProducerToken, caller: inout RefusalCallerToken) -> KernelStatus {
         let admitted = deadline.admit(eventFrame: event.frame, now: now, lastAdmittedFrame: lastAdmittedFrame)
         guard admitted == .ok else {
-            refusals.record(admitted, token: token)
+            refusals.record(admitted, token: token, caller: &caller)
             return admitted
         }
         if case let .rampTo(_, value, _) = event.payload, !KernelEventPayload.isAdmissibleRampTarget(value) {
-            refusals.record(.refused(.nonFinite), token: token)
+            refusals.record(.refused(.nonFinite), token: token, caller: &caller)
             return .refused(.nonFinite)
         }
-        let status = events.tryPush(event, class: event.eventClass, frame: event.frame, token: token)
+        let status = events.tryPush(event, class: event.eventClass, frame: event.frame, token: token, caller: &caller)
         if status == .ok { lastAdmittedFrame = event.frame }
         return status
     }
@@ -90,8 +91,9 @@ final class KernelAdmissionRefusals: @unchecked Sendable {
         counters.deallocate()
     }
 
-    /// Producer only. Counts an admission refusal on `token`'s lane; any other status counts nothing.
-    func record(_ status: KernelStatus, token: ProducerToken) {
+    /// Producer only. Counts an admission refusal on `token`'s lane, borrowing `caller`; any other status counts
+    /// nothing.
+    func record(_ status: KernelStatus, token: ProducerToken, caller: inout RefusalCallerToken) {
         let kind: Kind
         switch status {
         case .refused(.nonMonotonic): kind = .nonMonotonic
@@ -100,8 +102,8 @@ final class KernelAdmissionRefusals: @unchecked Sendable {
         default: return
         }
         let lane = Int(token.lane)
-        guard token.handoff == handoff, lane < laneCount else { return foreign.bump() }
-        counters[Self.slot(lane, kind)].bump()
+        guard token.handoff == handoff, lane < laneCount else { return foreign.bump(caller: &caller) }
+        counters[Self.slot(lane, kind)].bump(caller: &caller)
     }
 
     /// `lane`'s count of `kind`, or `nil` when `lane` is out of range.

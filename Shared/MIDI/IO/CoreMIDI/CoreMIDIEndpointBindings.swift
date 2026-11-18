@@ -11,6 +11,18 @@ struct CoreMIDIEndpointBindings: Sendable, Equatable {
     struct Binding: Sendable, Equatable {
         let ref: UInt32
         let source: MIDIConnectedSource
+        /// The mapped `kMIDIPropertyProtocolID` of the enumeration that registered or last kept this binding. Evidence
+        /// only: not identity or eligibility, and not the protocol the input port receives.
+        let endpointProtocol: MIDIEndpointProtocol
+    }
+
+    /// A kept binding whose mapped endpoint protocol changed. Reported only: its token and key stay, because the input
+    /// port's protocol is fixed for the start, and nothing records a `formatChange` for it yet.
+    struct ProtocolChange: Sendable, Equatable {
+        let ref: UInt32
+        let token: MIDIConnectionToken
+        let from: MIDIEndpointProtocol
+        let to: MIDIEndpointProtocol
     }
 
     /// One enumeration's changes. Detaches come first, so a unit replugged under a new ref, or rekeyed on the same
@@ -23,6 +35,9 @@ struct CoreMIDIEndpointBindings: Sendable, Equatable {
         let registrations: [Binding]
         /// The bindings once every detach and registration is applied.
         let bindings: CoreMIDIEndpointBindings
+        /// Kept bindings, in enumeration order, whose mapped endpoint protocol changed. Never a registration or a
+        /// rekey; raw values that map alike, such as 0 and an unreadable property, are no change.
+        let protocolChanges: [ProtocolChange]
     }
 
     /// In the enumeration order of the last update.
@@ -49,34 +64,45 @@ struct CoreMIDIEndpointBindings: Sendable, Equatable {
     /// Compares fingerprints itself, because the reconciler compares refs only: a changed key on a connected ref is a
     /// detach and a registration, never carried state. A renamed source keeps its token. When the counter cannot
     /// mint another token, the source is left unconnected rather than wrapping, and the next enumeration tries again.
+    /// A changed endpoint protocol on a kept binding is reported and keeps its token.
     func update(with reconciliation: CoreMIDIEndpointReconciliation) -> Update {
         let matchedRefs = Set(reconciliation.matched.map(\.ref))
         let ambiguousRefs = Set(reconciliation.ambiguous.flatMap(\.refs))
         let current = Dictionary(bindings.map { ($0.ref, $0) }, uniquingKeysWith: { first, _ in first })
         var detaches = bindings.filter { !matchedRefs.contains($0.ref) }.sorted { $0.ref < $1.ref }
         var registrations: [Binding] = []
+        var protocolChanges: [ProtocolChange] = []
         var next = CoreMIDIEndpointBindings(lastToken: lastToken)
         for record in reconciliation.matched {
             let key = Self.endpointKey(
                 fingerprint: record.uniqueID == nil ? nil : record.fingerprint,
                 isAmbiguous: ambiguousRefs.contains(record.ref)
             )
+            let endpointProtocol = record.endpointProtocol
             if let bound = current[record.ref] {
                 if bound.source.endpoint == key {
                     let source = MIDIConnectedSource(token: bound.source.token, endpoint: key, name: record.displayName)
-                    next.bindings.append(Binding(ref: record.ref, source: source))
+                    next.bindings.append(Binding(ref: record.ref, source: source, endpointProtocol: endpointProtocol))
+                    if bound.endpointProtocol != endpointProtocol {
+                        protocolChanges.append(ProtocolChange(
+                            ref: record.ref, token: source.token, from: bound.endpointProtocol, to: endpointProtocol
+                        ))
+                    }
                     continue
                 }
                 detaches.append(bound)
             }
             guard let token = next.mintToken() else { continue }
             let binding = Binding(
-                ref: record.ref, source: MIDIConnectedSource(token: token, endpoint: key, name: record.displayName)
+                ref: record.ref, source: MIDIConnectedSource(token: token, endpoint: key, name: record.displayName),
+                endpointProtocol: endpointProtocol
             )
             registrations.append(binding)
             next.bindings.append(binding)
         }
-        return Update(detaches: detaches, registrations: registrations, bindings: next)
+        return Update(
+            detaches: detaches, registrations: registrations, bindings: next, protocolChanges: protocolChanges
+        )
     }
 
     /// Forgets `ref` after CoreMIDI refused to connect it, so the next enumeration tries again with a fresh token.

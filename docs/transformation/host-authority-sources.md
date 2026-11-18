@@ -387,8 +387,10 @@ in-flight `beginApply(w)` before it waits for the lifecycle lock; each apply reg
 and unregisters on return, so no closed-window history, permission or authority is cached. Every session recheck,
 including the one before `completeRestore`, then refuses `.windowClosed` (`.noSession` first). A close queued behind
 an apply's lease work still detaches after the refused apply, so the closed window ends unattached. A later apply
-on the same `WindowID` (AppRootView reuses it on reappear) is not fenced. A close that fences during
-`completeRestore` is refused only after that restore is delivered. Mirror-run `OwnerRaces` tests cover this.
+on the same `WindowID` (AppRootView reuses it on reappear) is not fenced. An apply whose window closes during
+`completeRestore` is refused only after that restore is acknowledged (pinned at the test-only
+`.restoreAcknowledging` checkpoint); other in-flight applies of `w` queued behind it are refused at their first
+recheck. Mirror-run `OwnerRaces` tests cover this.
 AU7c3 (#795) applies that fence when the detach is requested, not on its FIFO turn. `HostWingLifecycle.detach(w)`
 starts a task that calls the owner's lock-free, history-free `fenceApplies(for: w)` (which `windowClosed` still
 calls first), then reserves its turn as before; the detach itself (`windowClosed`) still waits behind earlier

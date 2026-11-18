@@ -25,7 +25,7 @@ struct CoreMIDIAdapterTests {
     ) -> CoreMIDIEndpointRecord {
         CoreMIDIEndpointRecord(
             ref: ref, uniqueID: uniqueID ?? Int32(ref), displayName: name, manufacturer: manufacturer, model: model,
-            driverOwner: owner, isOffline: offline
+            driverOwner: owner, isOffline: offline, protocolID: nil
         )
     }
 
@@ -33,7 +33,16 @@ struct CoreMIDIAdapterTests {
     static func anonymous(_ ref: UInt32, _ name: String, offline: Bool? = false) -> CoreMIDIEndpointRecord {
         CoreMIDIEndpointRecord(
             ref: ref, uniqueID: nil, displayName: name, manufacturer: "Acme", model: "Surface 8",
-            driverOwner: "com.example.driver", isOffline: offline
+            driverOwner: "com.example.driver", isOffline: offline, protocolID: nil
+        )
+    }
+
+    /// `record` as an enumeration that read `protocolID` from it would list it.
+    static func reporting(_ protocolID: Int32?, _ record: CoreMIDIEndpointRecord) -> CoreMIDIEndpointRecord {
+        CoreMIDIEndpointRecord(
+            ref: record.ref, uniqueID: record.uniqueID, displayName: record.displayName,
+            manufacturer: record.manufacturer, model: record.model, driverOwner: record.driverOwner,
+            isOffline: record.isOffline, protocolID: protocolID
         )
     }
 
@@ -141,5 +150,134 @@ struct CoreMIDIAdapterTests {
         for _ in 0..<5 {
             #expect(Self.reconcile(records, connected: connected) == first)
         }
+    }
+
+    // MARK: Endpoint protocol evidence (M81-EP1)
+
+    @Test func onlyProtocolIDsOneAndTwoMapToAKnownEndpointProtocol() {
+        let table: [(protocolID: Int32?, expected: MIDIEndpointProtocol)] = [
+            (nil, .unknown), (0, .unknown), (1, .midi1), (2, .midi2), (3, .unknown), (4, .unknown), (-1, .unknown),
+            (-2, .unknown), (257, .unknown), (Int32.min, .unknown), (Int32.max, .unknown)
+        ]
+        for (protocolID, expected) in table {
+            let record = Self.reporting(protocolID, Self.source(1, "Launch Control XL"))
+            #expect(MIDIEndpointProtocol(protocolID: protocolID) == expected, "\(String(describing: protocolID))")
+            #expect(record.endpointProtocol == expected, "\(String(describing: protocolID))")
+            #expect(record.protocolID == protocolID)
+        }
+    }
+
+    @Test func theEndpointProtocolNeverChangesEligibility() {
+        let records = [
+            Self.source(30, "Launch Control XL"), Self.source(10, "IAC Bus 1"),
+            Self.source(20, "Launch Control XL DAW"), Self.source(40, "Launch Control XL", offline: true),
+            Self.source(50, "Launch Control XL", uniqueID: 9), Self.source(60, "Launch Control XL 2", uniqueID: 9),
+            Self.anonymous(70, "Launch Control XL", offline: nil)
+        ]
+        let connected: Set<UInt32> = [10, 30, 40, 80]
+        let expected = Self.reconcile(records, connected: connected)
+        #expect(expected.matched.map(\.ref) == [30, 50, 60, 70])
+        #expect(expected.toDisconnect == [10, 40, 80])
+        #expect(expected.ambiguous.map(\.refs) == [[50, 60]] && expected.identityUnavailable == [70])
+        let protocolIDs: [Int32?] = [nil, 0, 1, 2, 3, -1, Int32.min, Int32.max]
+        let uniform = protocolIDs.map { protocolID in records.map { Self.reporting(protocolID, $0) } }
+        let mixed = protocolIDs.indices.map { offset in
+            zip(protocolIDs[offset...] + protocolIDs[..<offset], records).map { Self.reporting($0, $1) }
+        }
+        for reported in uniform + mixed {
+            let result = Self.reconcile(reported, connected: connected)
+            #expect(result.matched == reported.filter { expected.matched.map(\.ref).contains($0.ref) })
+            #expect(result.toConnect.map(\.ref) == expected.toConnect.map(\.ref))
+            #expect(result.toDisconnect == expected.toDisconnect)
+            #expect(result.ambiguous == expected.ambiguous)
+            #expect(result.identityUnavailable == expected.identityUnavailable)
+        }
+    }
+
+    @Test func aKeptBindingReportsItsProtocolChangeAndKeepsItsToken() throws {
+        let unit = Self.source(10, "Launch Control XL")
+        let key = MIDIEndpointKey(fingerprint: unit.fingerprint)
+        let first = Self.bind([Self.reporting(1, unit)])
+        let token = try Self.token(of: 10, in: first)
+        #expect(first.registrations.map(\.endpointProtocol) == [.midi1])
+        #expect(first.protocolChanges.isEmpty, "a registration is never a protocol change")
+
+        let renamed = Self.reporting(2, Self.source(10, "Launch Control XL (Studio)"))
+        let second = Self.bind([renamed], after: first.bindings)
+        #expect(second.detaches.isEmpty && second.registrations.isEmpty)
+        #expect(second.protocolChanges == [.init(ref: 10, token: token, from: .midi1, to: .midi2)])
+        #expect(second.bindings.bindings == [.init(
+            ref: 10, source: MIDIConnectedSource(token: token, endpoint: key, name: renamed.displayName),
+            endpointProtocol: .midi2
+        )])
+
+        let same = Self.bind([renamed], after: second.bindings)
+        #expect(same.protocolChanges.isEmpty)
+        let lost = Self.bind([Self.reporting(nil, unit)], after: same.bindings)
+        #expect(lost.protocolChanges == [.init(ref: 10, token: token, from: .midi2, to: .unknown)])
+        #expect(lost.detaches.isEmpty && lost.registrations.isEmpty)
+        let lostToken = try Self.token(of: 10, in: lost)
+        #expect(lostToken == token)
+    }
+
+    @Test func rawValuesThatMapAlikeAreNoProtocolChange() throws {
+        let unit = Self.source(10, "Launch Control XL")
+        var bindings = Self.bind([Self.reporting(0, unit)]).bindings
+        let token = try #require(bindings.sources.first).token
+        for protocolID: Int32? in [nil, 3, -1, Int32.min, Int32.max, 0] {
+            let update = Self.bind([Self.reporting(protocolID, unit)], after: bindings)
+            #expect(update.protocolChanges.isEmpty, "\(String(describing: protocolID))")
+            #expect(update.bindings.bindings.map(\.endpointProtocol) == [.unknown])
+            #expect(update.detaches.isEmpty && update.registrations.isEmpty)
+            bindings = update.bindings
+        }
+        #expect(bindings.sources.map(\.token) == [token])
+    }
+
+    @Test func registrationsAndRekeysNeverReportProtocolChanges() throws {
+        let first = Self.source(11, "Launch Control XL", uniqueID: 500)
+        let second = Self.source(12, "Launch Control XL 2", uniqueID: 500)
+        let unique = Self.bind([Self.reporting(1, first)])
+        let original = try Self.token(of: 11, in: unique)
+
+        let rekeyed = Self.bind([Self.reporting(2, first), Self.reporting(2, second)], after: unique.bindings)
+        #expect(rekeyed.protocolChanges.isEmpty)
+        #expect(rekeyed.detaches == unique.bindings.bindings)
+        #expect(rekeyed.registrations.map(\.ref) == [11, 12])
+        #expect(rekeyed.registrations.map(\.endpointProtocol) == [.midi2, .midi2])
+        let rekeyedToken = try Self.token(of: 11, in: rekeyed)
+        #expect(rekeyedToken != original)
+
+        let offline = Self.source(11, "Launch Control XL", uniqueID: 500, offline: true)
+        let retired = Self.bind([Self.reporting(2, offline)], after: unique.bindings)
+        #expect(retired.detaches == unique.bindings.bindings && retired.protocolChanges.isEmpty)
+        let returned = Self.bind([Self.reporting(2, first)], after: retired.bindings)
+        #expect(returned.protocolChanges.isEmpty)
+        #expect(returned.registrations.map(\.endpointProtocol) == [.midi2])
+    }
+
+    @Test func protocolChangesFollowTheEnumerationOrder() throws {
+        let unit30 = Self.source(30, "Launch Control XL")
+        let unit10 = Self.source(10, "Launch Control XL")
+        let unit20 = Self.source(20, "Launch Control XL")
+        let unit40 = Self.source(40, "Launch Control XL")
+        let before = Self.bind([
+            Self.reporting(1, unit30), Self.reporting(1, unit10), Self.reporting(2, unit20), Self.reporting(0, unit40)
+        ])
+        let after = [
+            Self.reporting(1, unit20), Self.reporting(2, unit40), Self.reporting(2, unit30), Self.reporting(1, unit10),
+            Self.reporting(2, Self.source(50, "Launch Control XL"))
+        ]
+        let update = Self.bind(after, after: before.bindings)
+        let token20 = try Self.token(of: 20, in: before)
+        let token40 = try Self.token(of: 40, in: before)
+        let token30 = try Self.token(of: 30, in: before)
+        #expect(update.protocolChanges == [
+            .init(ref: 20, token: token20, from: .midi2, to: .midi1),
+            .init(ref: 40, token: token40, from: .unknown, to: .midi2),
+            .init(ref: 30, token: token30, from: .midi1, to: .midi2)
+        ])
+        #expect(update.registrations.map(\.ref) == [50])
+        #expect(update.bindings.bindings.map(\.endpointProtocol) == [.midi1, .midi2, .midi2, .midi1, .midi2])
     }
 }

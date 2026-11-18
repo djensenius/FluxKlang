@@ -177,9 +177,15 @@ private struct AdmittingSource {
 /// the 480-frame tolerance, beyond the lookahead (refused) and once at it. A `.nonMonotonic` refusal is a
 /// discontinuity: reset and retry. Notes are disjoint per producer: 0 → scope 0 notes 0–5, 1 → both scopes notes
 /// 8–13, 2 → scope 1 notes 0–5.
-@Sendable private func admitAndPush(_ rig: CycleRig, _ run: CycleStressRun, id: Int, pushes: Int) -> AdmittingOutcome {
+@Sendable private func admitAndPush(_ rig: CycleRig, _ run: CycleStressRun, _ role: RefusalCaller, id: Int,
+                                    pushes: Int) -> AdmittingOutcome {
     var outcome = AdmittingOutcome()
-    guard run.arriveAndWait(), let token = rig.events.claimProducer() else { return outcome }
+    var caller: RefusalCallerToken? = try? RefusalCalling.take(role)
+    defer { RefusalCalling.giveBack(role, &caller) }
+    guard run.arriveAndWait(), caller != nil, let token = rig.events.claimProducer(caller: &caller!) else {
+        outcome.violations.append("producer \(id) not run")
+        return outcome
+    }
     let deadline = ContinuousClock.now + CycleStressRun.waitLimit
     while run.cycleStarted.load(ordering: .acquiring) < 2, !run.shouldStop, ContinuousClock.now < deadline {}
     var admission = ProducerAdmission(deadline: rig.cycle.deadline, refusals: rig.cycle.admissionRefusals)
@@ -189,17 +195,17 @@ private struct AdmittingSource {
         let now = run.now.load(ordering: .relaxed)
         let kind = index == pushes / 2 ? -1 : random.next(32)
         let event = source.event(&random, kind: kind, index: index, now: now)
-        var status = admission.push(event, now: now, into: rig.events, token: token)
+        var status = admission.push(event, now: now, into: rig.events, token: token, caller: &caller!)
         outcome.count(status)
         if status == .refused(.nonMonotonic) {
             admission.resetForDiscontinuity()
             outcome.resets += 1
-            status = admission.push(event, now: now, into: rig.events, token: token)
+            status = admission.push(event, now: now, into: rig.events, token: token, caller: &caller!)
             outcome.count(status)
         }
         // The lookahead edge is retried (render drains meanwhile) so every producer lands one.
         while kind == -1, status == .refused(.full), !run.shouldStop {
-            status = admission.push(event, now: now, into: rig.events, token: token)
+            status = admission.push(event, now: now, into: rig.events, token: token, caller: &caller!)
             outcome.count(status)
         }
         outcome.check(event, status, kind: kind, now: now)
@@ -276,39 +282,44 @@ extension RealtimeHandoffTests {
         /// that diverges from the results or goes backwards; admission that refuses an admissible frame, admits
         /// one beyond the lookahead or never resets; a race TSan can see.
         @Test func admittingProducersSaturatedDeadlinesAndTelemetryHandshake() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let slots = try kernelCycleTelemetrySlots()
             let rig = try CycleRig(lanes: 4, laneCapacity: 64, blockCapacity: 48,
                                    telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 3))
-            let setupToken = try #require(rig.events.claimProducer())
+            let setupToken = try RefusalCalling.claim(rig.events, &caller!)
             var setupSequence: UInt64 = 0
-            func setupPush(_ frame: Int64, _ payload: KernelEventPayload) -> KernelStatus {
+            func setupPush(_ frame: Int64, _ payload: KernelEventPayload,
+                           caller: inout RefusalCallerToken) -> KernelStatus {
                 setupSequence += 1
-                return rig.push(cycleEvent(frame, payload, sequence: setupSequence), setupToken)
+                return rig.push(cycleEvent(frame, payload, sequence: setupSequence), setupToken, caller: &caller)
             }
             // A late `noteOn(14)` dropped by a quiescent cycle; then a certain latch with `noteOn(15)` queued ahead
             // of its refused release, the general lane full and releases still taken from the reserve.
-            #expect(setupPush(-10_000, .noteOn(channel: 0, note: 14, velocity: 90)) == .ok)
+            #expect(setupPush(-10_000, .noteOn(channel: 0, note: 14, velocity: 90), caller: &caller!) == .ok)
             var setup = OrderingModel()
             let (dropped, nothing) = rig.run(0, 64)
             setup.record(dropped, nothing, blockStart: 0, frames: 64)
             #expect(dropped.droppedLate == 1 && nothing.isEmpty)
-            #expect(setupPush(64, .noteOn(channel: 0, note: 15, velocity: 90)) == .ok)
-            func fill(_ payload: KernelEventPayload) -> (count: Int, refusal: KernelStatus) {
+            #expect(setupPush(64, .noteOn(channel: 0, note: 15, velocity: 90), caller: &caller!) == .ok)
+            func fill(_ payload: KernelEventPayload,
+                      caller: inout RefusalCallerToken) -> (count: Int, refusal: KernelStatus) {
                 var count = 0
-                var status = setupPush(64, payload)
+                var status = setupPush(64, payload, caller: &caller)
                 while status == .ok {
                     count += 1
-                    status = setupPush(64, payload)
+                    status = setupPush(64, payload, caller: &caller)
                 }
                 return (count, status)
             }
-            let controls = fill(.control(channel: 0, controller: 7, value: 0))
-            let releases = fill(.noteOff(channel: 0, note: 7))
+            let controls = fill(.control(channel: 0, controller: 7, value: 0), caller: &caller!)
+            let releases = fill(.noteOff(channel: 0, note: 7), caller: &caller!)
             // `noteOn(14)`, `noteOn(15)`, then the fills.
             let accepted = 2 + controls.count + releases.count
             #expect(controls.refusal == .refused(.full))
             #expect(releases.count > 0 && releases.refusal == .refused(.criticalExhausted))
-            #expect(setupPush(65, .noteOff(channel: 0, note: 15)) == .refused(.criticalExhausted))
+            #expect(setupPush(65, .noteOff(channel: 0, note: 15), caller: &caller!) == .refused(.criticalExhausted))
             #expect(rig.faults.isLatched(CycleRig.criticalScope))
             // More than a block is queued, so the first latched cycle (run here, before any producer starts) cannot
             // prove the lanes empty: it reports flushing whatever the producers later do.
@@ -322,10 +333,11 @@ extension RealtimeHandoffTests {
             let model = CycleSlots<OrderingModel>(1)
             let control = CycleSlots<[String]>(1)
             let frozenSetup = setup
+            let roles = try (0..<3).map { _ in try #require(RefusalCaller.prepare()) }
             let workers: [@Sendable (CycleStressRun) -> Void] = [
-                { outcomes.set(0, admitAndPush(rig, $0, id: 0, pushes: 12_000)) },
-                { outcomes.set(1, admitAndPush(rig, $0, id: 1, pushes: 12_000)) },
-                { outcomes.set(2, admitAndPush(rig, $0, id: 2, pushes: 12_000)) },
+                { outcomes.set(0, admitAndPush(rig, $0, roles[0], id: 0, pushes: 12_000)) },
+                { outcomes.set(1, admitAndPush(rig, $0, roles[1], id: 1, pushes: 12_000)) },
+                { outcomes.set(2, admitAndPush(rig, $0, roles[2], id: 2, pushes: 12_000)) },
                 { model.set(0, renderCycles(rig, $0, setup: frozenSetup, producers: 3)) },
                 { control.set(0, acknowledgeByTelemetry(rig, $0)) }
             ]

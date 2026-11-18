@@ -1,4 +1,4 @@
-// #768 K-RC1: refusal-accounting capability prerequisite, not yet required by counter-writing APIs.
+// #768 K-RC1/K-RC2: refusal-accounting capability, required by every counter-writing refusal API.
 // Protocol proof: docs/transformation/refusal-caller-ownership.md. Reference model; not RT-certified.
 import Synchronization
 
@@ -10,7 +10,7 @@ private let refusalCallerIdentities = FanInIdentityAllocator(lastIssued: UInt64.
 ///
 /// The process can prepare exactly 2^38 - 1 roles over its lifetime. Dropping roles or tokens refunds nothing.
 /// A dropped token strands its role. An empty slot is failure to acquire a capability, not a counted refusal;
-/// there is no busy-drop wrapper or fallback token. Counter integration is deferred to K-RC2.
+/// there is no busy-drop wrapper or fallback token. Every refusal-counter write borrows a token (K-RC2).
 final class RefusalCaller: Sendable {
     private let identity: UInt64
     private let slot: Atomic<UInt64>

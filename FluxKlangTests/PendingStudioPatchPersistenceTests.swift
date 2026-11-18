@@ -57,7 +57,13 @@ struct PendingStudioPatchPersistenceTests {
             }
             #expect(!outcome.completed)
             #expect(try Data(contentsOf: sentinel) == bytes)
-            // Never call save(nil) on this directory: existing removal can recurse.
+            let deletion = await fixture.store.save(nil)
+            #expect(!deletion.completed)
+            #expect(try Data(contentsOf: sentinel) == bytes)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.file.path) == ["sentinel"])
+            try FileManager.default.removeItem(at: sentinel)
+            #expect(!(await fixture.store.save(nil)).completed)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.file.path).isEmpty)
         }
     }
 
@@ -197,6 +203,125 @@ struct PendingStudioPatchPersistenceTests {
 }
 
 extension PendingStudioPatchPersistenceTests {
+    @Test(arguments: ["file", "directory", "dangling"])
+    func deletionUnlinksFinalSymlinkOnly(kind: String) async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let manager = FileManager.default
+            let target = fixture.root.appendingPathComponent("target")
+            let bytes = Data("owned target".utf8)
+            if kind == "directory" {
+                try manager.createDirectory(at: target, withIntermediateDirectories: false)
+                try bytes.write(to: target.appendingPathComponent("sentinel"))
+            } else if kind == "file" {
+                try bytes.write(to: target)
+            }
+            let parent = fixture.file.deletingLastPathComponent()
+            try manager.createDirectory(at: parent, withIntermediateDirectories: false)
+            try manager.createSymbolicLink(at: fixture.file, withDestinationURL: target)
+            try #require(try manager.destinationOfSymbolicLink(atPath: fixture.file.path) == target.path)
+            #expect(!fixture.file.path.hasSuffix("/"))
+            #expect(await fixture.store.save(nil) == .deleteCompleted)
+            #expect(try manager.contentsOfDirectory(atPath: parent.path).isEmpty)
+            if kind == "directory" {
+                #expect(try manager.contentsOfDirectory(atPath: target.path) == ["sentinel"])
+                #expect(try Data(contentsOf: target.appendingPathComponent("sentinel")) == bytes)
+            } else if kind == "file" {
+                #expect(try Data(contentsOf: target) == bytes)
+            } else {
+                #expect(try manager.contentsOfDirectory(atPath: fixture.root.path) == ["pending"])
+            }
+        }
+    }
+
+    @Test func deletionPreservesOtherHardLink() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let other = fixture.root.appendingPathComponent("other")
+            let bytes = Data("owned hard link".utf8)
+            try bytes.write(to: other)
+            let parent = fixture.file.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: false)
+            try FileManager.default.linkItem(at: other, to: fixture.file)
+            #expect(try Data(contentsOf: fixture.file) == bytes)
+            #expect(await fixture.store.save(nil) == .deleteCompleted)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: parent.path).isEmpty)
+            #expect(try Data(contentsOf: other) == bytes)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func deletionRejectsMalformedURLWithoutTouchingPrefix(containsNUL: Bool) async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let sentinel = fixture.root.appendingPathComponent("sentinel")
+            let bytes = Data("owned URL prefix".utf8)
+            try bytes.write(to: sentinel)
+            let expectedPath = sentinel.path + (containsNUL ? "\0suffix" : "")
+            var components = try #require(URLComponents(url: sentinel, resolvingAgainstBaseURL: false))
+            components.scheme = containsNUL ? "file" : "https"
+            components.host = containsNUL ? "" : "invalid.example"
+            components.path = expectedPath
+            let url = try #require(components.url)
+            let decodesNUL = url.path.contains("\0")
+            let representation = url.withUnsafeFileSystemRepresentation { $0.map { String(cString: $0) } }
+            try #require(url.isFileURL == containsNUL)
+            if containsNUL {
+                #expect(components.percentEncodedPath.hasSuffix("%00suffix"))
+                if !decodesNUL {
+                    #expect(representation == sentinel.path + "%00suffix")
+                }
+            } else {
+                try #require(url.path == expectedPath)
+            }
+            let store = PendingStudioPatchStore(fileURL: url, directory: fixture.root)
+            let outcome = await store.save(nil)
+            #expect(outcome == (containsNUL && !decodesNUL ? .alreadyAbsent : .mutationFailedEffectUnconfirmed(.other)))
+            #expect(try Data(contentsOf: sentinel) == bytes)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path) == ["sentinel"])
+        }
+    }
+
+    @Test func failedDiscardResultCannotCatchUpOrPromoteOverNewerCommit() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let built = try await fixture.build()
+            _ = await fixture.owner.perform(.openReview, context: fixture.context)
+            #expect(fixture.owner.navigationTarget == .reviewPendingDraft)
+            try FileManager.default.removeItem(at: fixture.file)
+            try FileManager.default.createDirectory(at: fixture.file, withIntermediateDirectories: false)
+            let sentinel = fixture.file.appendingPathComponent("sentinel")
+            let bytes = Data("owned delayed discard".utf8)
+            try bytes.write(to: sentinel)
+            let gate = await fixture.forwarding.hold(.afterSave(2))
+            let discard = fixture.start { await fixture.owner.discardPendingStudioDraft() }
+            try #require(await gate.waitForEntry())
+            let older = try fixture.attempt()
+            #expect(older.observation == .mutation(snapshot: nil, outcome: nil))
+            #expect(await fixture.forwarding.snapshots == [built, nil])
+            #expect(fixture.owner.pendingStudioDraft == nil)
+            #expect(fixture.owner.navigationTarget == nil)
+            #expect(try Data(contentsOf: sentinel) == bytes)
+            let moved = fixture.root.appendingPathComponent("preserved")
+            try FileManager.default.moveItem(at: fixture.file, to: moved)
+            let newerDraft = fixture.draft(1)
+            try #require(newerDraft != built)
+            #expect(await fixture.commit(newerDraft))
+            let newer = try fixture.attempt()
+            #expect(newer !== older)
+            #expect(newer.observation == .mutation(snapshot: newerDraft, outcome: .writeCompleted))
+            await gate.release()
+            await discard.value
+            guard case .mutation(nil, .some(.mutationFailedEffectUnconfirmed)) = older.observation else {
+                Issue.record("Expected historical nil-snapshot deletion failure, got \(older.observation)")
+                return
+            }
+            #expect(fixture.owner.latestStorageAttempt === newer)
+            #expect(newer.observation == .mutation(snapshot: newerDraft, outcome: .writeCompleted))
+            #expect(await fixture.forwarding.snapshots == [built, nil, newerDraft])
+            #expect(fixture.owner.pendingStudioDraft == newerDraft)
+            #expect(await fixture.store.load() == .loaded(newerDraft))
+            #expect(try Data(contentsOf: moved.appendingPathComponent("sentinel")) == bytes)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: moved.path) == ["sentinel"])
+        }
+    }
+
     @Test(arguments: [false, true])
     func failedReloadRetainsCompletionStateAndCancellationEligibility(readFailure: Bool) async throws {
         try await PendingPersistenceFixture.run { fixture in
