@@ -4,6 +4,10 @@ import Testing
 
 private typealias Owner = OwnerBench
 private enum OwnerLeaseState: CaseIterable, Sendable { case free, ownWindow, unattached }
+/// How the Studio lease stands before a close is queued behind lease work.
+private enum OwnerCloseStart: CaseIterable, Sendable { case free, recovering, ownWindow, unattached }
+private enum OwnerLifecycleEvent: Sendable { case queued, finished }
+private let leasePoints: [HostAuthorityOwner.Checkpoint] = [.leaseRead, .leaseChecked, .leaseReady]
 private enum OwnerLoss: CaseIterable, Sendable {
     case disconnect, demo, drop
 
@@ -123,6 +127,175 @@ extension HostAuthorityTests {
             let fresh = try #require(try admitted.get())
             #expect(Owner.refusal(await owner.authority.redeemDirect(fresh)) == nil)
         }
+
+        @Test(arguments: OwnerLeaseState.allCases)
+        fileprivate func closeBeforePausedApplyRefuses(initial: OwnerLeaseState) async throws {
+            let (owner, pause) = try await Self.pausable()
+            if initial != .free {
+                _ = try await owner.beginApply(window: Owner.windowOne).get()
+                if initial == .unattached { await owner.windowClosed(Owner.windowOne) }
+            }
+            await pause.arm(.applyStarting)
+            let apply = await pause.start(owner)
+            guard await pause.waitUntilReached(orJoin: apply) else { return }
+            // The close completes while the apply is paused before the lock; nothing is attached yet.
+            await owner.windowClosed(Owner.windowOne)
+            await pause.resume()
+            #expect(await apply.value == .failure(.windowClosed))
+            let lease = await owner.authority.snapshot().lease
+            if initial == .free {
+                #expect(lease == nil)
+            } else {
+                #expect(try #require(lease).windows.isEmpty)
+            }
+        }
+
+        @Test(arguments: OwnerCloseStart.allCases)
+        fileprivate func closeQueuedDuringLeaseWork(start: OwnerCloseStart) async throws {
+            for point in leasePoints {
+                let (owner, pause) = try await Self.pausable()
+                if start != .free { _ = try await owner.beginApply(window: Owner.windowOne).get() }
+                if start == .unattached { await owner.windowClosed(Owner.windowOne) }
+                if start == .recovering {
+                    _ = try await owner.dropped().get()
+                    let verified = UUID()
+                    await owner.connected(session: verified)
+                    await owner.verifiedReconnect(session: verified)
+                }
+                await pause.arm(point)
+                let apply = await pause.start(owner)
+                guard await pause.waitUntilReached(orJoin: apply) else { return }
+                let close = await Self.settle(pause, queues: true) { await owner.windowClosed(Owner.windowOne) }
+                await pause.resume()
+                #expect(await apply.value == .failure(.windowClosed))
+                await close.value
+                let after = await owner.authority.snapshot()
+                let acquired = start == .ownWindow || start == .unattached || point != .leaseRead
+                #expect(after.lease?.windows == (acquired ? [] : nil))
+                // A fenced apply never completes the restore its acquire queued.
+                #expect(after.outputsMuted == (start == .recovering))
+                #expect(after.restoring?.delivered == (start == .recovering && acquired ? false : nil))
+            }
+        }
+
+        @Test(arguments: [HostAuthorityOwner.Checkpoint.applyStarting] + leasePoints)
+        func closingAnotherWindowDoesNotFence(point: HostAuthorityOwner.Checkpoint) async throws {
+            let (owner, pause) = try await Self.pausable()
+            let session = try #require(await owner.session)
+            await pause.arm(point)
+            let apply = await pause.start(owner, window: Owner.windowTwo)
+            guard await pause.waitUntilReached(orJoin: apply) else { return }
+            let close = await Self.settle(pause, queues: point != .applyStarting) {
+                await owner.windowClosed(Owner.windowOne)
+            }
+            await pause.resume()
+            #expect(await apply.value == .success(session))
+            await close.value
+            #expect(await owner.authority.snapshot().lease?.windows == [Owner.windowTwo])
+        }
+
+        @Test(arguments: [HostAuthorityOwner.Checkpoint.applyStarting] + leasePoints)
+        func reappearingRootReusesItsID(point: HostAuthorityOwner.Checkpoint) async throws {
+            let (owner, pause) = try await Self.pausable()
+            let session = try #require(await owner.session)
+            _ = try await owner.beginApply(window: Owner.windowOne).get()
+            await pause.arm(point)
+            let apply = await pause.start(owner)
+            guard await pause.waitUntilReached(orJoin: apply) else { return }
+            let close = await Self.settle(pause, queues: point != .applyStarting) {
+                await owner.windowClosed(Owner.windowOne)
+            }
+            await pause.resume()
+            // Refusal timing is the subject of the close tests above; only the reuse after it matters here.
+            _ = await apply.value
+            await close.value
+            // AppRootView keeps its WindowID across disappear/reappear: a new apply is not fenced.
+            #expect(await owner.beginApply(window: Owner.windowOne) == .success(session))
+            #expect(await owner.authority.snapshot().lease?.windows == [Owner.windowOne])
+        }
+
+        @Test(arguments: [HostAuthorityOwner.Checkpoint.applyStarting] + leasePoints)
+        func lossAndClosePrecedence(point: HostAuthorityOwner.Checkpoint) async throws {
+            let (owner, pause) = try await Self.pausable()
+            await pause.arm(point)
+            let apply = await pause.start(owner)
+            guard await pause.waitUntilReached(orJoin: apply) else { return }
+            let close = await Self.settle(pause, queues: point != .applyStarting) {
+                await owner.windowClosed(Owner.windowOne)
+            }
+            // Joined only after the apply: a refusal must not leave it suspended.
+            let loss = await Self.settle(pause, queues: point != .applyStarting) { await owner.disconnected() }
+            await pause.resume()
+            #expect(await apply.value == .failure(.noSession))
+            await close.value
+            _ = try await loss.value.get()
+            #expect(await owner.authority.snapshot().lease == nil)
+        }
+
+        @Test
+        func closeDuringRestoreAcknowledgementRefuses() async throws {
+            let (owner, pause) = try await Self.pausable()
+            _ = try await owner.beginApply(window: Owner.windowOne).get()
+            _ = try await owner.dropped().get()
+            let verified = UUID()
+            await owner.connected(session: verified)
+            await owner.verifiedReconnect(session: verified)
+            await pause.arm(.restoreAcknowledging)
+            let apply = await pause.start(owner)
+            guard await pause.waitUntilReached(orJoin: apply) else { return }
+            #expect(await owner.authority.snapshot().restoring?.delivered == true)
+            let close = await Self.settle(pause, queues: true) { await owner.windowClosed(Owner.windowOne) }
+            await pause.resume()
+            #expect(await apply.value == .failure(.windowClosed))
+            await close.value
+            let after = await owner.authority.snapshot()
+            // The restore was acknowledged before the final check refused the apply.
+            #expect(after.restoring == nil && !after.outputsMuted)
+            #expect(after.lease?.windows == [])
+        }
+
+        @Test
+        func closeFencesEveryInFlightApplyOfItsWindow() async throws {
+            let (owner, pause) = try await Self.pausable()
+            await pause.arm(.leaseReady)
+            let first = await pause.start(owner)
+            guard await pause.waitUntilReached(orJoin: first) else { return }
+            let second = await Self.settle(pause, queues: true) { await owner.beginApply(window: Owner.windowOne) }
+            let close = await Self.settle(pause, queues: true) { await owner.windowClosed(Owner.windowOne) }
+            await pause.resume()
+            #expect(await first.value == .failure(.windowClosed))
+            #expect(await second.value == .failure(.windowClosed))
+            await close.value
+            #expect(await owner.authority.snapshot().lease?.windows == [])
+        }
+
+        /// A granted, connected owner whose queued lifecycle calls are observable.
+        private static func pausable() async throws -> (HostAuthorityOwner, OwnerApplyPause) {
+            let pause = OwnerApplyPause()
+            let owner = try HostAuthorityOwner(
+                host: Owner.host, checkpoint: { await pause.visit($0) },
+                lifecycleQueued: { pause.lifecycle.continuation.yield(.queued) }
+            )
+            _ = try await owner.grant(.host).get()
+            await owner.connected(session: UUID())
+            return (owner, pause)
+        }
+
+        /// Starts a lifecycle call and waits until it queues for the lock or returns, whichever is first.
+        /// The unexpected outcome is recorded, never awaited, so the caller still resumes its paused apply.
+        /// Assumes no other lifecycle events arrive meanwhile; a call that neither queues nor returns still hangs.
+        private static func settle<T: Sendable>(_ pause: OwnerApplyPause, queues: Bool,
+                                                _ call: @escaping @Sendable () async -> T) async -> Task<T, Never> {
+            var events = pause.lifecycle.stream.makeAsyncIterator()
+            let task = Task {
+                let value = await call()
+                pause.lifecycle.continuation.yield(.finished)
+                return value
+            }
+            let queued = await events.next() == .queued
+            if queued != queues { Issue.record("Lifecycle call \(queued ? "queued" : "returned") unexpectedly") }
+            return task
+        }
     }
 }
 
@@ -135,12 +308,16 @@ private actor OwnerApplyPause {
     private var point: HostAuthorityOwner.Checkpoint?
     private var continuation: CheckedContinuation<Void, Never>?
     private let events = AsyncStream<Event>.makeStream()
+    /// `.queued` each time an owner built by `pausable()` queues a lifecycle call; `.finished` when
+    /// a call started by `settle` returns.
+    nonisolated let lifecycle = AsyncStream<OwnerLifecycleEvent>.makeStream()
 
     func arm(_ point: HostAuthorityOwner.Checkpoint) { self.point = point }
 
-    func start(_ owner: HostAuthorityOwner) -> Task<Result<UUID, HostAuthorityOwner.ApplyRefusal>, Never> {
+    func start(_ owner: HostAuthorityOwner,
+               window: WindowID = Owner.windowOne) -> Task<Result<UUID, HostAuthorityOwner.ApplyRefusal>, Never> {
         Task {
-            let result = await owner.beginApply(window: Owner.windowOne)
+            let result = await owner.beginApply(window: window)
             events.continuation.yield(.completed)
             return result
         }
