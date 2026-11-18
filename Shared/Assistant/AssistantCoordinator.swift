@@ -34,6 +34,8 @@ final class AssistantCoordinator {
     private let draftStore: any PendingStudioPatchPersisting
     private var settledStudioDraft: StudioPatchDraft?
     private var routingSubmissionID: UUID?
+    // Pending-draft persistence calls in flight; overlapping mutations each hold one count.
+    private var mutationsInFlight = 0
 
     // Latest submitted invocation, not latest completion or current persisted state.
     private(set) var latestStorageAttempt: PendingStudioPatchStorageAttempt?
@@ -53,10 +55,12 @@ final class AssistantCoordinator {
     func load() async {
         let attempt = PendingStudioPatchStorageAttempt(.load(nil))
         latestStorageAttempt = attempt
+        // A read that starts during a mutation can return disk older than the pending draft.
+        let quiescent = mutationsInFlight == 0
         let outcome = await draftStore.load()
         attempt.complete(outcome)
-        // A superseded load records its own outcome but never publishes over newer work.
-        guard latestStorageAttempt === attempt else { return }
+        // A superseded load, or one started during a mutation, records its own outcome but never publishes.
+        guard latestStorageAttempt === attempt, quiescent else { return }
         switch outcome {
         case .loaded(let draft): pendingStudioDraft = draft
         case .absent: pendingStudioDraft = nil
@@ -197,6 +201,8 @@ final class AssistantCoordinator {
     }
 
     private func persistPendingDraft() async {
+        mutationsInFlight += 1
+        defer { mutationsInFlight -= 1 }
         var saved = pendingStudioDraft
         while true {
             let attempt = PendingStudioPatchStorageAttempt(.mutation(snapshot: saved, outcome: nil))
