@@ -122,6 +122,23 @@ No new native, hardware, device-port, timing, lifetime, RT or legacy/UMP equival
 The accepted #780 caveats below remain. Closed #80/#362 are not reopened; #81/#83 remain open.
 #83's actual-consumer MIDI2 translation gate and M83a native activation are separate deferred work.
 
+## Endpoint protocol evidence (#787, M81-EP1)
+
+Each enumeration also reads `kMIDIPropertyProtocolID` through the same audited passive integer read as the other
+properties: no emit, no port or device state change. The record keeps the raw value; it maps to the existing
+`MIDIEndpointProtocol` as 1 → `midi1`, 2 → `midi2`, and anything else, including an unreadable property, 0,
+negative values and both Int32 extremes, → `unknown`. Unknown is never assumed to be MIDI 1.0 here. The protocol
+is neither identity (fingerprints and their goldens are unchanged) nor eligibility (reconciliation is unchanged).
+
+Each binding carries its mapped protocol. An update reports, in enumeration order, kept bindings whose token is
+unchanged and whose mapped protocol changed; raw values that map alike (0 then unreadable) are no change.
+Registrations, including the returns of retired sources, and rekeys never appear: a rekey stays a detach and a
+registration. A change is reported only. The token, key and stream state stay, because the input port's
+protocol is fixed for the start. Nothing records or consumes a §9.1 `formatChange` discontinuity yet, and nothing
+is emitted. No OS protocol conversion behaviour was verified: media-contract open question 8 stays open. The
+passive hardware inventory lists the LCXL3's endpoints as MIDI 1.0, so `midi1` is expected from it, but this
+reader has not been run against the device and that value is not measured.
+
 ## Evidence boundary
 
 See `fault-latch-platform-callbacks.md` for the absence of an Apple self-serialization guarantee. SDK

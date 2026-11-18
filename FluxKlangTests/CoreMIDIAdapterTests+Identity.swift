@@ -12,7 +12,7 @@ extension CoreMIDIAdapterTests {
     static func fingerprint(_ uniqueID: Int32?, _ manufacturer: String?, _ model: String?, _ owner: String?) -> UInt64 {
         CoreMIDIEndpointRecord(
             ref: 1, uniqueID: uniqueID, displayName: "Launch Control XL", manufacturer: manufacturer, model: model,
-            driverOwner: owner, isOffline: nil
+            driverOwner: owner, isOffline: nil, protocolID: nil
         ).fingerprint
     }
 
@@ -37,6 +37,24 @@ extension CoreMIDIAdapterTests {
         // 61 bytes: 01 81 82 83 84, then for each string 01, its 8-byte count and its UTF-8 bytes.
         let full = Self.fingerprint(Int32(bitPattern: 0x8182_8384), "Acme", "Fader 8", "com.example.driver")
         #expect(full == 0x1C93_2881_32E6_58CF)
+    }
+
+    /// The protocol is evidence, not identity: the goldens above hold whatever `kMIDIPropertyProtocolID` reports.
+    @Test func theEndpointProtocolNeverChangesTheFingerprint() {
+        let full = Self.source(
+            1, "Launch Control XL", uniqueID: Int32(bitPattern: 0x8182_8384), manufacturer: "Acme", model: "Fader 8",
+            owner: "com.example.driver"
+        )
+        let absent = CoreMIDIEndpointRecord(
+            ref: 2, uniqueID: nil, displayName: "Launch Control XL", manufacturer: nil, model: nil, driverOwner: nil,
+            isOffline: nil, protocolID: nil
+        )
+        let protocolIDs: [Int32?] = [nil, 0, 1, 2, 3, -1, Int32.min, Int32.max]
+        for protocolID in protocolIDs {
+            #expect(Self.reporting(protocolID, full).fingerprint == 0x1C93_2881_32E6_58CF)
+            #expect(Self.reporting(protocolID, absent).fingerprint == 0x4D25_767F_9DCE_13F5)
+        }
+        #expect(Self.reporting(1, full).endpointProtocol != Self.reporting(2, full).endpointProtocol)
     }
 
     @Test func theEncodingIsPresenceThenBigEndianThenLengthPrefixed() {
