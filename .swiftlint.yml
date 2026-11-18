@@ -37,3 +37,15 @@ custom_rules:
       - /Shared/Audio/Kernel/Events/SysExAssembler\.swift$
     message: Authority raises (`raise(&token, ...)`) are restricted to the lane-owner files allowlisted in .swiftlint.yml.
     severity: error
+  fault_latch_construction:
+    name: FaultLatch construction
+    # `FaultLatch(`, `FaultLatch.init` (called or not) or the metatype `FaultLatch.self`/`.Type` (K-190c, #190). Only
+    # `FaultChainAuthority.init` builds a latch. `typeidentifier` lets a `FaultLatch.Type` annotation fire too.
+    regex: '\bFaultLatch(?=\s*(?:\.\s*(?:init|self|Type)\b|\())'
+    match_kinds:
+      - identifier
+      - typeidentifier
+    excluded:
+      - /Shared/Audio/Kernel/Memory/FaultLatch\+Chains\.swift$
+    message: Only FaultChainAuthority.init (FaultLatch+Chains.swift) constructs a FaultLatch; production code builds a FaultChainAuthority instead.
+    severity: error
