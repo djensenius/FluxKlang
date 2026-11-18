@@ -55,6 +55,8 @@ final class AssistantCoordinator {
         latestStorageAttempt = attempt
         let outcome = await draftStore.load()
         attempt.complete(outcome)
+        // A superseded load records its own outcome but never publishes over newer work.
+        guard latestStorageAttempt === attempt else { return }
         switch outcome {
         case .loaded(let draft): pendingStudioDraft = draft
         case .absent: pendingStudioDraft = nil
