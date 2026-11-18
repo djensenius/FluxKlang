@@ -206,3 +206,44 @@ actor OvertakingCopilotHTTP: AssistantHTTPClient {
         return (Data(body.utf8), response)
     }
 }
+
+// Reply collection shared by the publication tests.
+extension PendingStudioPatchPersistenceTests {
+    struct CollectedReply: Sendable {
+        var texts: [String] = []
+        var cards: [[AssistantCard]] = []
+        var failed = false
+    }
+
+    // Drains the whole stream before returning; stream events are not Equatable, so match them by pattern.
+    static func collectReply(
+        _ fixture: PendingPersistenceFixture, from generator: (any AssistantGenerating)? = nil,
+        question: String = "Show the pending draft"
+    ) async -> CollectedReply {
+        let request = AssistantGenerationRequest(
+            question: question, recentMessages: [], summary: "", context: fixture.context)
+        var reply = CollectedReply()
+        let generator = generator ?? AssistantFallbackGenerator(coordinator: fixture.owner)
+        do {
+            for try await event in generator.stream(request) {
+                switch event {
+                case .text(let text): reply.texts.append(text)
+                case .cards(let cards): reply.cards.append(cards)
+                }
+            }
+        } catch {
+            reply.failed = true
+        }
+        return reply
+    }
+
+    // "Is the WING connected?" is read-only, so routing ownership passes it to the model.
+    static func copilotReply(
+        _ fixture: PendingPersistenceFixture, _ http: OvertakingCopilotHTTP
+    ) async -> CollectedReply {
+        let generator = CopilotAssistantGenerator(
+            configuration: CopilotAssistantConfiguration(token: "token", model: "gpt-4o"),
+            coordinator: fixture.owner, httpClient: http)
+        return await collectReply(fixture, from: generator, question: "Is the WING connected?")
+    }
+}
