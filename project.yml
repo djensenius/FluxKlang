@@ -553,6 +553,7 @@ targets:
       - path: FluxKlangTests/MIDICIMessageTests+ProfileDetailsRules.swift
       - path: FluxKlangTests/MIDICIMcoded7Tests.swift
       - path: FluxKlangTests/MIDICIPropertyHeaderTests.swift
+      - path: FluxKlangTests/MIDICIPropertyBodyTests.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Classify.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Order.swift
