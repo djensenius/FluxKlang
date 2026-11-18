@@ -15,6 +15,10 @@ protocol WingTransporting: Sendable {
     var sessionID: UUID? { get async }
     var peerHosts: Set<String> { get async }
     /// Stream of messages received from the WING (value changes, query replies).
+    /// One stream for the transport's lifetime: `start` and `stop` must not replace it or
+    /// finish it while in use. One controller per transport; `WingController` iterates it
+    /// exactly once, across reconnects, because cancelling the iterating task terminates
+    /// the stream (#750).
     nonisolated var incoming: AsyncStream<WingIncoming> { get }
 
     /// Opens the transport and begins receiving. `broadcast` enables IPv4

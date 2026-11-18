@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import FluxKlang
@@ -73,7 +74,14 @@ enum BackendTestError: Error { case timeout, send }
 
 /// Replies and writes exist only in this recording actor. Never opens a socket.
 actor AssistantRecordingWingTransport: WingTransporting {
-    nonisolated let incoming: AsyncStream<WingIncoming>
+    private nonisolated let stream: AsyncStream<WingIncoming>
+    private nonisolated let incomingReads = Mutex(0)
+    /// Counts reads so tests can pin the controller's single lifetime listener (#750).
+    nonisolated var incoming: AsyncStream<WingIncoming> {
+        incomingReads.withLock { $0 += 1 }
+        return stream
+    }
+    nonisolated var incomingReadCount: Int { incomingReads.withLock { $0 } }
     private let continuation: AsyncStream<WingIncoming>.Continuation
     private var currentSessionID: UUID?
     private var currentPeerHosts: Set<String> = []
@@ -123,7 +131,7 @@ actor AssistantRecordingWingTransport: WingTransporting {
     private(set) var stopCount = 0
 
     init() {
-        (incoming, continuation) = AsyncStream.makeStream()
+        (stream, continuation) = AsyncStream.makeStream()
         values = Dictionary(
             uniqueKeysWithValues: (1...40).map {
                 (WingAddress.name(.channel, $0), WingValue.string($0 == 7 ? "Lead" : ""))
@@ -139,6 +147,8 @@ actor AssistantRecordingWingTransport: WingTransporting {
             values[WingAddress.mute(node.kind, node.index)] = .int(0)
         }
     }
+
+    deinit { continuation.finish() }
 
     func start(remoteHost: String, localPort: UInt16?, broadcast: Bool) async {
         currentSessionID = UUID()
