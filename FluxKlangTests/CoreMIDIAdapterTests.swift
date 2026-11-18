@@ -30,10 +30,10 @@ struct CoreMIDIAdapterTests {
     }
 
     /// A source whose uniqueID could not be read.
-    static func anonymous(_ ref: UInt32, _ name: String) -> CoreMIDIEndpointRecord {
+    static func anonymous(_ ref: UInt32, _ name: String, offline: Bool? = false) -> CoreMIDIEndpointRecord {
         CoreMIDIEndpointRecord(
             ref: ref, uniqueID: nil, displayName: name, manufacturer: "Acme", model: "Surface 8",
-            driverOwner: "com.example.driver", isOffline: false
+            driverOwner: "com.example.driver", isOffline: offline
         )
     }
 
@@ -106,6 +106,28 @@ struct CoreMIDIAdapterTests {
         #expect(result.matched.map(\.ref) == [1, 2, 3])
         #expect(result.toDisconnect.isEmpty)
         #expect(Self.reconcile(records, connected: [1, 2, 3]).toConnect.isEmpty)
+    }
+
+    @Test func onlyExplicitlyOfflineSourcesLoseNameEligibility() {
+        let records = [
+            Self.source(30, "Launch Control XL", offline: nil),
+            Self.source(10, "Launch Control XL", offline: true),
+            Self.source(20, "launch control xl 2", offline: false),
+            Self.source(40, "Launch Control XL DAW", offline: nil),
+            Self.source(50, "Launch Control XL HUI", offline: false),
+            Self.source(60, "IAC Bus 1", offline: nil),
+            Self.source(70, "IAC Bus 2", offline: true)
+        ]
+        let result = Self.reconcile(records, connected: [10, 40, 50, 70])
+        #expect(result.matched.map(\.ref) == [30, 20])
+        #expect(result.toConnect.map(\.ref) == [30, 20])
+        #expect(result.toDisconnect == [10, 40, 50, 70])
+        #expect(result.ambiguous.isEmpty && result.identityUnavailable.isEmpty)
+        let either = Self.reconcile(records, names: ["IAC", "xl 2"], connected: [10, 20, 70])
+        #expect(either.matched.map(\.ref) == [20, 60])
+        #expect(either.toConnect.map(\.ref) == [60])
+        #expect(either.toDisconnect == [10, 70])
+        #expect(Self.reconcile(records, names: []).matched.isEmpty)
     }
 
     @Test func theOrderIsStableAndDoesNotFollowTheRef() {

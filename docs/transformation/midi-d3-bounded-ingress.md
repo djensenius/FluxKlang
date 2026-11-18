@@ -92,6 +92,36 @@ There is no retired-session list. Platform retention may keep arbitrarily many o
 release may deallocate on a callback/platform thread: neither global memory bounds nor off-callback destruction
 is qualified. Atomic machine progress, scheduler timing and realtime certification also remain unqualified.
 
+## Observed offline input retirement (#781)
+
+An endpoint with `isOffline == true` is ineligible, even when its name matches. Unavailable (`nil`) and
+explicitly online (`false`) availability retain the existing name eligibility, including DAW/HUI exclusions.
+Filtering happens before identity-unavailable and ambiguity reporting: an offline duplicate cannot make an
+eligible peer ambiguous. Availability is not part of the fingerprint. This is an intentional input policy
+change, not a disconnect requirement imposed by the SDK's temporary/inherited offline property.
+
+An observed offline enumeration uses the existing bindings detach path. A later eligible enumeration on
+the same ref retains identity but receives a fresh connection token. Resolved retirement removes its registry
+source and byte parser/UMP decoder pair; old-token batches cannot reach the replacement. Eligibility changes
+among duplicate identities retain the existing rekey behavior, including fresh tokens for surviving peers.
+The controller consumes the resulting bindings report; no eligible sources means waiting, not connected.
+Unresolved shared-source keep/reset policy is unchanged.
+
+The source fixtures cover same-ref online/offline/online reconciliation and bindings into the real byte/UMP
+stream, retired snapshot membership, restored resolved routing, stale-token rejection, partial-state retirement,
+gap-free peer preservation and recording-input controller reports. Existing shared keep/reset fixtures remain.
+Preservation is not unconditional: even an unknown-token batch with `afterGap` still resets all sources before
+token rejection. Reconciliation must actually observe offline; coalesced notifications can reveal only online.
+
+#781 worker validation: 69 focused adapter tests, then 197 tests in four suites in clean Debug and
+Release. All eight mirror-only mutants compiled and assertion-failed with normal exits; canonical copies
+were restored/compared. Strict lint passed all five changed Swift files. Fresh canonical cumulative
+suite-exit receipts reported all 14 factory/API counters zero; they do not prove per-case coverage.
+Independent runtime and re-review of the small test compilation correction remain pending.
+No new native, hardware, device-port, timing, lifetime, RT or legacy/UMP equivalence qualification is claimed.
+The accepted #780 caveats below remain. Closed #80/#362 are not reopened; #81/#83 remain open.
+#83's actual-consumer MIDI2 translation gate and M83a native activation are separate deferred work.
+
 ## Evidence boundary
 
 See `fault-latch-platform-callbacks.md` for the absence of an Apple self-serialization guarantee. SDK

@@ -66,7 +66,9 @@ extension CoreMIDIAdapterTests {
         }
         let replug = Self.reconcile([after], connected: [4])
         #expect(replug.toDisconnect == [4])
-        #expect(replug.toConnect.map(\.fingerprint) == [before.fingerprint])
+        #expect(replug.matched.isEmpty && replug.toConnect.isEmpty)
+        let online = Self.source(912, "Launch Control XL (Studio)", uniqueID: 77, offline: false)
+        #expect(Self.reconcile([online]).toConnect.map(\.fingerprint) == [before.fingerprint])
     }
 
     @Test func anAbsentFieldDiffersFromAnEmptyOneAndNoValueShiftsIntoItsNeighbour() {
@@ -105,6 +107,65 @@ extension CoreMIDIAdapterTests {
         #expect(result.identityUnavailable == [21, 22])
         #expect(result.ambiguous.isEmpty)
         #expect(result.toConnect.map(\.ref) == [21, 22, 23])
+    }
+
+    @Test func offlineRecordsAreExcludedBeforeIdentityReporting() {
+        let first = Self.source(11, "Launch Control XL", uniqueID: 500)
+        let duplicate = Self.source(12, "Launch Control XL 2", uniqueID: 500, offline: true)
+        let unavailable = Self.anonymous(21, "Launch Control XL", offline: true)
+        let unknownAvailability = Self.anonymous(22, "Launch Control XL", offline: nil)
+        #expect(unavailable.uniqueID == nil)
+        #expect(first.fingerprint == duplicate.fingerprint)
+        for records in [[first, duplicate, unavailable, unknownAvailability],
+                        [unavailable, duplicate, first, unknownAvailability]] {
+            let result = Self.reconcile(records, connected: [12, 21])
+            #expect(result.matched.map(\.ref) == [11, 22])
+            #expect(result.toConnect.map(\.ref) == [11, 22])
+            #expect(result.toDisconnect == [12, 21])
+            #expect(result.ambiguous.isEmpty)
+            #expect(result.identityUnavailable == [22])
+        }
+    }
+
+    @Test func duplicateAvailabilityRekeysSurvivorsWithFreshTokens() throws {
+        let first = Self.source(11, "Launch Control XL", uniqueID: 500)
+        let second = Self.source(12, "Launch Control XL 2", uniqueID: 500)
+        let firstOffline = Self.source(11, "Launch Control XL", uniqueID: 500, offline: true)
+        let secondOffline = Self.source(12, "Launch Control XL 2", uniqueID: 500, offline: true)
+        let key = MIDIEndpointKey(fingerprint: first.fingerprint)
+        let unique = Self.bind([first, secondOffline])
+        #expect(unique.bindings.sources.map(\.endpoint) == [key])
+        let original = try Self.token(of: 11, in: unique)
+
+        let ambiguous = Self.bind([first, second], after: unique.bindings)
+        #expect(ambiguous.detaches == unique.bindings.bindings)
+        #expect(ambiguous.registrations.map(\.ref) == [11, 12])
+        #expect(ambiguous.bindings.sources.map(\.endpoint) == [nil, nil])
+        let firstShared = try Self.token(of: 11, in: ambiguous)
+        let secondShared = try Self.token(of: 12, in: ambiguous)
+        #expect(firstShared != original)
+        #expect(secondShared != original && secondShared != firstShared)
+
+        let survivor = Self.bind([firstOffline, second], after: ambiguous.bindings)
+        #expect(survivor.detaches.map(\.source.token) == [firstShared, secondShared])
+        #expect(survivor.registrations.map(\.ref) == [12])
+        #expect(survivor.bindings.sources.map(\.endpoint) == [key])
+        let secondResolved = try Self.token(of: 12, in: survivor)
+        #expect(![original, firstShared, secondShared].contains(secondResolved))
+
+        let returned = Self.bind([first, second], after: survivor.bindings)
+        #expect(returned.detaches == survivor.bindings.bindings)
+        #expect(returned.registrations.map(\.ref) == [11, 12])
+        #expect(returned.bindings.sources.map(\.endpoint) == [nil, nil])
+        let returnedTokens = returned.bindings.sources.map(\.token)
+        #expect(Set(returnedTokens).count == 2)
+        #expect(Set(returnedTokens).isDisjoint(with: [original, firstShared, secondShared, secondResolved]))
+        let restored = Self.bind([first, secondOffline], after: returned.bindings)
+        #expect(Set(restored.detaches.map(\.source.token)) == Set(returnedTokens))
+        #expect(restored.registrations.map(\.ref) == [11])
+        #expect(restored.bindings.sources.map(\.endpoint) == [key])
+        let restoredToken = try Self.token(of: 11, in: restored)
+        #expect(!([original, firstShared, secondShared, secondResolved] + returnedTokens).contains(restoredToken))
     }
 
     @Test func shufflingTheEnumerationChangesNoOutputSet() {

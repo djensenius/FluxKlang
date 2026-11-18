@@ -98,7 +98,7 @@ extension CoreMIDIAdapterTests {
         #expect(stream.droppedBatches == 1)
     }
 
-    /// Mutation (b): registering before detaching meets the old unit's key and refuses the replug as ambiguous.
+    /// Stream-level detach ordering; this pure fixture does not qualify native registration order.
     @Test func aReplugUnderANewRefIsAFreshSourceNotAnAmbiguity() throws {
         let before = Self.source(10, "Launch Control XL", uniqueID: 77)
         let after = Self.source(30, "Launch Control XL", uniqueID: 77)
@@ -242,6 +242,97 @@ extension CoreMIDIAdapterTests {
 
 /// The controller's resets across several sources.
 extension CoreMIDIAdapterTests {
+    @Test func observedOfflineRetiresResolvedBytesWithoutResettingItsPeer() throws {
+        let first = Self.source(10, "Launch Control XL A")
+        let offline = Self.source(10, "Launch Control XL A", offline: true)
+        let second = Self.source(20, "Launch Control XL B")
+        let firstKey = MIDIEndpointKey(fingerprint: first.fingerprint)
+        let secondKey = MIDIEndpointKey(fingerprint: second.fingerprint)
+        #expect(offline.fingerprint == first.fingerprint)
+        let online = Self.bind([first, second])
+        let old = try Self.token(of: 10, in: online)
+        let peer = try Self.token(of: 20, in: online)
+        var stream = try LaunchControlXLStream.make()
+        stream.connect(online.bindings.sources)
+        #expect(stream.feed(packets: [[0xBF, 5]], from: old).isEmpty)
+        #expect(stream.feed(packets: [[0xBF, 6]], from: peer).isEmpty)
+
+        let retired = Self.bind([offline, second], after: online.bindings)
+        #expect(retired.detaches.map(\.source.token) == [old])
+        #expect(retired.registrations.isEmpty)
+        #expect(retired.bindings.sources.map(\.token) == [peer])
+        let retiredSharedChanged = stream.connect(retired.bindings.sources)
+        #expect(!retiredSharedChanged)
+        #expect(stream.snapshot.sources.map(\.key) == [Self.legacyKey, secondKey])
+        let repeated = Self.bind([offline, second], after: retired.bindings)
+        #expect(repeated.detaches.isEmpty && repeated.registrations.isEmpty)
+        #expect(repeated.bindings == retired.bindings)
+        let repeatedSharedChanged = stream.connect(repeated.bindings.sources)
+        #expect(!repeatedSharedChanged)
+
+        let returned = Self.bind([first, second], after: repeated.bindings)
+        let fresh = try Self.token(of: 10, in: returned)
+        #expect(returned.detaches.isEmpty)
+        #expect(returned.registrations.map(\.ref) == [10])
+        #expect(fresh != old && fresh != peer)
+        #expect(try Self.token(of: 20, in: returned) == peer)
+        let returnedSharedChanged = stream.connect(returned.bindings.sources)
+        #expect(!returnedSharedChanged)
+        #expect(stream.sources == returned.bindings.sources)
+        #expect(Set(stream.snapshot.sources.map(\.key)) == [Self.legacyKey, firstKey, secondKey])
+        #expect(stream.feed(packets: [[0xBF, 5, 127]], from: old).isEmpty)
+        #expect(stream.droppedBatches == 1)
+        #expect(stream.feed(packets: [[127]], from: fresh).isEmpty)
+        let retained = stream.feed(packets: [[64]], from: peer)
+        #expect(retained.map(\.event) == [Self.cc(6, 64)])
+        #expect(stream.feed(packets: [[0xBF, 5]], from: fresh).isEmpty)
+        #expect(stream.feed(packets: [[127]]).isEmpty, "resolved A must not fall back to the shared parser")
+        let completed = stream.feed(packets: [[127]], from: fresh)
+        #expect(completed.map(\.event) == [Self.cc(5, 127)])
+        #expect(completed.first?.input != retained.first?.input)
+        #expect(completed.first?.input != LaunchControlXLStream.input)
+    }
+
+    @MainActor
+    @Test func bindingReportsDriveOfflineWaitingAndEligibleReturn() async throws {
+        let fixture = try LaunchControlXLFixture(mode: .control)
+        defer { fixture.cleanUp() }
+        let input = RecordingLaunchControlXLInput()
+        let (controller, dispatched) = Self.controller(fixture, input: input)
+        await controller.load()
+        let record = Self.source(10, "Launch Control XL A")
+        let offline = Self.source(10, "Launch Control XL A", offline: true)
+        let online = Self.bind([record])
+        let old = try Self.token(of: 10, in: online)
+        input.reportConnected(online.bindings.sources)
+        #expect(controller.status == .connected([record.displayName]))
+        #expect(controller.unresolvedSourceNames.isEmpty)
+        input.send(packets: [[0xBF, 5]], from: old)
+
+        let retired = Self.bind([offline], after: online.bindings)
+        #expect(retired.bindings.sources.isEmpty)
+        input.reportConnected(retired.bindings.sources)
+        #expect(controller.status == .waiting)
+        #expect(controller.unresolvedSourceNames.isEmpty)
+        let repeated = Self.bind([offline], after: retired.bindings)
+        input.reportConnected(repeated.bindings.sources)
+        #expect(controller.status == .waiting)
+        let returned = Self.bind([record], after: repeated.bindings)
+        let fresh = try Self.token(of: 10, in: returned)
+        #expect(fresh != old)
+        input.reportConnected(returned.bindings.sources)
+        #expect(controller.status == .connected([record.displayName]))
+        #expect(controller.unresolvedSourceNames.isEmpty)
+        input.send(packets: [[0xBF, 5, 127]], from: old)
+        input.send(packets: [[127]], from: fresh)
+        await controller.dispatchPendingActions()
+        #expect(dispatched().isEmpty)
+        input.send(packets: [[0xBF, 5, 127]], from: fresh)
+        await controller.dispatchPendingActions()
+        #expect(dispatched() == [.fader(slot: 0, value: 1)])
+        await controller.setMode(.disabled)
+    }
+
     @MainActor
     static func controller(
         _ fixture: LaunchControlXLFixture, input: RecordingLaunchControlXLInput,
