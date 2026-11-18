@@ -166,6 +166,20 @@ budget must fail closed (section 5), never recycle.
 - `issued`, `isObservation`: one identity comparison; no locks, no allocation.
 - Minting (`mintChain`, `mintChains`), `pending`, `observe` and `acknowledge`
   take a `Mutex` and stay on control. Minting also allocates.
+- Allocation is machine-checked on the host for the paths it drives (#64,
+  K-64e): `FaultRaiseAllocationBounds`, in
+  `RealtimeHandoffTests+RetireChains.swift`, counts heap allocations on the
+  calling thread through libmalloc's `malloc_logger` hook, after one warm-up
+  run on separate objects, for `take`, `raise` (first publication, a counted
+  raise, an unprepared scope), a take while the token is held, `put`,
+  `raiseContended` and `isLatched`, and for the S1 SysEx abort and overflow
+  raises, the S3 retire backlog raise and contended retire, and the S4 critical
+  refusal raise and contended refusal. The kernel mirror's Release run
+  (`scripts/kernel-mirror/README.md`) requires these tests to pass, which in
+  an optimized build means zero. This does not cover `mmap`, other threads,
+  the one-time runtime work the warm-up absorbs, or paths the tests do not
+  drive. It is reference-model evidence, not RT certification, and #64
+  remains open.
 - Not checked here: `@_noAllocation`/`@_noLocks` on these paths, ARC
   retain/release on the class references at `-Onone`, and target lowering of
   the atomics. As for `FaultLatch` (Progress), they stay unqualified for #64.
