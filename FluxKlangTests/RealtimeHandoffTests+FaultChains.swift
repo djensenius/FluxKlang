@@ -358,18 +358,19 @@ extension RealtimeHandoffTests {
     /// (T3), and that production code builds no `FaultChainAuthority` (T4). Keys are `relpath Type.func kind` over
     /// K-190a's sanitized source (comments and string literals blanked): a regex tripwire, not a parser.
     struct FaultLatchConstruction {
-        /// T1: a spelled-out construction, the metatype, an inferred `.init(scopes:` (the latch's label), or a call
-        /// of a lower-case static member (a factory such as `FaultLatch.spare(`).
+        /// T1: a spelled-out construction or an unapplied `FaultLatch.init`, the metatype, an inferred `.init(scopes:`
+        /// (the latch's label), or a call of a lower-case static member (a factory such as `FaultLatch.spare(`).
         static let constructions: [LatchPattern] = [
-            ("latch", #"\bFaultLatch\s*(?:\.\s*init\s*)?\("#),
+            ("latch", #"\bFaultLatch\s*(?:\.\s*init\b|\()"#),
             ("metatype", #"\bFaultLatch\s*\.\s*(?:self|Type)\b"#),
             ("inferred", #"(?<![\w.])\.\s*init\s*\(\s*scopes\s*:"#),
             ("factory", #"\bFaultLatch\s*\.\s*(?!init\b|self\b|Type\b)[a-z_]\w*\s*\("#)
         ]
-        /// T1, only inside a type or extension named `FaultLatch`: `Self(`, a bare `.init(` and `self.init(`.
+        /// T1, only inside a type or extension named `FaultLatch`: `Self(`, and `Self.init`, a bare `.init` and
+        /// `self.init`, called or not.
         static let selfConstructions: [LatchPattern] = [
-            ("self", #"(?<![\w.])Self\s*(?:\.\s*init\s*)?\("#), ("init", #"(?<![\w.])\.\s*init\s*\("#),
-            ("selfInit", #"(?<![\w.])self\s*\.\s*init\s*\("#)
+            ("self", #"(?<![\w.])Self\s*(?:\.\s*init\b|\()"#), ("init", #"(?<![\w.])\.\s*init\b"#),
+            ("selfInit", #"(?<![\w.])self\s*\.\s*init\b"#)
         ]
         static let builders = ["Memory/FaultLatch+Chains.swift FaultChainAuthority.init latch": 1]
 
@@ -408,7 +409,7 @@ extension RealtimeHandoffTests {
         static let mints: [LatchPattern] = [
             ("mintChain", #"\bmintChain\s*\("#), ("mintChains", #"\bmintChains\s*\("#),
             ("makeLanes", #"\bmakeLanes\s*\("#), ("claimChain", #"\(\s*minting\s*:"#),
-            ("ringChain", #"\bReservedRingChain\s*(?:\.\s*init\s*)?\("#)
+            ("ringChain", #"\bReservedRingChain\s*(?:\.\s*init\b|\()"#)
         ]
         static let mintSites: [String: Int] = Dictionary(uniqueKeysWithValues: [
             "Events/SysExAssembler.swift SysExAssembler.init mintChain",
@@ -422,10 +423,11 @@ extension RealtimeHandoffTests {
             "Memory/ReservedCapacityRing.swift ReservedCapacityRing.init ringChain"
         ].map { ($0, 1) })
 
-        /// T4 (#190 item 5): `FaultChainAuthority` constructions, spelled out or inferred, under `Shared` (kernel
-        /// included) and the app trees. None yet: each real-caller slice adds its own key here on purpose.
+        /// T4 (#190 item 5): `FaultChainAuthority` constructions, spelled out (an unapplied `.init` too) or inferred,
+        /// under `Shared` (kernel included) and the app trees. None yet: each real-caller slice adds its own key here
+        /// on purpose.
         static let authorities: [LatchPattern] = [
-            ("authority", #"\bFaultChainAuthority\s*(?:\.\s*init\s*)?\("#),
+            ("authority", #"\bFaultChainAuthority\s*(?:\.\s*init\b|\()"#),
             ("inferred", #"(?<![\w.])\.\s*init\s*\(\s*scopes\s*:"#)
         ]
         static let productionAuthorities: [String: Int] = [:]

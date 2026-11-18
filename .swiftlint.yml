@@ -39,8 +39,8 @@ custom_rules:
     severity: error
   fault_latch_construction:
     name: FaultLatch construction
-    # `FaultLatch(` or `FaultLatch.init(` (K-190c, #190). Only `FaultChainAuthority.init` builds a latch.
-    regex: '\bFaultLatch(?=\s*(?:\.\s*init\s*)?\()'
+    # `FaultLatch(` or `FaultLatch.init`, called or not (K-190c, #190). Only `FaultChainAuthority.init` builds a latch.
+    regex: '\bFaultLatch(?=\s*(?:\.\s*init\b|\())'
     match_kinds:
       - identifier
     excluded:

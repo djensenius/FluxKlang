@@ -531,12 +531,13 @@ self-tests are in `+SysExChains.swift` because of the 500-line limit). It reuses
 K-190a's sanitizer, declaration regex and body finder, and keys each match
 `relpath Type.func kind` as above:
 
-- T1, `faultLatchIsBuiltOnlyByTheAuthorityInit()`: `FaultLatch(`,
-  `FaultLatch.init(`, `FaultLatch.self` or `.Type`, a call of a lower-case
-  static member (a factory such as `FaultLatch.spare(`), and an inferred
-  `.init(scopes:` anywhere in the kernel, plus `Self(`, a bare `.init(` or
-  `self.init(` inside any type or extension named `FaultLatch`. The result must
-  be exactly one construction, in `FaultChainAuthority.init`
+- T1, `faultLatchIsBuiltOnlyByTheAuthorityInit()`: `FaultLatch(` and
+  `FaultLatch.init`, called or unapplied (`let make = FaultLatch.init`),
+  `FaultLatch.self` or `.Type`, a call of a lower-case static member (a factory
+  such as `FaultLatch.spare(`), and an inferred `.init(scopes:` anywhere in the
+  kernel, plus `Self(`, and `Self.init`, a bare `.init` or `self.init`, called
+  or not, inside any type or extension named `FaultLatch`. The result must be
+  exactly one construction, in `FaultChainAuthority.init`
   (`Memory/FaultLatch+Chains.swift:70`). Outside `FaultLatch`, `self.init(` is
   delegation (the authority's convenience `init`), not a latch construction.
 - T2, `faultLatchIsHeldOnlyByItsOwners()`: every `FaultLatch` in a type position
@@ -575,18 +576,19 @@ K-190a's sanitizer, declaration regex and body finder, and keys each match
   - `FanInHandoff.makeLanes`.
 
   Also, `makeLanes(` and `(minting:` must appear only in `FanInHandoff.init`
-  (`Memory/FanInHandoff.swift:301` to `:302`). `ReservedRingChain(` must appear
-  only in the ring's designated `init` (`Memory/ReservedCapacityRing.swift:136`),
-  which wraps an already minted chain and refuses another authority's
-  (`.foreignChain`).
-- T4, `productionBuildsNoFaultChainAuthority()`: `FaultChainAuthority(`,
-  `FaultChainAuthority.init(` and an inferred `.init(scopes:` under `Shared`
-  (kernel included) and the app trees `FluxKlang` and `FluxKlangMac`. The
-  expected set, `productionAuthorities`, is empty. Each real-caller slice adds
-  its own construction there deliberately (#190 item 5). Outside the kernel T4
-  also runs T1's construction patterns and T2's holder pattern and expects no
-  match, so an alias, a factory, the metatype or a backticked `FaultLatch` there
-  fails it, not only the spelled-out forms the lint rule sees. From the
+  (`Memory/FanInHandoff.swift:301` to `:302`). `ReservedRingChain(` and
+  `ReservedRingChain.init`, called or unapplied, must appear only in the ring's
+  designated `init` (`Memory/ReservedCapacityRing.swift:136`), which wraps an
+  already minted chain and refuses another authority's (`.foreignChain`).
+- T4, `productionBuildsNoFaultChainAuthority()`: `FaultChainAuthority(` and
+  `FaultChainAuthority.init`, called or unapplied, and an inferred
+  `.init(scopes:` under `Shared` (kernel included) and the app trees
+  `FluxKlang` and `FluxKlangMac`. The expected set, `productionAuthorities`, is
+  empty. Each real-caller slice adds its own construction there deliberately
+  (#190 item 5). Outside the kernel T4 also runs T1's construction patterns and
+  T2's holder pattern and expects no match, so an alias, a factory, the metatype
+  or a backticked `FaultLatch` there fails it, not only the spelled-out forms
+  the lint rule sees. From the
   repository (its root has `project.yml`) the scanned trees must be exactly
   `Shared`, `FluxKlang` and `FluxKlangMac`, so a moved or missing app tree fails
   rather than going unscanned. The kernel mirror has only the mirrored `Shared`
@@ -596,22 +598,30 @@ Self-tests (`latchScanFlagsConstructionsAndAuthorities`,
 `latchScanFlagsEveryWayToHoldALatch`, `latchScanFlagsMintsOutsideTheirSites`,
 `latchScanIgnoresCommentsStringsAndLookalikes`) trip T1 to T4 on synthetic red
 sources, including `self.init(` in an `extension FaultLatch`, a factory call,
-and `latch` escaping the authority through `self.latch.raise`, a capture and a
-key path. They keep comments, strings, interpolations, `func` declarations and
-lookalike names (`FaultLatchNote`, `MyFaultLatch`, `remakeLanes`,
+an unapplied `FaultLatch.init`, `ReservedRingChain.init` (both also split over
+lines) and `FaultChainAuthority.init`, unapplied `Self.init`, `self.init` and
+`.init` in an `extension FaultLatch`, and `latch` escaping the authority through
+`self.latch.raise`, a capture and a key path. They keep comments, strings,
+interpolations, `func` declarations and lookalike names (`FaultLatchNote`,
+`MyFaultLatch`, `FaultLatchInit`, `FaultLatch.initialState`,
+`FaultChainAuthority.initialBudget`, `Self.initialCount`,
+`ReservedRingChain.initialCapacity`, `ReservedRingChainInit`, `remakeLanes`,
 `mintChainCount`, `unlatch`, `latchRef`) green. The Debug kernel-mirror job
 requires T1 to T4 to pass.
 
 The repo-wide tripwire is the SwiftLint custom rule `fault_latch_construction`.
-It rejects spelled-out `FaultLatch(` and `FaultLatch.init(`, also split over
-lines, in identifier tokens (so not in comments or strings) in every Swift file
-except `Memory/FaultLatch+Chains.swift`; root `FluxKlangTests/` disables it.
+It rejects spelled-out `FaultLatch(` and `FaultLatch.init`, called or unapplied
+(`let make = FaultLatch.init`), also split over lines, in identifier tokens (so
+not in comments or strings) in every Swift file except
+`Memory/FaultLatch+Chains.swift`; root `FluxKlangTests/` disables it.
 `scripts/test-seam-policy/check.py` asserts that the real file is clean at its
 own path and fires the rule once when copied elsewhere. Its fixtures fire the
-rule on the plain, `.init` and split-line forms, also at the lookalike path
+rule on the plain, `.init(` and split-line forms and on an unapplied
+`FaultLatch.init` (one line and split), also at the lookalike path
 `Memory/XFaultLatch+Chains.swift`; keep it quiet on a comment, a string,
-`MyFaultLatch(`, `FaultLatchNote(` and `FaultLatch.PreparationError`; and
-check the root-tests exemption.
+`MyFaultLatch(`, `FaultLatchNote(`, `FaultLatchInit(`,
+`FaultLatch.PreparationError` and `FaultLatch.initialState`; and check the
+root-tests exemption.
 
 Result, per latch lifetime and for the reference model only: every latch that
 production code can construct belongs to one authority. Every raise on it,
@@ -628,17 +638,26 @@ The scans are type-blind and cannot see:
 - a construction or mint inside a string interpolation, which the sanitizer
   blanks with the string (as for K-190a's raises);
 - an unapplied method reference passed on and called later: `faults.mintChain`
-  or `faults.mintChains` (T3 needs the `(`), or a latch's `raise` where the latch
-  is not named `latch`, such as `owner.raise` in `FaultObservation` (no type
-  name, no `latch` token, no call). Inside `FaultChainAuthority`, T2's `latch`
-  set does catch an unapplied `latch.raise` or a captured `latch`;
+  or `faults.mintChains` (T3 needs the `(`), or a latch's `raise` where the
+  latch is not named `latch`, such as `owner.raise` in
+  `FaultObservation` (no type name, no `latch` token, no call). Inside
+  `FaultChainAuthority`, T2's `latch` set does catch an unapplied `latch.raise`
+  or a captured `latch`. An unapplied `FaultLatch.init` or
+  `FaultChainAuthority.init`, and `Self.init`, `self.init` or a bare `.init`
+  inside `FaultLatch`, are caught as constructions (T1, T4), and an unapplied
+  `ReservedRingChain.init` as a ring-chain build (T3);
+- an unlabelled inferred `.init` reference outside `FaultLatch`, such as
+  `make(.init)`, unless it is `.init(scopes:` (the `inferred` pattern) or its
+  context names `FaultLatch` (T2's holder pattern catches
+  `let make: ([FaultScope]) throws -> FaultLatch = .init`);
 - backtick-quoted member names (`` FaultLatch.`init`( ``, `` `Self`( ``,
   `` faults.`mintChain`( ``); a backticked `FaultLatch` or `latch` is caught;
 - macro expansions;
 - in the kernel mirror only, the excluded
   `Processors/OfflineAudioRoutingProcessor.swift` and the app trees. T1 to T4
   cover them when the tests run from the repository; the SwiftLint rule, run on
-  the repository, covers only spelled-out `FaultLatch(` and `FaultLatch.init(`.
+  the repository, covers only spelled-out `FaultLatch(` and `FaultLatch.init`
+  (called or unapplied).
 
 The reverse holds too: the type-blind `inferred` pattern flags any inferred
 `.init(scopes:` in the kernel (T1) or the production trees (T4), even of an

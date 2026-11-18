@@ -304,6 +304,9 @@ extension RealtimeHandoffTests.FaultLatchConstruction {
                     let spare: FaultLatch = try .init(scopes: scopes)
                     let kind = FaultLatch.self
                     let made = try FaultLatch.fresh(scopes)
+                    let makeLatch = FaultLatch.init
+                    let makeSplit = FaultLatch
+                        .init
                 }
             }
             extension FaultLatch {
@@ -311,21 +314,26 @@ extension RealtimeHandoffTests.FaultLatchConstruction {
                 static func copy(_ scopes: [FaultScope]) throws -> FaultLatch { try .init(scopes: scopes) }
                 static func twin(_ scopes: [FaultScope]) throws -> Self { try Self.init(scopes: scopes) }
                 static func fresh(_ scopes: [FaultScope]) throws -> Self { try self.init(scopes: scopes) }
+                static func makers() -> [([FaultScope]) throws -> Self] { [Self.init, self.init, .init] }
+                static func initial() -> Int { Self.initialCount + self.initialOffset + .initialValue }
             }
             """#
-        // The split `FaultLatch\n.init(scopes:` counts as both a spelled-out and an inferred construction.
+        // The split `FaultLatch\n.init(scopes:` counts as both a spelled-out and an inferred construction; an
+        // unapplied `FaultLatch.init`, `Self.init`, `self.init` or `.init` counts as a construction too.
         #expect(try Self.sites(of: Self.constructions, in: source, path: "L.swift") == [
-            "L.swift Lane.init latch": 2, "L.swift Lane.init inferred": 2, "L.swift Lane.init metatype": 1,
+            "L.swift Lane.init latch": 4, "L.swift Lane.init inferred": 2, "L.swift Lane.init metatype": 1,
             "L.swift Lane.init factory": 1, "L.swift FaultLatch.copy inferred": 1
         ])
         #expect(try Self.sites(of: Self.selfConstructions, in: source, path: "L.swift", within: "FaultLatch") == [
             "L.swift FaultLatch.spare self": 1, "L.swift FaultLatch.copy init": 1, "L.swift FaultLatch.twin self": 1,
-            "L.swift FaultLatch.fresh selfInit": 1
+            "L.swift FaultLatch.fresh selfInit": 1, "L.swift FaultLatch.makers self": 1,
+            "L.swift FaultLatch.makers selfInit": 1, "L.swift FaultLatch.makers init": 1
         ])
         let audit = "let authority = try FaultChainAuthority\n    .init(scopes: scopes, chainBudget: 2)\n"
             + "func make() throws -> FaultChainAuthority { try .init(scopes: scopes) }\n"
+            + "let makeAuthority = FaultChainAuthority.init\n"
         #expect(try Self.sites(of: Self.authorities, in: audit, path: "A.swift") == [
-            "A.swift <none>.<none> authority": 1, "A.swift <none>.<none> inferred": 1, "A.swift <none>.make inferred": 1
+            "A.swift <none>.<none> authority": 2, "A.swift <none>.<none> inferred": 1, "A.swift <none>.make inferred": 1
         ])
     }
 
@@ -376,13 +384,16 @@ extension RealtimeHandoffTests.FaultLatchConstruction {
                     _ = faults
                         .mintChains (count: 2)
                     let ring = ReservedRingChain(authority: faults, chain: chain)
+                    let makeChain = ReservedRingChain.init
+                    let makeSplit = ReservedRingChain
+                        .init
                 }
             }
             """#
         #expect(try Self.sites(of: Self.mints, in: source, path: "F.swift") == [
             "F.swift FanInHandoff.claimProducer mintChain": 1, "F.swift FanInHandoff.buildLanes makeLanes": 1,
             "F.swift FanInHandoff.releaseProducer claimChain": 1, "F.swift FanInHandoff.releaseProducer mintChains": 1,
-            "F.swift FanInHandoff.releaseProducer ringChain": 1
+            "F.swift FanInHandoff.releaseProducer ringChain": 3
         ])
     }
 
@@ -407,6 +418,8 @@ extension RealtimeHandoffTests.FaultLatchConstruction {
                 func unlatch() -> Bool { isLatched(latches: latchRef) }
             }
             struct FaultLatchNote { let note = MyFaultLatch(); let other = FaultLatchy() }
+            let state = (FaultLatch.initialState, FaultLatchInit(), FaultChainAuthority.initialBudget)
+            let ring = (ReservedRingChain.initialCapacity, ReservedRingChainInit())
             func remakeLanes() { faultLatch(); premintChain(); mintChainCount(); ReservedRingChainNote() }
             extension FaultLatchNote { func make() -> Self { Self() } static func spare() -> Self { .init() } }
             """#

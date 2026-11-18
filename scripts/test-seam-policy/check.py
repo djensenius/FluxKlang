@@ -6,7 +6,7 @@ not call the plain `FaultLatch.raise(scope, kind, frame:)`; authority raises
 (`raise(&token, ...)`) and `raiseContended()` stay allowed. A third rule,
 `fault_latch_authority_raise`, allows authority raises only in the four
 lane-owner files listed in its `excluded:` entries. A fourth, `fault_latch_construction`,
-allows `FaultLatch(` only in `FaultLatch+Chains.swift` (K-190c).
+allows `FaultLatch(` and `FaultLatch.init` only in `FaultLatch+Chains.swift` (K-190c).
 
 The seams remain compiled in app modules. This type-blind, non-adversarial policy
 does not defend against lint suppressions or configuration edits. Its declaration
@@ -454,12 +454,14 @@ class Check:
         print("PASS fault-seam-policy self-check: authority-raise allowlist, positives, negatives")
 
     def check_construction(self):
-        # Fourth rule (fault_latch_construction): spelled-out `FaultLatch(` and `FaultLatch.init(`, also split
-        # over lines; the real FaultLatch+Chains.swift is checked in check_raw_raise.
+        # Fourth rule (fault_latch_construction): spelled-out `FaultLatch(` and `FaultLatch.init`, called or
+        # unapplied, also split over lines; the real FaultLatch+Chains.swift is checked in check_raw_raise.
         positives = (
             "    _ = try? FaultLatch(scopes: [])",
             "    _ = try? FaultLatch.init(scopes: [])",
             "    _ = try? FaultLatch\n        .init(scopes: [])",
+            "    _ = FaultLatch.init",
+            "    _ = FaultLatch\n        .init",
         )
         body = ["func constructionPositives() {"]
         sites = []
@@ -481,7 +483,8 @@ class Check:
         self.lint("construction-root-tests-exempt", [], ("FluxKlangTests/ConstructionPositives.swift",))
         negatives = ["func constructionNegatives() {", "    // FaultLatch(scopes: [])",
                      '    _ = "FaultLatch(scopes: [])"', "    _ = MyFaultLatch()", "    _ = FaultLatchNote()",
-                     "    _ = FaultLatch.PreparationError.self", "}"]
+                     "    _ = FaultLatch.PreparationError.self", "    _ = FaultLatch.initialState",
+                     "    _ = FaultLatchInit()", "}"]
         write(self.root / "Shared/ConstructionNegatives.swift", "\n".join(negatives) + "\n")
         self.lint("construction-negatives", [], ("Shared/ConstructionNegatives.swift",))
         print("PASS fault-seam-policy self-check: construction positives, negatives, exemption, lookalike path")

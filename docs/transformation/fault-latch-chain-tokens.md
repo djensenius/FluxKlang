@@ -279,12 +279,13 @@ mint left, or its chain's token was lost) has no counted path and must fall back
   (no leading dot); a comment before the `&` (`raise(/* x */ &token`, or a
   `// c` line before `&token`) is a false positive that fails closed, and the
   fix is to put the `&` first. A third rule, `fault_latch_construction`
-  (K-190c), rejects spelled-out `FaultLatch(` and `FaultLatch.init(`, also
-  split over lines, outside `FaultLatch+Chains.swift`. So a latch not built by
-  an authority needs a visible `.swiftlint.yml` edit or suppression; root
-  `FluxKlangTests/` disables it. The self-check asserts the real file is clean
-  only at its own path, and lints fixture positives, negatives and a lookalike
-  path. The rule misses an alias, a factory, the metatype and backticks.
+  (K-190c), rejects spelled-out `FaultLatch(` and `FaultLatch.init`, called or
+  unapplied, also split over lines, outside `FaultLatch+Chains.swift`. So a
+  latch not built by an authority needs a visible `.swiftlint.yml` edit or
+  suppression; root `FluxKlangTests/` disables it. The self-check asserts the
+  real file is clean only at its own path, and lints fixture positives,
+  negatives and a lookalike path. The rule misses an alias, a factory, the
+  metatype and backticks.
   K-190c's source tests (section 8) pin the construction, the latch's
   non-escape and the mint sites in the kernel, and keep the other production
   trees free of latch constructions and holders.
@@ -394,9 +395,10 @@ K-190b adds the guard tests for section 3's successive lane holders:
 K-190c adds `FaultLatchConstruction` (`RealtimeHandoffTests+FaultChains.swift`;
 its scan and self-tests are in `RealtimeHandoffTests+SysExChains.swift`). These
 are source scans over K-190a's sanitizer, not behaviour tests:
-- T1 `faultLatchIsBuiltOnlyByTheAuthorityInit`: counting spelled-out, inferred,
-  metatype and factory forms anywhere in the kernel, and `Self(`, `.init(` or
-  `self.init(` inside `FaultLatch`, the only latch construction is in
+- T1 `faultLatchIsBuiltOnlyByTheAuthorityInit`: counting spelled-out (an
+  unapplied `FaultLatch.init` included), inferred, metatype and factory forms
+  anywhere in the kernel, and `Self(`, `Self.init`, `.init` or `self.init`
+  (called or not) inside `FaultLatch`, the only latch construction is in
   `FaultChainAuthority.init`.
 - T2 `faultLatchIsHeldOnlyByItsOwners`: the only `FaultLatch`-typed declarations
   are the private latch, `FaultObservation`'s owner and identity check, and the
@@ -405,8 +407,9 @@ are source scans over K-190a's sanitizer, not behaviour tests:
 - T3 `chainsAreMintedOnlyAtTheKeyedSites`: chains are minted only at the keyed
   sites, with `makeLanes` and the claim chain only in `FanInHandoff.init`. This
   pins K-190b's premise in source as well as in behaviour.
-- T4 `productionBuildsNoFaultChainAuthority`: production builds no authority yet,
-  and outside the kernel no T1 construction or T2 holder appears at all.
+- T4 `productionBuildsNoFaultChainAuthority`: production builds no authority yet
+  (an unapplied `FaultChainAuthority.init` counts as a build), and outside the
+  kernel no T1 construction or T2 holder appears at all.
 
 Four self-tests cover red and green synthetic sources. The Debug kernel-mirror
 job requires T1 to T4 to pass. Details and blind spots are in

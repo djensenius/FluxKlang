@@ -251,8 +251,8 @@ editing that list. It is equally type-blind (it cannot prove the authority is
 the lane's own; FLP7c checks that at preparation), a suppression comment or
 config edit defeats it, and whitespace or a newline between `.` and `raise` is
 missed. A fourth ERROR rule, `fault_latch_construction`, rejects spelled-out
-`FaultLatch(` and `FaultLatch.init(` (also split over lines) outside
-`Shared/Audio/Kernel/Memory/FaultLatch+Chains.swift`, where
+`FaultLatch(` and `FaultLatch.init`, called or unapplied (also split over lines),
+outside `Shared/Audio/Kernel/Memory/FaultLatch+Chains.swift`, where
 `FaultChainAuthority.init` builds the only latch; root `FluxKlangTests/` is
 exempt. An alias, a factory or the metatype evades it;
 `RealtimeHandoffTests.FaultLatchConstruction`'s source scans cover those
