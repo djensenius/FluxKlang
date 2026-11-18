@@ -7,73 +7,6 @@ import Testing
 
 private typealias Root = RealtimeHandoffTests
 
-/// One `emit` call: the event and the frame it was dispatched at.
-struct CycleEmission: Equatable {
-    let event: KernelEvent
-    let frame: Int64
-}
-
-/// A `KernelCycle` over a fan-in, its latch and two ownership/safety scopes. Shared with
-/// `RealtimeHandoffTests+KernelCycleStress.swift`.
-struct CycleRig {
-    static let criticalScope = FaultScope(handoff: 64, target: 5)
-    static let slotsScope = FaultScope(handoff: 64, target: 6)
-    /// A neighbouring scope on the same latch, as a SysEx assembler would use.
-    static let sysexScope = FaultScope(handoff: 65, target: 0)
-
-    let faults: FaultChainAuthority
-    let claims: FaultChainAuthority
-    let events: FanInHandoff<KernelEvent>
-    let ownership: NoteOwnership
-    let safety: SafetyFlags
-    let ramps: RampSlots
-    let cycle: KernelCycle
-
-    init(lanes: Int = 2, laneCapacity: Int = 20, blockCapacity: Int = 64, pulsesPerBlock: Int = 4,
-         staleTolerance: Int64 = 48, perLaneQuota: Int = 64, telemetry: KernelCycleTelemetryOutput? = nil) throws {
-        faults = try FaultChainAuthority.testing(scopes: [Self.criticalScope, Self.slotsScope, Self.sysexScope])
-        claims = try FaultChainAuthority(scopes: [Self.slotsScope], chainBudget: 1)
-        events = try FanInHandoff(policy: Self.policy(lanes: lanes, laneCapacity: laneCapacity),
-                                  laneCapacity: laneCapacity, reserved: 16, faults: faults, claimFaults: claims,
-                                  criticalScope: Self.criticalScope, producerSlotsScope: Self.slotsScope)
-        ownership = try NoteOwnership(scopes: 2)
-        safety = try SafetyFlags(scopes: 2)
-        ramps = try RampSlots(parameterCount: 4)
-        let parts = KernelCycleParts(events: events, faults: faults, ownership: ownership, safety: safety,
-                                     ramps: ramps, telemetry: telemetry, start: .freshFanIn)
-        cycle = try KernelCycle(parts, pulses: ClockPulseGate(maximumPulsesPerBlock: pulsesPerBlock,
-                                                              staleTolerance: staleTolerance),
-                                blockCapacity: blockCapacity, perLaneQuota: perLaneQuota)
-    }
-
-    /// A MIDI-receive fan-in to render with a 480-frame tolerance and a 96,000-frame lookahead.
-    static func policy(lanes: Int = 2, laneCapacity: Int = 20, consumer: ExecutionContext = .render) -> HandoffPolicy {
-        Root.policy(producer: .midiReceive,
-                    producers: ProducerCardinality(maximum: lanes,
-                                                   evidence: lanes == 1 ? .verified : .assumedConservative),
-                    consumer: consumer, capacity: laneCapacity &* lanes, ordering: .fifoPerProducer,
-                    overflow: .reservedCritical(reserved: 16 &* lanes))
-    }
-
-    func push(_ event: KernelEvent, _ token: ProducerToken) -> KernelStatus {
-        events.tryPush(event, class: event.eventClass, frame: event.frame, token: token)
-    }
-
-    /// Runs one cycle and returns its result with everything it emitted.
-    func run(_ blockStart: Int64, _ frames: Int64) -> (KernelCycleResult, [CycleEmission]) {
-        var emitted: [CycleEmission] = []
-        let result = cycle.run(blockStart: blockStart, frames: frames) {
-            emitted.append(CycleEmission(event: $0, frame: $1))
-        }
-        return (result, emitted)
-    }
-}
-
-/// An event at `frame` with `payload`.
-func cycleEvent(_ frame: Int64, _ payload: KernelEventPayload, scope: UInt32 = 0, sequence: UInt64 = 0) -> KernelEvent {
-    KernelEvent(frame: frame, scope: scope, sequence: sequence, payload: payload)
-}
-
 private func noteOn(_ note: UInt8) -> KernelEventPayload { .noteOn(channel: 0, note: note, velocity: 100) }
 private func noteOff(_ note: UInt8) -> KernelEventPayload { .noteOff(channel: 0, note: note) }
 private func control(_ value: UInt32) -> KernelEventPayload { .control(channel: 0, controller: 7, value: value) }
@@ -390,22 +323,6 @@ extension RealtimeHandoffTests {
     }
 
     struct CycleRecovery {
-        /// Review finding 1. Kills: ordering only the newly drained run, leaving late events behind a kept future
-        /// `noteOn` (nothing is decided, and the late `noteOn` would later sound after its `noteOff`).
-        @Test func lateDrainMergesAheadOfKeptFutureEvents() throws {
-            let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(1_000, noteOn(70)), token) == .ok)
-            #expect(rig.run(0, 64).0.pending == 1)
-            #expect(rig.push(cycleEvent(10, noteOn(60)), token) == .ok)
-            #expect(rig.push(cycleEvent(5, noteOff(61)), token) == .ok)
-            let (result, emitted) = rig.run(64, 64)
-            #expect(emitted == [CycleEmission(event: cycleEvent(5, noteOff(61)), frame: 64),
-                                CycleEmission(event: cycleEvent(10, noteOn(60)), frame: 64)])
-            #expect(result.drained == 2 && result.dispatched == 2 && result.pending == 1)
-            #expect(rig.run(1_000, 64).1 == [CycleEmission(event: cycleEvent(1_000, noteOn(70)), frame: 1_000)])
-        }
-
         /// Review finding 2. Kills: a silenced cycle that leaves a queued `noteOn` in the lane, so it sounds after
         /// acknowledgement although its `noteOff` was refused (stuck note).
         @Test func noteQueuedBeforeLostReleaseNeverSoundsAfterAcknowledgement() throws {
@@ -479,19 +396,6 @@ extension RealtimeHandoffTests {
             let (later, sounded) = rig.run(1_000, 64)
             #expect(later.status == .ok && sounded.map(\.event.payload) == [control(9)])
             #expect(rig.ownership.ownedCount(scope: 0) == 0 && rig.ownership.ownedCount(scope: 1) == 0)
-        }
-
-        /// Review finding 6, pinned: the E2 key orders a same-frame `noteOff` (release lane) before its `noteOn`
-        /// (content lane); round 4b's tie rule treats the `noteOn` as a retrigger, so a zero-length note sounds and
-        /// stays owned. Producers must not send zero-length notes.
-        @Test func zeroLengthNoteFromOneProducerIsReleaseFirst() throws {
-            let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(100, noteOn(60), sequence: 0), token) == .ok)
-            #expect(rig.push(cycleEvent(100, noteOff(60), sequence: 1), token) == .ok)
-            let (result, emitted) = rig.run(64, 64)
-            #expect(emitted.map(\.event.sequence) == [1, 0] && result.discardedSuperseded == 0)
-            #expect(rig.ownership.isOwned(scope: 0, channel: 0, note: 60))
         }
     }
 }

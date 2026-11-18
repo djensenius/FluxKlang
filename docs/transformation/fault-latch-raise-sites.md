@@ -78,7 +78,7 @@ each through `faultsRef._withUnsafeGuaranteedRef`, and one doc-comment mention a
 | # | Call | Component |
 |---|---|---|
 | S1 | `Shared/Audio/Kernel/Events/SysExAssembler.swift:339` | `SysExAssembler.raise`, reached from `discard` and `extend`. Since FLP4 it raises through a `FaultChainAuthority` chain token, not `FaultLatch.raise` (section 3.1) |
-| S2 | `Shared/Audio/Kernel/Memory/FanInHandoff.swift:372` | `FanInHandoff.claimProducer`. Since FLP6 it raises through a chain token of its own claim `FaultChainAuthority`, not `FaultLatch.raise` (section 3.2) |
+| S2 | `Shared/Audio/Kernel/Memory/FanInHandoff.swift:332` | `FanInHandoff.claimProducer`. Since FLP6 it raises through a chain token of its own claim `FaultChainAuthority`, not `FaultLatch.raise` (section 3.2) |
 | S3 | `Shared/Audio/Kernel/Memory/DeferredRelease.swift:122` | `DeferredReleaseQueue.retire`. Since FLP5 it raises through a `FaultChainAuthority` chain token, not `FaultLatch.raise` (section 3.3) |
 | S4 | `Shared/Audio/Kernel/Memory/ReservedCapacityRing+Chains.swift:48` (`ReservedRingChain.refuse`, from `ReservedCapacityRing.swift:252`) | `ReservedCapacityRing.refuse`. Since FLP7b it raises through a chain token of its lane's own chain, minted from the handoff's `faults` `FaultChainAuthority`, not `FaultLatch.raise` (section 3.4) |
 
@@ -150,12 +150,12 @@ faults no longer share a latch with the kernel cycle. Still **UNPROVEN**: a real
 
 **Since FLP6** (#190; model in [fault-latch-chain-tokens.md](fault-latch-chain-tokens.md)
 section 7). The citations above are against this document's baseline; after FLP6
-`claimProducer` (`FanInHandoff.swift:372`) counts the refusal (`:385`) and calls
-`FanInClaimChain.refuse` (`:386`, `FanInHandoff+Chains.swift:37`), which holds the
-only raise (`FanInHandoff+Chains.swift:47`). `FanInHandoff.init` (`:315`) now takes a
+`claimProducer` (`FanInHandoff.swift:332`) counts the refusal (`:345`) and calls
+`FanInClaimChain.refuse` (`:346`, `FanInHandoff+Chains.swift:37`), which holds the
+only raise (`FanInHandoff+Chains.swift:47`). `FanInHandoff.init` (`:275`) now takes a
 separate `claimFaults: FaultChainAuthority` for `producerSlotsScope` and mints one
 chain from it after every other check that can throw, before the identity is
-reserved (`:335`; a refusal is `.chainBudgetExhausted`). The lanes keep raising
+reserved (`:299`; a refusal is `.chainBudgetExhausted`). The lanes keep raising
 `.criticalExhausted` on `faults` (S4). The claim authority is separate because its
 contended fault is sticky and latches every scope, so on `faults` it would also
 latch `criticalScope`. Only a refused claim takes the token: it raises once and puts
@@ -226,26 +226,26 @@ and generation) and whether its scope is prepared.
 
 ## 4. Bounded counters under the same contract, not `raise` calls
 
-`FanInRefusalCounter` (`FanInHandoff.swift:133`) has a documented caller contract
-of the same shape (`:123` to `:131`): at most K < 2^39 logical chains over the
+`FanInRefusalCounter` (`FanInRefusalCounter.swift:24`) has a documented caller contract
+of the same shape (`:14` to `:22`): at most K < 2^39 logical chains over the
 counter's lifetime, non-reentrant, each completed `bump` before the chain's next,
-migration only through happens-before. Its `bump` (`:148`) is not a `raise`.
+migration only through happens-before. Its `bump` (`:39`) is not a `raise`.
 `FaultLatch` does not report it, and the doc comment says so: "The invalid-token
 paths raise no `FaultLatch` fault, so the latch neither limits nor reports them;
 a failed claim does raise `.producerSlotsExhausted`, but the count's bound does
-not rely on it" (`FanInHandoff.swift:204` to `:206`).
+not rely on it" (`FanInHandoff.swift:165` to `:168`).
 
 `FanInHandoff` owns two:
 
 | Counter | Bumped at | Triggered by |
 |---|---|---|
-| `refusedClaims` (`:284`) | `:363` | `claimProducer` finding no lane. The same path then raises S2, so one chain is the same sequence of calls, but the counter's bound is its own argument. Since FLP6 that raise goes through the handoff's one claim chain (section 3.2), which bounds the raises, not this counter's callers |
-| `refusedNotOwner` (`:283`) | `:382`, `:397` | `releaseProducer` and `tryPush` refusals for a token that does not own its lane. No fault is raised on these paths (`:369` to `:371`, `:392`). Any thread holding any token, stale or foreign, can reach them (`:196`) |
+| `refusedClaims` (`:265`) | `:345` | `claimProducer` finding no lane. The same path then raises S2, so one chain is the same sequence of calls, but the counter's bound is its own argument. Since FLP6 that raise goes through the handoff's one claim chain (section 3.2), which bounds the raises, not this counter's callers |
+| `refusedNotOwner` (`:264`) | `:363`, `:378` | `releaseProducer` and `tryPush` refusals for a token that does not own its lane. No fault is raised on these paths (`:350` to `:352`, `:373`). Any thread holding any token, stale or foreign, can reach them (`:164` to `:165`) |
 
 Both are **UNPROVEN** for the same reasons as section 3: the chain bound for real
-callers is open (`:132` says #190 must prove it before any hot use). The only
+callers is open (`FanInRefusalCounter.swift:23` says #190 must prove it before any hot use). The only
 test evidence found is a reduced-width model and its negative control
-(`FluxKlangTests/RealtimeHandoffTests+FanInIdentity.swift:444`, `:461`). Those
+(`FluxKlangTests/RealtimeHandoffTests+RefusalCaller.swift:96`, `:113`, `:125`). Those
 exercise the algorithm over narrow counters with a chosen number of chains. They
 do not show that any real caller's chains are bounded.
 
@@ -285,7 +285,7 @@ sequencing edge between a completed raise and that chain's next admission.
 |---|---|---|
 | Kernel-cycle recovery | The cycle reads the latch (`isLatched`) and acknowledges (`acknowledge`); it observes and acknowledges, and its comments say it adds no raise site | `KernelCycle.swift:350` (`isLatched`), `:391` (`acknowledge` inside `acknowledgeCritical`), `:198` ("the cycle adds no `FaultLatch.raise` site"); `KernelAckRequests.swift:53` to `:57` (control observes, then requests; render reads `isLatched`) |
 | Stale-clock reporting | Reported in `KernelCycleResult.resync` and telemetry, not on the latch. `FaultKind.staleClock` exists, but is not raised | `KernelCycle.swift:197` to `:198`; `KernelCycleTelemetry.swift:8` to `:10` |
-| Invalid-token paths in `FanInHandoff` | Refused with `.refused(.notOwner)` and counted; "no fault is raised" | `FanInHandoff.swift:392`, `:413`, `:204` to `:206` |
+| Invalid-token paths in `FanInHandoff` | Refused with `.refused(.notOwner)` and counted; "no fault is raised" | `FanInHandoff.swift:352`, `:373`, `:165` to `:168` |
 | Invalid or unknown scope | `raise` itself returns `.refused(.slotOutOfRange)` and counts in `unknownScopeFaults`; this is a result of S1 to S4, not a separate caller | `FaultLatch.swift:235` to `:240` |
 | `PreparedPlanSlot` and `RetiringExchange` | They reach `raise` only through `DeferredReleaseQueue.retire` (S3) | `PreparedPlanSlot.swift:84` to `:90`; `RetiringExchange.swift:75` to `:76`, `:188`, and the `beginCycle` doc at `:141` to `:150` (post-FLP5 lines) |
 

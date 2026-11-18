@@ -10,6 +10,54 @@ import Testing
 private typealias Root = RealtimeHandoffTests
 private typealias FanIn = FanInHandoff<UInt64>
 
+/// Shared by `+FanInOut`, `+Starvation` and `+FanInStress`.
+extension RealtimeHandoffTests {
+    /// Lane critical exhaustion (`criticalExhausted`).
+    static let fanInCriticalScope = FaultScope(handoff: 5, target: 1)
+    /// Claim exhaustion (`producerSlotsExhausted`).
+    static let fanInSlotsScope = FaultScope(handoff: 5, target: 3)
+    /// Prepared but never raised by a fan-in.
+    static let fanInNeighbourScope = FaultScope(handoff: 5, target: 2)
+
+    /// One element delivered by `FanInHandoff.drain`, tagged with its lane.
+    struct FanInDelivery: Hashable {
+        let lane: UInt8
+        let value: UInt64
+    }
+
+    /// A valid MIDI-receive fan-in policy for `lanes` producers: the whole handoff holds `lanes × laneCapacity`
+    /// slots, `lanes × reserved` of them critical.
+    static func fanInPolicy(lanes: Int = 4, laneCapacity: Int = 20, reserved: Int = 16,
+                            ordering: HandoffOrdering = .fifoPerProducer) -> HandoffPolicy {
+        policy(producer: .midiReceive,
+               producers: ProducerCardinality(maximum: lanes, evidence: lanes == 1 ? .verified : .assumedConservative),
+               capacity: laneCapacity &* lanes, ordering: ordering,
+               overflow: .reservedCritical(reserved: reserved &* lanes))
+    }
+
+    static func fanInLatch() throws -> FaultChainAuthority {
+        try FaultChainAuthority.testing(scopes: [fanInCriticalScope, fanInSlotsScope, fanInNeighbourScope])
+    }
+
+    static func makeFanIn(_ faults: FaultChainAuthority, claims: FaultChainAuthority? = nil, lanes: Int = 4,
+                          laneCapacity: Int = 20, reserved: Int = 16) throws -> FanInHandoff<UInt64> {
+        try FanInHandoff<UInt64>(policy: fanInPolicy(lanes: lanes, laneCapacity: laneCapacity, reserved: reserved),
+                                 laneCapacity: laneCapacity, reserved: reserved, faults: faults,
+                                 claimFaults: claims ?? fanInClaims(), criticalScope: fanInCriticalScope,
+                                 producerSlotsScope: fanInSlotsScope)
+    }
+
+    /// One drain's deliveries, in delivery order.
+    static func drained(_ handoff: FanInHandoff<UInt64>, quota: Int, total: Int) -> [FanInDelivery] {
+        var deliveries: [FanInDelivery] = []
+        let count = handoff.drain(perLaneQuota: quota, total: total) {
+            deliveries.append(FanInDelivery(lane: $0, value: $1))
+        }
+        #expect(count == deliveries.count)
+        return deliveries
+    }
+}
+
 /// Shared state for the concurrent refused-claim stress (#190 FLP6).
 private final class ClaimChainStressState: Sendable {
     let arrived = Atomic<Int>(0)

@@ -233,14 +233,14 @@ extension RealtimeHandoffTests {
         /// pending slot, carrying another again) allocate exactly as much as the same replacement with an empty
         /// carry, and, in an optimized build, nothing. (Unoptimized builds allocate in the existing `run` path
         /// whatever the carry.) A positive control must count first. Disabled under Thread Sanitizer, whose
-        /// allocator bypasses the hook, and skipped (returns without failing) when another tool already holds the
-        /// hook. Kills: an `Array` or class allocation on the re-admission path.
+        /// allocator bypasses the hook, or when the hook is occupied initially. After enabled entry, missing
+        /// measurement counts fail the test. Kills: an `Array` or class allocation on the re-admission path.
         @Test(.enabled(if: !threadSanitized, "Thread Sanitizer's allocator bypasses malloc_logger"),
               .enabled(if: mallocLoggerIsFree(), "malloc_logger is already in use"))
         func readmissionRenderPathAllocatesNothing() throws {
-            guard let positive = allocations({
+            let positive = try #require(allocations({
                 UnsafeMutableRawPointer.allocate(byteCount: 64, alignment: 16).deallocate()
-            }) else { return }
+            }))
             #expect(positive >= 1)
             _ = try renderScenario(carried: true, probed: false)
             let baseline = try renderScenario(carried: false, probed: true)
@@ -248,36 +248,10 @@ extension RealtimeHandoffTests {
             #expect(baseline.emitted == 2 && probed.emitted == 6)
             let report = probed.report
             #expect(report.delivered == 4 && report.supersededByReplacement == 1 && report.recarried == 1)
-            guard let base = baseline.allocations, let counted = probed.allocations else { return }
+            let base = try #require(baseline.allocations)
+            let counted = try #require(probed.allocations)
             #expect(counted == base)
             #expect(counted == 0 || !optimizedBuild)
-        }
-
-        /// Acceptance (b), lock half (a source scan, not a proof): the render-side bodies contain no lock, queue,
-        /// planner, `events` or array-mutating token.
-        @Test(.enabled(if: Self.sourcesAreReachable, "the kernel sources are not next to the tests"))
-        func readmissionRenderSourcesHaveNoLockOrArrayToken() throws {
-            let directory = try #require(Self.eventsDirectory())
-            let bodies: [(String, String)] = [
-                ("KernelBlockDecider.swift", "private func readmit("),
-                ("KernelCarryReadmission.swift", "var next: KernelEvent?"),
-                ("KernelCarryReadmission.swift", "func consumeNext("),
-                ("KernelCarryReadmission.swift", "func supersede("),
-                ("KernelCarryReadmission.swift", "func retire(coveredBy"),
-                ("KernelCarryReadmission.swift", "func discard("),
-                ("KernelCarryReadmission.swift", "func leavePending("),
-                ("KernelCarryReadmission.swift", "func covered("),
-                ("KernelCarryReadmission.swift", "func statefulKinds("),
-                ("KernelCarryReadmission.swift", "private func resolve(")
-            ]
-            let banned = ["Mutex", "withLock", "_lock", "NSLock", "pthread_", "Dispatch", "plan(", ".events",
-                          "Array", "[KernelEvent]"]
-            for (file, declaration) in bodies {
-                let text = try String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8)
-                let body = try #require(KernelRetirementCarryTests.functionBody(declaration, in: text))
-                #expect(KernelRetirementCarryTests.arrayMutations(in: body).isEmpty, "\(declaration)")
-                #expect(banned.filter { body.contains($0) }.isEmpty, "\(declaration)")
-            }
         }
 
         /// Retires a cycle with four carried events and two far-future ones (none unless `carried`), lets the
@@ -313,16 +287,6 @@ extension RealtimeHandoffTests {
             let counted = probed ? allocations(work) : { work(); return nil }()
             return ProbeOutcome(allocations: counted, emitted: emitted, report: next.carryReadmissionReport)
         }
-
-        private static func eventsDirectory(from path: String = #filePath) -> URL? {
-            let here = URL(fileURLWithPath: path).deletingLastPathComponent()
-            let candidates = ["../Shared/Audio/Kernel/Events", "../../Sources/FluxKlang/Shared/Audio/Kernel/Events"]
-            return candidates
-                .map { here.appendingPathComponent($0).standardizedFileURL }
-                .first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("KernelCycle.swift").path) }
-        }
-
-        private static let sourcesAreReachable = eventsDirectory() != nil
     }
 
     /// Issue #364 acceptance (c): re-admission across a real thread hand-over, for Thread Sanitizer.

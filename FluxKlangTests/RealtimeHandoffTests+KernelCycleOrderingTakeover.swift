@@ -452,49 +452,5 @@ extension RealtimeHandoffTests {
             #expect(!live.retired && live.status == .silenced(.safetyMute) && live.drained == 1)
             #expect(liveEmitted == [takeoverRelease(TakeoverKey(0, 0, 9), at: 64)] && live.discardedWhileSilenced == 1)
         }
-
-        /// Copilot round 4 (4487174356): a `.freshFanIn` preparation reads the never-claimed claim word, then another
-        /// cycle claims, sounds note 9 (set directly: the racer never runs) and retires before it claims. Its claim
-        /// from that stale state is `.alreadyUsed` and changes nothing. A `.replacingCycle` claim from the retired
-        /// snapshot (taken while the word was free) is `.predecessorNotRetired` once `next` holds the word. `racer`
-        /// and `next` share `rig.events` while `rig.cycle` lives. A replacement takes note 9 over; a stale release
-        /// of a handed-back claim releases nothing, and its non-empty loss never replaces the one the holder left
-        /// (round 2j). Kills: the claim compare-exchanging from a re-read word (check-then-claim); a stale release
-        /// releasing any claim; the loss stored without the `== claim.held` guard.
-        @Test func freshClaimRacingAClaimRunRetireIsRefused() throws {
-            let rig = try CycleRig()
-            let ownership = try NoteOwnership(scopes: 2)
-            let stale = ownership.cycleClaimState()
-            #expect(NoteOwnership.cycleClaimRefusal(stale, fresh: true) == nil)
-            let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: ownership,
-                                         safety: rig.safety, ramps: rig.ramps,
-                                         admissionRefusals: rig.cycle.admissionRefusals)
-            let gate = try ClockPulseGate(maximumPulsesPerBlock: 4, staleTolerance: 48)
-            let racer = try KernelCycle(parts, pulses: gate, blockCapacity: 64, perLaneQuota: 64)
-            #expect(ownership.noteOn(scope: 0, channel: 0, note: 9) == .ok)
-            racer.retire()
-            let retired = ownership.cycleClaimState()
-            #expect(throws: NoteOwnership.CycleClaimRefusal.alreadyUsed) {
-                try ownership.claimForCycle(fresh: true, from: stale)
-            }
-            let next = try KernelCycle(parts, pulses: gate, blockCapacity: 64, perLaneQuota: 64)
-            #expect(throws: NoteOwnership.CycleClaimRefusal.predecessorNotRetired) {
-                try ownership.claimForCycle(fresh: false, from: retired)
-            }
-            #expect(takeoverRun(next, 0).1 == [takeoverRelease(TakeoverKey(0, 0, 9), at: 0)])
-            let direct = try NoteOwnership(scopes: 1)
-            let stray = KernelRetirementLoss(noteOns: 0, controls: 0, programs: 1, ramps: 0, clockPulses: 0)
-            let left = KernelRetirementLoss(noteOns: 0, controls: 0, programs: 0, ramps: 0, clockPulses: 1)
-            let held = try direct.claimForCycle(fresh: true, from: direct.cycleClaimState())
-            direct.releaseCycleClaim(held, loss: KernelRetirementLoss())
-            let holder = try direct.claimForCycle(fresh: false, from: direct.cycleClaimState())
-            direct.releaseCycleClaim(held, loss: stray)
-            #expect(throws: NoteOwnership.CycleClaimRefusal.predecessorNotRetired) {
-                try direct.claimForCycle(fresh: false, from: direct.cycleClaimState())
-            }
-            direct.releaseCycleClaim(holder, loss: left)
-            direct.releaseCycleClaim(held, loss: stray)
-            #expect(try direct.claimForCycle(fresh: false, from: direct.cycleClaimState()).inherited == left)
-        }
     }
 }
