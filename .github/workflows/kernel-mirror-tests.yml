@@ -93,7 +93,11 @@ jobs:
             'readmissionRenderSourcesHaveNoLockOrArrayToken()' \
             'retirementCarryHandoffRetireSourceHasNoArrayOrLockToken()' \
             'carryRecordSourceContainsNoArrayMutation()' \
-            'faultRaiseInventoryMatchesTheDocumentedSites()')
+            'faultRaiseInventoryMatchesTheDocumentedSites()' \
+            'faultLatchIsBuiltOnlyByTheAuthorityInit()' \
+            'faultLatchIsHeldOnlyByItsOwners()' \
+            'chainsAreMintedOnlyAtTheKeyedSites()' \
+            'productionBuildsNoFaultChainAuthority()')
           echo "| Debug | $n | source scans ran |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Release, allocation probe

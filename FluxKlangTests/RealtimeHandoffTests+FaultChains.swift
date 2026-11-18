@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 #if canImport(FluxKlangMac)
 @testable import FluxKlangMac
@@ -6,6 +7,9 @@ import Testing
 #endif
 
 private typealias Root = RealtimeHandoffTests
+private typealias LatchScan = RealtimeHandoffTests.FaultRaiseInventory
+/// A `FaultLatchConstruction` scan pattern: the key's kind and its regular expression.
+typealias LatchPattern = (kind: String, regex: String)
 
 /// Thrown by `FaultChaining.take` when a slot it needs is empty.
 private struct FaultChainEmptySlot: Error {}
@@ -345,6 +349,142 @@ extension RealtimeHandoffTests {
             #expect(owner.isLatched(Self.scope) && twin.isLatched(Self.scope))
             #expect(owner.acknowledge(mine) == mine.record)
             #expect(!owner.isLatched(Self.scope) && twin.isLatched(Self.scope))
+        }
+    }
+}
+
+extension RealtimeHandoffTests {
+    /// K-190c (#190): where the kernel builds a `FaultLatch` (T1), where one is held (T2), where chains are minted
+    /// (T3), and that production code builds no `FaultChainAuthority` (T4). Keys are `relpath Type.func kind` over
+    /// K-190a's sanitized source (comments and string literals blanked): a regex tripwire, not a parser.
+    struct FaultLatchConstruction {
+        /// T1: a spelled-out construction or an unapplied `FaultLatch.init`, the metatype, a `typealias` of the type
+        /// itself (not a nested type), an inferred `.init(scopes:` (the latch's label), or a call of a lower-case
+        /// static member (a factory such as `FaultLatch.spare(`).
+        static let constructions: [LatchPattern] = [
+            ("latch", #"\bFaultLatch\s*(?:\.\s*init\b|\()"#),
+            ("metatype", #"\bFaultLatch\s*\.\s*(?:self|Type)\b"#),
+            ("alias", #"\btypealias\s+\w+[^=]*=\s*(?:\w+\s*\.\s*)*FaultLatch\b(?!\s*\.)"#),
+            ("inferred", #"(?<![\w.])\.\s*init\s*\(\s*scopes\s*:"#),
+            ("factory", #"\bFaultLatch\s*\.\s*(?!init\b|self\b|Type\b)[a-z_]\w*\s*\("#)
+        ]
+        /// T1, only inside a type or extension named `FaultLatch`: `Self(`, and `Self.init`, a bare `.init` and
+        /// `self.init`, called or not.
+        static let selfConstructions: [LatchPattern] = [
+            ("self", #"(?<![\w.])Self\s*(?:\.\s*init\b|\()"#), ("init", #"(?<![\w.])\.\s*init\b"#),
+            ("selfInit", #"(?<![\w.])self\s*\.\s*init\b"#)
+        ]
+        static let builders = ["Memory/FaultLatch+Chains.swift FaultChainAuthority.init latch": 1]
+
+        /// T2: `FaultLatch` in any type position (stored, local, parameter, return, optional, collection, generic
+        /// argument such as `Unmanaged<FaultLatch>`, tuple, closure, cast, alias), keyed with its line.
+        static let holders: [LatchPattern] = [("type", #"\bFaultLatch\b(?!\s*[.(])"#)]
+        /// The class, the authority's private latch, `FaultObservation`'s owner (it can outlive the authority but
+        /// cannot raise) and its borrowed identity check, and the two `fault_latch_test_seams` owners.
+        static let owners: [String: Int] = Dictionary(uniqueKeysWithValues: [
+            "Memory/FaultLatch+Chains.swift FaultChainAuthority.<none> type: private let latch: FaultLatch",
+            "Memory/FaultLatch.swift <none>.<none> type: final class FaultLatch",
+            "Memory/FaultLatch.swift FaultObservation.<none> type: fileprivate let owner: FaultLatch",
+            "Memory/FaultLatch.swift FaultObservation.<none> type: func isObservation(of latch: FaultLatch",
+            "Memory/FaultLatch.swift AdmittedRaiseForTesting.<none> type: fileprivate let owner: FaultLatch",
+            "Memory/FaultLatch.swift UnpublishedRaiseForTesting.<none> type: fileprivate let owner: FaultLatch"
+        ].map { ($0, 1) })
+        /// T2, only inside `FaultChainAuthority`: every `latch` token (bare, `self.`, `.`, key path or backticked), so
+        /// an escape that never names the type (`{ latch.raise }`, a capture) adds or raises a count.
+        static let latchUses: [LatchPattern] = [("use", #"\blatch\b"#)]
+        /// The `PreparationError.latch` case, the declaration and `unknownScopeFaults`, the build and its
+        /// `.latch(error)` rethrow, and the one use in each forwarding member.
+        static let authorityLatchUses: [String: Int] = [
+            "Memory/FaultLatch+Chains.swift PreparationError.<none> use": 1,
+            "Memory/FaultLatch+Chains.swift FaultChainAuthority.<none> use": 2,
+            "Memory/FaultLatch+Chains.swift FaultChainAuthority.init use": 2,
+            "Memory/FaultLatch+Chains.swift FaultChainAuthority.isObservation use": 1,
+            "Memory/FaultLatch+Chains.swift FaultChainAuthority.raise use": 1,
+            "Memory/FaultLatch+Chains.swift FaultChainAuthority.isLatched use": 1,
+            "Memory/FaultLatch+Chains.swift FaultChainAuthority.pending use": 1,
+            "Memory/FaultLatch+Chains.swift FaultChainAuthority.observe use": 1,
+            "Memory/FaultLatch+Chains.swift FaultChainAuthority.acknowledge use": 1
+        ]
+
+        /// T3: each call that mints, once: the five owners' `mintChain`, `mintChains` from `makeLanes` and from the
+        /// authority's own `mintChain`, and the builders that reach them, all in control-side inits. As in T1, a
+        /// `ReservedRingChain` metatype or `typealias` counts.
+        static let mints: [LatchPattern] = [
+            ("mintChain", #"\bmintChain\s*\("#), ("mintChains", #"\bmintChains\s*\("#),
+            ("makeLanes", #"\bmakeLanes\s*\("#), ("claimChain", #"\(\s*minting\s*:"#),
+            ("ringChain", #"\bReservedRingChain\s*(?:\.\s*init\b|\()"#),
+            ("metatype", #"\bReservedRingChain\s*\.\s*(?:self|Type)\b"#),
+            ("alias", #"\btypealias\s+\w+[^=]*=\s*(?:\w+\s*\.\s*)*ReservedRingChain\b(?!\s*\.)"#)
+        ]
+        static let mintSites: [String: Int] = Dictionary(uniqueKeysWithValues: [
+            "Events/SysExAssembler.swift SysExAssembler.init mintChain",
+            "Memory/DeferredRelease.swift DeferredReleaseQueue.init mintChain",
+            "Memory/ReservedCapacityRing+Chains.swift ReservedCapacityRing.init mintChain",
+            "Memory/FanInHandoff+Chains.swift FanInClaimChain.init mintChain",
+            "Memory/FanInHandoff+LaneChains.swift FanInHandoff.makeLanes mintChains",
+            "Memory/FaultLatch+Chains.swift FaultChainAuthority.mintChain mintChains",
+            "Memory/FanInHandoff.swift FanInHandoff.init makeLanes",
+            "Memory/FanInHandoff.swift FanInHandoff.init claimChain",
+            "Memory/ReservedCapacityRing.swift ReservedCapacityRing.init ringChain"
+        ].map { ($0, 1) })
+
+        /// T4 (#190 item 5): `FaultChainAuthority` constructions, spelled out (an unapplied `.init` too) or inferred,
+        /// and its metatype or a `typealias` of it, under `Shared` (kernel included) and the app trees. None yet: each
+        /// real-caller slice adds its own key here on purpose.
+        static let authorities: [LatchPattern] = [
+            ("authority", #"\bFaultChainAuthority\s*(?:\.\s*init\b|\()"#),
+            ("metatype", #"\bFaultChainAuthority\s*\.\s*(?:self|Type)\b"#),
+            ("alias", #"\btypealias\s+\w+[^=]*=\s*(?:\w+\s*\.\s*)*FaultChainAuthority\b(?!\s*\.)"#),
+            ("inferred", #"(?<![\w.])\.\s*init\s*\(\s*scopes\s*:"#)
+        ]
+        static let productionAuthorities: [String: Int] = [:]
+
+        @Test(.enabled(if: LatchScan.kernelIsReachable, "the kernel sources are not next to the tests"))
+        func faultLatchIsBuiltOnlyByTheAuthorityInit() throws {
+            let root = try #require(LatchScan.kernelRoot())
+            let found = try Self.sites(of: Self.constructions, under: root)
+                .merging(try Self.sites(of: Self.selfConstructions, under: root, within: "FaultLatch")) { $0 + $1 }
+            #expect(found == Self.builders, Self.difference(found, Self.builders))
+        }
+
+        @Test(.enabled(if: LatchScan.kernelIsReachable, "the kernel sources are not next to the tests"))
+        func faultLatchIsHeldOnlyByItsOwners() throws {
+            let root = try #require(LatchScan.kernelRoot())
+            let found = try Self.sites(of: Self.holders, under: root)
+            #expect(found == Self.owners, Self.difference(found, Self.owners))
+            let uses = try Self.sites(of: Self.latchUses, under: root, within: "FaultChainAuthority")
+            #expect(uses == Self.authorityLatchUses, Self.difference(uses, Self.authorityLatchUses))
+        }
+
+        @Test(.enabled(if: LatchScan.kernelIsReachable, "the kernel sources are not next to the tests"))
+        func chainsAreMintedOnlyAtTheKeyedSites() throws {
+            let found = try Self.sites(of: Self.mints, under: try #require(LatchScan.kernelRoot()))
+            #expect(found == Self.mintSites, Self.difference(found, Self.mintSites))
+        }
+
+        @Test(.enabled(if: LatchScan.kernelIsReachable, "the kernel sources are not next to the tests"))
+        func productionBuildsNoFaultChainAuthority() throws {
+            // The repository root (it has `project.yml`) holds `Shared` and both app trees; the mirror's
+            // `Sources/FluxKlang` holds only `Shared`.
+            let base = try #require(LatchScan.kernelRoot()).deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent()
+            let all = ["Shared", "FluxKlang", "FluxKlangMac"]
+            let trees = all.filter { FileManager.default.fileExists(atPath: base.appendingPathComponent($0).path) }
+            let fromRepository = FileManager.default.fileExists(atPath: base.appendingPathComponent("project.yml").path)
+            #expect(trees == (fromRepository ? all : ["Shared"]))
+            var found: [String: Int] = [:]
+            var outside: [String: Int] = [:]
+            for tree in trees {
+                let url = base.appendingPathComponent(tree)
+                found.merge(try Self.sites(of: Self.authorities, under: url, prefix: tree + "/",
+                                           naming: ["FaultChainAuthority", "scopes"])) { $0 + $1 }
+                // Outside the kernel, none of T1's constructions or T2's holders at all (aliases included).
+                outside.merge(try Self.sites(of: Self.constructions + Self.holders, under: url, prefix: tree + "/",
+                                             naming: ["FaultLatch", "scopes"])
+                    .filter { !$0.key.hasPrefix("Shared/Audio/Kernel/") }) { $0 + $1 }
+            }
+            #expect(found == Self.productionAuthorities, Self.difference(found, Self.productionAuthorities))
+            #expect(outside.isEmpty, Self.difference(outside, [:]))
         }
     }
 }
