@@ -7,7 +7,6 @@
 //
 
 import Foundation
-import Synchronization
 import Testing
 @testable import FluxKlang
 
@@ -101,12 +100,12 @@ actor GatedApplyMinter: WingDirectGrantMinting {
 /// of an address unstored (sent, never confirmed), `fail` makes its writes throw
 /// inside `consume`, `holdNextWrite` holds the next successful direct write's
 /// return until `release()`, and `replaceSession` reconnects during verification.
-/// Each `start` opens a fresh incoming stream, as a new socket would: a reconnect
-/// cancels the old listener, which ends the stream it was reading.
+/// Like `WingTransport`, `incoming` is one stream for the transport's lifetime:
+/// `start`/`stop` keep it, the controller's single listener spans reconnects (#750),
+/// and only `deinit` finishes it.
 actor EchoingDirectTransport: WingTransporting {
-    private nonisolated let streams = Mutex(AsyncStream<WingIncoming>.makeStream())
-    nonisolated var incoming: AsyncStream<WingIncoming> { streams.withLock { $0.stream } }
-    private var continuation: AsyncStream<WingIncoming>.Continuation { streams.withLock { $0.continuation } }
+    nonisolated let incoming: AsyncStream<WingIncoming>
+    private let continuation: AsyncStream<WingIncoming>.Continuation
     private(set) var sessionID: UUID?
     private(set) var peerHosts: Set<String> = []
     private(set) var directCalls = 0
@@ -120,8 +119,13 @@ actor EchoingDirectTransport: WingTransporting {
     private var holdWaiters: [CheckedContinuation<Void, Never>] = []
     private var replacing: (writes: Int, step: GatedApplyMinter.Step)?
 
+    init() {
+        (incoming, continuation) = AsyncStream.makeStream()
+    }
+
+    deinit { continuation.finish() }
+
     func start(remoteHost: String, localPort: UInt16?, broadcast: Bool) {
-        streams.withLock { $0 = AsyncStream.makeStream() }
         sessionID = UUID()
         peerHosts = [remoteHost]
     }
