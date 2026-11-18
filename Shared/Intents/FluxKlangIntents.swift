@@ -20,7 +20,10 @@ struct EnterDemoModeIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        await AppModel.shared.enterDemoMode()
+        let outcome = await AppModel.shared.enterDemoMode()
+        if let message = outcome.failureMessage {
+            return .result(dialog: IntentDialog(stringLiteral: message))
+        }
         return .result(dialog: "Entered Demo Mode.")
     }
 }
@@ -39,12 +42,11 @@ struct ConnectToWingIntent: AppIntent {
         guard let target = host ?? model.lastHost else {
             return .result(dialog: "No WING host is known yet. Connect once from the app first.")
         }
-        await model.connect(host: target)
-        if model.isConnected { return .result(dialog: "Connected to \(target).") }
-        guard case .failed(let reason) = model.wing.connection else {
-            return .result(dialog: "Couldn't connect to \(target).")
+        let outcome = await model.connect(host: target)
+        if case .success(.connected) = outcome {
+            return .result(dialog: "Connected to \(target).")
         }
-        return .result(dialog: "Couldn't connect to \(target). \(reason)")
+        return .result(dialog: IntentDialog(stringLiteral: outcome.failureMessage ?? "Couldn't connect to \(target)."))
     }
 }
 

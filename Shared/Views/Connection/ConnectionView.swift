@@ -11,7 +11,7 @@ import SwiftUI
 struct ConnectionView: View {
     @Environment(AppModel.self) private var appModel
     @State private var host = ""
-    @State private var isWorking = false
+    private var isWorking: Bool { appModel.wingLifecycle.isBusy }
 
     var body: some View {
         Form {
@@ -49,9 +49,7 @@ struct ConnectionView: View {
             Section("Demo Mode") {
                 Button {
                     Task {
-                        isWorking = true
                         await appModel.enterDemoMode()
-                        isWorking = false
                     }
                 } label: {
                     Label("Enter Demo Mode", systemImage: "play.circle.fill")
@@ -82,18 +80,15 @@ struct ConnectionView: View {
                 connect(to: selected)
             }
 
-            if appModel.isConnected || appModel.wing.connection == .connecting {
+            if appModel.offersDisconnect {
                 Section {
                     Button(role: .destructive) {
                         Task {
-                            isWorking = true
                             await appModel.disconnect()
-                            isWorking = false
                         }
                     } label: {
                         Label("Disconnect", systemImage: "xmark.circle")
                     }
-                    .disabled(isWorking)
                     .accessibilityIdentifier("connection.disconnect")
                 }
             }
@@ -145,8 +140,6 @@ struct ConnectionView: View {
         host = trimmed
         guard !trimmed.isEmpty else { return }
         Task {
-            isWorking = true
-            defer { isWorking = false }
             await appModel.connect(host: trimmed)
         }
     }

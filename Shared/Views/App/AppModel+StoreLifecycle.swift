@@ -25,7 +25,9 @@ extension AppModel {
         #if DEBUG
         let environment = UIStartupObservation.captureEnvironment()
         #endif
-        let construction = ProductionAccessAudit.shared.captureConstruction { AppModel() }
+        let construction = ProductionAccessAudit.shared.captureConstruction {
+            AppModel(wingLifecycle: HostWingLifecycle(owner: HostAuthorityOwner.shared))
+        }
         completedSharedCheckpoint = construction.checkpoint
         #if DEBUG
         completedSharedEnvironment = environment

@@ -23,7 +23,7 @@ enum AcceptanceLaunchConfiguration {
         if isMultiRouteUITesting {
             // This lane never connects the default UDP transport, even if a
             // test forgets -ui-test-demo or also supplies a legacy seed flag.
-            await appModel.enterDemoMode()
+            guard await appModel.enterDemoMode().succeeded else { return }
             do {
                 try await MultiRouteAcceptanceFixture.seed(appModel, arguments: arguments)
             } catch {
@@ -33,6 +33,7 @@ enum AcceptanceLaunchConfiguration {
         }
         #endif
 
+        guard await configureConnection(appModel) else { return }
         if arguments.contains("-ui-test-seed-acceptance") {
             do {
                 try await seedAcceptanceState(appModel)
@@ -49,11 +50,15 @@ enum AcceptanceLaunchConfiguration {
                 preconditionFailure("Unable to seed acceptance state: \(String(reflecting: error))")
             }
         }
+    }
+
+    private static func configureConnection(_ appModel: AppModel) async -> Bool {
         if arguments.contains("-ui-test-demo") {
-            await appModel.enterDemoMode()
+            return await appModel.enterDemoMode().succeeded
         } else if arguments.contains("-ui-test-connection-failure") {
-            await appModel.showAcceptanceConnectionFailure()
+            return await appModel.showAcceptanceConnectionFailure().succeeded
         }
+        return true
     }
 
     private static func seedAcceptanceState(_ appModel: AppModel) async throws {
