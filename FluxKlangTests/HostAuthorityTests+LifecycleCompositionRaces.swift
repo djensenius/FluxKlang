@@ -349,5 +349,21 @@ extension HostAuthorityTests {
             #expect(await held.owner.beginApply(window: Bench.window) == .success(held.session))
             #expect(await held.owner.authority.snapshot().lease?.windows == [Bench.window])
         }
+
+        @Test(.timeLimit(.minutes(1))) func staleOpenHopLeavesLaterFenceClosed() async throws {
+            let held = try await LifecycleHeldTurn()
+            // An open captured generation 1 at submission; detach 2 was submitted next and its fence
+            // reached the owner before the open's hop did. Actor jobs need not run in submission order.
+            await held.owner.fenceApplies(for: Bench.window, generation: 1)
+            await held.owner.fenceApplies(for: Bench.window, generation: 2)
+            await held.owner.windowOpened(Bench.window, generation: 1)
+            // The replacement still holds the turn, so detach 2's own turn has not closed the root again.
+            #expect(held.lifecycle.isBusy)
+            #expect(await held.owner.beginApply(window: Bench.window) == .failure(.windowClosed))
+            await held.owner.windowOpened(Bench.window, generation: 2)
+            #expect(await held.owner.beginApply(window: Bench.window) == .success(held.session))
+            held.release.open()
+            #expect(await held.replacement.value == .success(.connected(held.session)))
+        }
     }
 }

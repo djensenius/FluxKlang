@@ -124,7 +124,7 @@ extension HostAuthorityTests {
             await owner.windowClosed(Owner.windowOne)
             #expect(await owner.beginApply(window: Owner.windowOne) == .failure(.windowClosed))
             #expect(await owner.authority.snapshot().lease?.windows == [])
-            await owner.windowOpened(Owner.windowOne)
+            await owner.windowOpened(Owner.windowOne, generation: 0)
             #expect(await owner.beginApply(window: Owner.windowOne) == .success(session))
             #expect(await owner.authority.snapshot().lease?.windows == [Owner.windowOne])
             // Another window is never closed by windowOne's close or reopened by its open.
@@ -137,7 +137,7 @@ extension HostAuthorityTests {
             let owner = try await Owner.owner()
             let session = UUID()
             await owner.connected(session: session)
-            await owner.fenceApplies(for: Owner.windowOne)
+            await owner.fenceApplies(for: Owner.windowOne, generation: 1)
             #expect(await owner.beginApply(window: Owner.windowOne) == .failure(.windowClosed))
             #expect(await owner.authority.snapshot().lease == nil)
             // Liveness of a never-opened window is not claimed: it is simply not closed.

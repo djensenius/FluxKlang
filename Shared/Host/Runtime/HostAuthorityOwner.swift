@@ -59,6 +59,10 @@ actor HostAuthorityOwner {
     private var applies: [UUID: (window: WindowID, closed: Bool)] = [:]
     /// Window identities closed or fenced and not reopened since (AU7c4); no permission or authority.
     private var closedWindows: Set<WindowID> = []
+    /// Per window, the highest sequencer detach generation fenced; a lower-generation open is stale.
+    /// Generations come from the one `HostWingLifecycle`; no second sequencer may share a `WindowID`.
+    /// Unbounded like `closedWindows` until AU8c's open-window set.
+    private var closureGenerations: [WindowID: UInt64] = [:]
     private var lifecycleBusy = false
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     /// Internal, init-only test seam; production never suspends at these checkpoints.
@@ -192,15 +196,20 @@ actor HostAuthorityOwner {
     }
 
     /// Marks `window`'s in-flight applies closed, so each is refused at its next recheck, and closes
-    /// `window` until `windowOpened`. Takes no lock. A queued detach sends this before its turn.
-    func fenceApplies(for window: WindowID) {
+    /// `window` until a `windowOpened` of at least `generation`. Takes no lock. A queued detach sends
+    /// this before its turn with its submission generation; 0 raises no recorded generation.
+    func fenceApplies(for window: WindowID, generation: UInt64) {
         closedWindows.insert(window)
+        closureGenerations[window] = max(closureGenerations[window, default: 0], generation)
         for (id, apply) in applies where apply.window == window { applies[id]?.closed = true }
     }
 
     /// The root of `window` (re)appeared: later applies may render again. Takes no lock; the sequencer
     /// FIFO orders it after a queued detach. Applies fenced in an earlier lifetime stay refused.
-    func windowOpened(_ window: WindowID) {
+    /// `generation` is the open's view of detach submissions: a stale open, whose hop lands after a
+    /// later detach's fence, leaves `window` closed. Checked and removed in one actor job.
+    func windowOpened(_ window: WindowID, generation: UInt64) {
+        guard generation >= closureGenerations[window, default: 0] else { return }
         closedWindows.remove(window)
     }
 
@@ -208,7 +217,7 @@ actor HostAuthorityOwner {
     /// Before any wait it fences `window`'s in-flight applies, which are then refused; this close
     /// then detaches whatever one holding the lock attached. `window` stays closed until reopened.
     func windowClosed(_ window: WindowID) async {
-        fenceApplies(for: window)
+        fenceApplies(for: window, generation: 0)
         await lockLifecycle()
         defer { unlockLifecycle() }
         _ = await opened.value

@@ -99,7 +99,7 @@ final class HostWingLifecycle {
     private(set) var lastReplacementOutcome: Outcome?
     @ObservationIgnored private var reserved = false
     @ObservationIgnored private var waiting: [Turn] = []
-    /// Per-window count of submitted detaches; an `open` reopens only if none was submitted after it.
+    /// Per-window count of submitted detaches: the generation a detach fences and an `open` reopens.
     @ObservationIgnored private var detachSubmissions: [WindowID: UInt64] = [:]
 
     init(owner: HostAuthorityOwner? = nil) {
@@ -135,7 +135,8 @@ final class HostWingLifecycle {
     func detach(_ window: WindowID) -> Completion {
         let owner = owner
         detachSubmissions[window, default: 0] &+= 1
-        let fence = Task { if let owner { await owner.fenceApplies(for: window) } }
+        let generation = detachSubmissions[window, default: 0]
+        let fence = Task { if let owner { await owner.fenceApplies(for: window, generation: generation) } }
         let turn = reserve()
         return Completion(fence: fence, task: Task {
             await turn.wait()
@@ -146,7 +147,8 @@ final class HostWingLifecycle {
     }
 
     /// Reopens `window` on its own FIFO turn, so a detach queued before it closes it first. A detach
-    /// submitted after it wins: its fence already closed `window`, so this turn then leaves it closed. No fence.
+    /// submitted after it wins: whether its fence lands before or after this turn's owner hop, the owner
+    /// keeps `window` closed against this open's older submission generation. No fence.
     @discardableResult
     func open(_ window: WindowID) -> Completion {
         let owner = owner
@@ -154,7 +156,7 @@ final class HostWingLifecycle {
         let turn = reserve()
         return Completion(fence: Task {}, task: Task {
             await turn.wait()
-            if detachSubmissions[window, default: 0] == submitted { await owner?.windowOpened(window) }
+            await owner?.windowOpened(window, generation: submitted)
             handoff()
         })
     }

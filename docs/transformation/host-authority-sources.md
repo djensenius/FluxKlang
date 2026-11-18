@@ -267,9 +267,9 @@ The user delegated these choices ("make your best assumption"); the coordinator 
 | AU7c1 | Worker; coordinator registers | Shared owner injection, serialized planned replacements, exact session publication and existing root-ID detach (§12) | No StudioView/applyStudio/window-to-Apply wiring; no verified reconnect or activation |
 | AU7c2 | Worker | Owner-only close fence (§12): `windowClosed` fences in-flight applies for its window before waiting; `beginApply` refuses `.windowClosed` | No sequencer, root-lifetime or AppRootView change; no closed-window history |
 | AU7c3 | Worker | Detach-time fence (§12): the owner's lock-free `fenceApplies(for:)`, which `windowClosed` still calls first; `HostWingLifecycle.detach` sends it when submitted, while the detach itself keeps its FIFO turn; `Completion.fenced()` joins it | No queue-order change or early detach; no root lifetime, `windowOpened` or closed-window history; no AppRootView, AppModel or WingController change |
-| AU7c4 | Worker | Closed root (§12): the owner's `closedWindows` set, filled by `fenceApplies`/`windowClosed` and cleared by a lock-free `windowOpened`; `beginApply` and `staleness` refuse a closed root `.windowClosed` (`.noSession` first); `HostWingLifecycle.open(_:)` reopens on its FIFO turn, and a detach's turn awaits its early fence | No production `windowOpened`/`open` caller (AU8c); never-opened windows are not refused; no AppRootView, AppModel or WingController change |
+| AU7c4 | Worker | Closed root (§12): the owner's `closedWindows` set, filled by `fenceApplies`/`windowClosed` and cleared by a lock-free `windowOpened`; `beginApply` and `staleness` refuse a closed root `.windowClosed` (`.noSession` first); `HostWingLifecycle.open(_:)` reopens on its FIFO turn unless the owner has fenced a later detach generation, and a detach's turn awaits its early fence | No production `windowOpened`/`open` caller (AU8c); never-opened windows are not refused; no AppRootView, AppModel or WingController change |
 | AU8d | Worker (follow-up, after AU7c) | Verified-reconnect signal: report from the WING path that a new session is connected and its state re-read, and feed it to the owner's verified-reconnect input | Until it lands, a drop leaves gated writes refused |
-| AU8c | Worker | `applyStudio` calls the gated overload for real sessions; the ungated `applyAndVerify(_:safetySettings:)` stays only for Demo Mode | Needs AU8a, AU8b and AU7c; must wire `open` on root appear in the same slice as any production `beginApply` caller; the planned open-window set bounds `closedWindows` and the sequencer's `detachSubmissions` |
+| AU8c | Worker | `applyStudio` calls the gated overload for real sessions; the ungated `applyAndVerify(_:safetySettings:)` stays only for Demo Mode | Needs AU8a, AU8b and AU7c; must wire `open` on root appear in the same slice as any production `beginApply` caller; the planned open-window set bounds `closedWindows`, the owner's per-window generation map and the sequencer's `detachSubmissions` |
 
 ## 9. AU8a test plan
 
@@ -408,9 +408,16 @@ and the lock-free `windowOpened(w)` removes it. `beginApply(w)` refuses a closed
 recheck refuses it too (`.noSession` first). `windowOpened` does not clear the per-apply fence flags, so an apply fenced
 in an earlier lifetime stays refused. A reused `WindowID` (AppRootView keeps it on reappear) is therefore refused after
 the fence lands until `HostWingLifecycle.open(w)` runs on its own FIFO turn; `open` has a no-op fence, and with an
-owner-nil sequencer it is inert. The sequencer counts detach submissions per window; an `open(w)` reopens on its turn
-only if no `detach(w)` was submitted after it, so a later detach (whose fence already closed `w`) wins even when the
-open's turn comes first, and only an open submitted after that detach reopens `w`. A detach's turn awaits its early
+owner-nil sequencer it is inert. The sequencer counts detach submissions per window. A `detach(w)` passes its count as
+a generation to `fenceApplies(for: w, generation:)`, and the owner records the highest generation fenced for `w`. An
+`open(w)` captures the count at submission and passes it to `windowOpened(_:generation:)`. The owner reopens `w` only
+if no higher generation was fenced, checked and removed in one actor job. So a later detach wins even when its fence
+reaches the owner before the open's hop does (actor jobs need not run in submission order), and only an open
+submitted after that detach reopens `w`. Generations come from the one `HostWingLifecycle` (`AppModel.shared`): a
+second sequencer or a direct owner caller must not share a `WindowID` with it. There is no separate MainActor
+check: until a later detach's fence lands, `w` races it like any apply races an in-flight fence (the fence flags
+in-flight applies, and the detach's turn detaches `w`). Like `closedWindows`,
+the owner's generation map is unbounded until AU8c's open-window set. A detach's turn awaits its early
 fence before `windowClosed`, so a late fence cannot re-close a root reopened after it; no test pins this ordering (it
 would need a production hook to delay the fence task). Mirror-run `Owner`, `OwnerRaces` and
 `LifecycleComposition(Races)` tests cover this. A window that was never closed is not refused: liveness of unknown or

@@ -52,7 +52,7 @@ extension HostAuthorityTests {
                     _ = try await owner.beginApply(window: Owner.windowOne).get()
                     if initial == .unattached {
                         await owner.windowClosed(Owner.windowOne)
-                        await owner.windowOpened(Owner.windowOne)
+                        await owner.windowOpened(Owner.windowOne, generation: 0)
                     }
                 }
                 await pause.arm(point)
@@ -104,7 +104,7 @@ extension HostAuthorityTests {
                 _ = try await owner.beginApply(window: Owner.windowOne).get()
                 if initial == .unattached {
                     await owner.windowClosed(Owner.windowOne)
-                    await owner.windowOpened(Owner.windowOne)
+                    await owner.windowOpened(Owner.windowOne, generation: 0)
                 }
             }
             await pause.arm(.applyStarting)
@@ -141,7 +141,7 @@ extension HostAuthorityTests {
                 _ = try await owner.beginApply(window: Owner.windowOne).get()
                 if initial == .unattached {
                     await owner.windowClosed(Owner.windowOne)
-                    await owner.windowOpened(Owner.windowOne)
+                    await owner.windowOpened(Owner.windowOne, generation: 0)
                 }
             }
             await pause.arm(.applyStarting)
@@ -166,7 +166,7 @@ extension HostAuthorityTests {
                 if start != .free { _ = try await owner.beginApply(window: Owner.windowOne).get() }
                 if start == .unattached {
                     await owner.windowClosed(Owner.windowOne)
-                    await owner.windowOpened(Owner.windowOne)
+                    await owner.windowOpened(Owner.windowOne, generation: 0)
                 }
                 if start == .recovering {
                     _ = try await owner.dropped().get()
@@ -223,7 +223,7 @@ extension HostAuthorityTests {
             await close.value
             // AppRootView keeps its WindowID across disappear/reappear: refused until it reopens.
             #expect(await owner.beginApply(window: Owner.windowOne) == .failure(.windowClosed))
-            await owner.windowOpened(Owner.windowOne)
+            await owner.windowOpened(Owner.windowOne, generation: 0)
             #expect(await owner.beginApply(window: Owner.windowOne) == .success(session))
             #expect(await owner.authority.snapshot().lease?.windows == [Owner.windowOne])
         }
@@ -239,7 +239,7 @@ extension HostAuthorityTests {
                 await owner.windowClosed(Owner.windowOne)
             }
             // The close's fence ran before it queued or returned; the reopen cannot unfence this apply.
-            await owner.windowOpened(Owner.windowOne)
+            await owner.windowOpened(Owner.windowOne, generation: 0)
             await pause.resume()
             #expect(await apply.value == .failure(.windowClosed))
             await close.value
