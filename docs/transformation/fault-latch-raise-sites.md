@@ -222,7 +222,7 @@ and generation) and whether its scope is prepared.
 | Can the scope be unprepared | Yes (`:103` to `:104`, `:236`) |
 | Verdict | **UNPROVEN** |
 | Evidence a proof needs | The set of producers that can ever hold a lane, over the latch's life, with ordering between a token's successive pushes and between successive holders of one lane |
-| Since FLP7b | The rows above describe the code before FLP7b; the chain count is now by construction. `FanInHandoff.init` mints one chain per lane from `faults` (`mintChains(count:)`, all or nothing); only a critical refusal takes the lane's token, raises `.criticalExhausted` and puts it back; a failed take latches the contended fault (R3), counts `contendedCount` and still returns `.refused(.criticalExhausted)`. The slot orders successive refusals on one lane. R1: a refused lane mint keeps the claim unit already spent. R2: `faults` must budget one unit per lane of every handoff on it. The "stop pushing before release" caller contract is unchanged and the code does not rely on the slot to replace it. Real lane holders: still none |
+| Since FLP7b | The rows above describe the code before FLP7b; the chain count is now by construction. `FanInHandoff.init` mints one chain per lane from `faults` (`mintChains(count:)`, all or nothing); only a critical refusal takes the lane's token, raises `.criticalExhausted` and puts it back; a failed take latches the contended fault (R3), counts `contendedCount` and still returns `.refused(.criticalExhausted)`. The slot orders successive refusals on one lane; K-190b extends that to successive holders of a lane (section 9). R1: a refused lane mint keeps the claim unit already spent. R2: `faults` must budget one unit per lane of every handoff on it. The "stop pushing before release" caller contract is unchanged and the code does not rely on the slot to replace it. Real lane holders: still none |
 
 ## 4. Bounded counters under the same contract, not `raise` calls
 
@@ -423,10 +423,18 @@ section 4):
   open until a real render caller exists.
 - [ ] S4: the set of producers that can hold a lane over the latch's life,
   their pushes ordered, and a hand-over ordering for successive holders of a lane
-  (the code's edge at `FanInHandoff.swift:216` to `:223` holds only if each holder
-  stops pushing before it releases its token). FLP7b makes the chain count
+  (the code's edge at `FanInHandoff.swift:216` to `:223`, lines at
+  `ad8cc8a9`, holds only if each holder stops pushing before it releases its
+  token). FLP7b makes the chain count
   one per lane by construction (R2) and orders refusals on a lane through its
-  chain slot; the real set of holders is still open.
+  chain slot. K-190b extends that order to successive holders of a lane, on any
+  thread: only `FanInHandoff.init` mints lane chains, claims and releases never
+  mint, and every counted lane raise sits between the chain's acquiring take and
+  releasing put (chain-tokens section 3, which cites the lines at `e4e98eae`).
+  That is by construction (FLP7b), reference model only; guard tests T14/T15.
+  The "stop pushing before release" contract stays; it protects the ring's
+  single-producer `pushed`, not the raise contract. The real set of holders is
+  still open.
 - [ ] Global: the sum over every raiser that shares one latch, including raisers
   on unprepared scopes (`unknownScopeFaults`), is below 2^39.
 - [ ] C: the same bound for each `FanInRefusalCounter` user (`refusedClaims`,
@@ -490,8 +498,8 @@ exists.
 | S3a | `Memory/DeferredRelease.swift:144` | `DeferredReleaseQueue.retire` | contended | Render (`:132`; one render thread, `:52`) | None (failed take) | Not needed: sticky store (FLP5), reference model only | Not needed (FLP5), reference model only | **UNPROVED** (render caller) |
 | S3b | `Memory/DeferredRelease.swift:152` | `DeferredReleaseQueue.retire` | `raise` (R0) | Render (`:132`) | The queue's one chain | By construction (FLP5), reference model only | By construction (FLP5), reference model only | **UNPROVED** (render caller) |
 | S4a | `Memory/ReservedCapacityRing+Chains.swift:44` | `ReservedRingChain.refuse` | contended | A critical refusal only (`:35`) | None (failed take) | Not needed: sticky store (FLP7b), reference model only | Not needed (FLP7b), reference model only | **UNPROVED** |
-| S4b | `Memory/ReservedCapacityRing+Chains.swift:49` | `ReservedRingChain.refuse` | `raise` (R0) | A critical refusal only (`:35`) | The lane's (or standalone ring's) one chain on `faults` | By construction (FLP7b; R2: `faults` budgets one unit per lane), reference model only | Between refusals on one lane: by construction (FLP7b), reference model only. Between successive lane holders: **UNPROVED** (the "stop pushing before release" contract stays) | **UNPROVED** |
-| S4c | `Memory/ReservedCapacityRing.swift:253` | `ReservedCapacityRing.refuse` | `laneChain.refuse` (S4a/S4b) | Producer only (`:244`), the critical branch | The lane's one chain | By construction (FLP7b), reference model only | As S4b | **UNPROVED** |
+| S4b | `Memory/ReservedCapacityRing+Chains.swift:49` | `ReservedRingChain.refuse` | `raise` (R0) | A critical refusal only (`:35`) | The lane's (or standalone ring's) one chain on `faults` | By construction (FLP7b; R2: `faults` budgets one unit per lane), reference model only | Between refusals on one lane, and between successive lane holders on any thread: by construction (FLP7b), reference model only; guard tests T14/T15. Take `Memory/FaultLatch+Chains.swift:173` (acquiring exchange), put `:181` (releasing store); lane chains are minted only by `makeLanes` (`Memory/FanInHandoff+LaneChains.swift:22`), called only from `FanInHandoff.init` (`Memory/FanInHandoff.swift:302`); overlapping holders fall back to S4a, as defence in depth only, because an overlap is already undefined behaviour on the ring's `pushed` (chain-tokens sections 3 and 6, K-190b). The "stop pushing before release" contract (`Memory/FanInHandoff.swift:204`) stays, for the ring's `pushed`, not for this edge | **UNPROVED** |
+| S4c | `Memory/ReservedCapacityRing.swift:253` | `ReservedCapacityRing.refuse` | `laneChain.refuse` (S4a/S4b) | Producer only (`:244`), the critical branch | The lane's one chain | By construction (FLP7b), reference model only | As S4b: by construction (FLP7b), reference model only; guard tests T14/T15 | **UNPROVED** |
 
 Paths are relative to `Shared/Audio/Kernel`. The declarations `FaultLatch.raise`
 (`Memory/FaultLatch.swift:235`), `FaultChainAuthority.raise` (`:111`) and
@@ -505,6 +513,8 @@ only `FanInRefusalCounter` writers (section 4), and their raises are bounded by
 their chains, not by caller roles.
 
 Still open, and not claimed here: per-site chain, lifetime-bound and ordering
-proofs for real callers; the global bound for unknown-scope raises on a latch
-shared beyond one authority; AU or MIDI callback cardinality; and any hot-path
-integration (section 8).
+proofs for real callers, including the real set of S4 lane holders; the global
+bound for unknown-scope raises on a latch shared beyond one authority; AU or MIDI
+callback cardinality; whether the "stop pushing before release" contract moves to
+#64; and any hot-path integration (section 8). K-190b closed only the
+reference-model S4b/S4c ordering between successive lane holders.

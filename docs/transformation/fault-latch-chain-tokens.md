@@ -109,6 +109,33 @@ by section 2 means every `raise(_:_:_:frame:)` with an accepted token.
   holder's `put`, and the exchange reads the latest value in the slot's
   modification order, so it reads A's store. Release/acquire gives the edge, so
   A's last raise happens before B's first, whatever thread B runs on.
+- **Successive lane holders (S4, K-190b).** Lines are at `e4e98eae`, under
+  `Shared/Audio/Kernel/Memory/`. A lane's chain belongs to the lane, not to a
+  producer. `makeLanes` mints one chain per lane in one batch
+  (`FanInHandoff+LaneChains.swift:22`), and its only caller is
+  `FanInHandoff.init` (`FanInHandoff.swift:302`). Each ring keeps its chain in a
+  `let` (`ReservedCapacityRing.swift:97`) and the handoff keeps its rings in a
+  `let` (`FanInHandoff.swift:261`). `claimProducer`, `releaseProducer`, `tryPush`
+  and `drain` (`:334`, `:356`, `:376`, `:400`) mint nothing and never touch the
+  lane chain. So every holder of a lane, over the handoff's life, raises
+  through the same chain. Every counted lane raise
+  (`ReservedCapacityRing+Chains.swift:49`) sits between that chain's take
+  (`:42`, the acquiring exchange at `FaultLatch+Chains.swift:173`) and its put
+  (`:52`, the releasing store at `FaultLatch+Chains.swift:181`), on one thread,
+  with no return between them. The put's guard (`FaultLatch+Chains.swift:180`)
+  always passes there, because the token came from that chain's own take. A
+  failed take also writes 0, but only over 0, so it never supplies the id that
+  a successful take reads. The previous bullet therefore applies unchanged:
+  holder B's first counted raise happens after holder A's last, through the
+  slot, whatever threads they run on. It does not use the claim, release and
+  drain edge (`FanInHandoff.swift:178` to `:189`). Overlapping holders, which
+  the single-producer contract forbids, already race on the ring's non-atomic
+  `pushed`, which is undefined behaviour (section 6). So what follows is a
+  defence in depth, not a guarantee: a refusal whose take finds the slot empty
+  raises nothing on the counted path and latches the contended fault
+  (`ReservedCapacityRing+Chains.swift:43` to `:46`; section 5), which fails
+  closed. By construction (FLP7b), reference model only; guard tests T14/T15
+  (section 8).
 - **Fresh contexts.** A fresh, unsynchronized context cannot start a chain on
   the hot path. It either takes an existing chain (and inherits the HB edge
   above) or falls back. Minting is control-side, and K counts every chain ever
@@ -210,6 +237,16 @@ mint left, or its chain's token was lost) has no counted path and must fall back
   builds no fan-in and takes no identity; minted units are never refunded, so
   a retry needs a `faults` authority with enough budget (in practice a fresh
   one, R2), and the claim unit already spent stays spent (R1).
+- The "stop pushing before release" contract (`FanInHandoff.swift:204` to
+  `:206` at `e4e98eae`) stays. It protects the lane ring's single-producer
+  state, not the Raise-context contract: the non-atomic `pushed`
+  (`ReservedCapacityRing.swift:106`, read at `:176` and written at `:189`) and
+  the inner SPSC ring's producer side. Section 3 (successive lane holders) shows
+  that lane raises stay ordered without it, and that overlapping holders at
+  worst latch the contended fault. A breach is still a data race on `pushed`,
+  which is undefined behaviour, and no chain argument repairs it. Whether the
+  contract moves to #64 is a later, separate decision. Real lane holders stay
+  **UNPROVEN** (section 7): no real producer claims a lane yet.
 - `FaultLatch.raise` is still callable on any latch not built by an authority.
   A lint tripwire, the SwiftLint custom rule `fault_latch_raw_raise`, now
   rejects a call of the plain form `x.raise(scope, kind, frame:)` in every Swift
@@ -277,7 +314,7 @@ token back.
 | S1 `SysExAssembler` | **Migrated (FLP4)**: `init` takes a `FaultChainAuthority` and mints one chain per assembler, last, after every pure check and the output claim (`.chainBudgetExhausted`); `accept` takes the token after its pure guards, holds it for the whole call (two raises in one call stay on one token) and puts it back on every path; a failed take changes no assembler state, calls `raiseContended()`, counts `contendedChunkCount` and returns `.refused(.notOwner)`. K <= `chainBudget` per authority by construction; per-assembler happens-before edge via the slot. Tests: `RealtimeHandoffTests+SysExChains.swift`, `SysExChainingStress` | Real caller still #81. Successive calling contexts share the assembler's one chain, ordered by its slot, so no per-generation minting is needed. A SysEx authority cannot share the kernel cycle's latch (the authority never hands its latch out), so SysEx faults live on their own authority |
 | S2 `claimProducer` | **Migrated (FLP6)**: `FanInHandoff.init` takes a separate claim `FaultChainAuthority` (`claimFaults`) for `producerSlotsScope` and mints one chain per handoff after every other check that can throw, before the identity is reserved (`.chainBudgetExhausted`). The lanes keep `faults` for S4. The claim authority is separate because its sticky contended fault latches every scope and would latch `criticalScope` on `faults`. Unlike the common steps above, only a refused claim takes the token: it raises `.producerSlotsExhausted` once and puts the token back. A successful claim never touches it. A failed take (refused claims overlapping, legal because any thread may claim) calls `raiseContended()` and counts `contendedClaimCount`. The claim still returns `nil` and still counts in `refusedClaimCount`. K <= `chainBudget` per claim authority by construction; per-handoff happens-before edge between refused claims via the slot. Tests: `RealtimeHandoffTests+FanInClaimChains.swift`, `FanInClaimChainingStress` | Real callers of `claimProducer`. Every producer context shares the handoff's one claim chain, so no per-context minting is needed; the refusal counter's own bound (C) is unchanged |
 | S3 `retire` via `beginCycle` | **Migrated (FLP5)**: `DeferredReleaseQueue.init` takes a `FaultChainAuthority` and mints one chain per queue, last, after the policy checks and the ring (`.chainBudgetExhausted`); `retire` takes the token first, holds it across the push and the `.retireBacklog` raise and puts it back on every path; a failed take pushes nothing, calls `raiseContended()`, counts `contendedRetireCount` and returns `.refused(.notOwner)` with the +1 left with the caller. `RetiringExchange` and `PreparedPlanSlot` treat it as a refused retire (stall, retry next cycle; fail closed at the cost of a stall). K <= `chainBudget` per authority by construction; per-queue happens-before edge via the slot. Tests: `RealtimeHandoffTests+RetireChains.swift`, `RetireChainingStress` | A real render caller (FLP2: one chain per render block and generation). Every exchange or slot sharing a queue shares its one chain, so the token is held per `retire`, not per cycle |
-| S4 `ReservedCapacityRing.refuse` | **Migrated (FLP7b)**: `FanInHandoff.init` mints one chain per lane from `faults` in one all-or-nothing batch (`mintChains(count:)`, `.laneChainBudgetExhausted`) after the pure checks, the lane policy check (`validateLanes`) and the claim chain, before the identity. Each ring holds its chain (`ReservedRingChain`); the standalone ring `init` takes a chain (`.foreignChain` if another authority minted it) and a convenience `init` mints its own (`.chainBudgetExhausted`). Only a critical refusal takes the token: it raises `.criticalExhausted` and puts the token back; a general refusal and every successful push never touch it. A failed take (refusals overlapping on one lane, which the single-producer contract forbids: the old holder must stop pushing before release, and the chain token protects the fault raise, not the whole push, so contention is fail-safe handling of that violation, not legal holder overlap) calls `raiseContended()`, counts `contendedCount`, still returns `.refused(.criticalExhausted)` and still counts in `refusedCriticalCount`. `KernelCycle`, `KernelCycleParts` and `KernelAckRequests` now hold the `FaultChainAuthority`. Per-lane happens-before edge via the slot. Tests: `RealtimeHandoffTests+LaneChains.swift`, `LaneChainingStress` | Real lane holders and a render caller. Whether the slot edge can replace the "stop pushing before release" caller contract is not shown; that contract stays. K <= `chainBudget` holds only while every handoff's lanes fit the budget (R2) |
+| S4 `ReservedCapacityRing.refuse` | **Migrated (FLP7b)**: `FanInHandoff.init` mints one chain per lane from `faults` in one all-or-nothing batch (`mintChains(count:)`, `.laneChainBudgetExhausted`) after the pure checks, the lane policy check (`validateLanes`) and the claim chain, before the identity. Each ring holds its chain (`ReservedRingChain`); the standalone ring `init` takes a chain (`.foreignChain` if another authority minted it) and a convenience `init` mints its own (`.chainBudgetExhausted`). Only a critical refusal takes the token: it raises `.criticalExhausted` and puts the token back; a general refusal and every successful push never touch it. A failed take (refusals overlapping on one lane, which the single-producer contract forbids: the old holder must stop pushing before release, and the chain token protects the fault raise, not the whole push, so contention is fail-safe handling of that violation, not legal holder overlap) calls `raiseContended()`, counts `contendedCount`, still returns `.refused(.criticalExhausted)` and still counts in `refusedCriticalCount`. `KernelCycle`, `KernelCycleParts` and `KernelAckRequests` now hold the `FaultChainAuthority`. Per-lane happens-before edge via the slot, between refusals of one holder and between successive lane holders on any thread: the chain belongs to the lane, only `FanInHandoff.init` mints it, and claims, releases and drains never mint or replace it (K-190b, section 3). By construction (FLP7b), reference model only; guard tests T14/T15. Tests: `RealtimeHandoffTests+LaneChains.swift`, `LaneChainingStress`, `FanInClaimChainingStress` | Real lane holders and a render caller. The slot edge orders raises across holders but does not replace the "stop pushing before release" caller contract, which stays: it protects the ring's single-producer `pushed`, not the raise contract (section 6). K <= `chainBudget` holds only while every handoff's lanes fit the budget (R2) |
 | Global K over one latch, incl. unknown scopes | **Discharged by construction for raises through one authority**: K <= `chainBudget` <= 2^16 | Holds for the app only once every raiser on that latch goes through the authority, and each site's chains fit its budget |
 | C counters | **Bounded by construction at the reference-model level (K-RC1, K-RC2)**: every `FanInRefusalCounter` `bump` and every counter-writing API (`claimProducer`, `tryPush`, `releaseProducer`, `ProducerAdmission.push`, `KernelAdmissionRefusals.record`) borrows an exclusive `RefusalCallerToken`, so each counter's chains are prepared `RefusalCaller` roles and K is at most that type's process lifetime budget, 2^38 − 1 < 2^39 ([refusal caller ownership](refusal-caller-ownership.md)). Not a `raise` and not reported by `FaultLatch`. Tests: `RealtimeHandoffTests+RefusalCaller.swift`, `RealtimeHandoffTests+RefusalCallerTransfer.swift` | Real callers and their native/RT qualification (#190, #64): no real caller holds a role yet |
 | A real caller per item | Not discharged | Each site slice, with FLP2's platform evidence |
@@ -328,3 +365,21 @@ refused; the convenience init; parity with a plain `FaultLatch`; only a critical
 refusal takes the token; a contended refusal latches the contended fault and
 silences the cycle (R3); lanes do not contend each other; and a `Thread` stress
 of overlapping refusals where counted plus contended equals refused.
+
+K-190b adds the guard tests for section 3's successive lane holders:
+- T14, `LaneChaining.laneHolderChurnKeepsOneChain`
+  (`RealtimeHandoffTests+LaneChains.swift`). Six holders in turn claim one lane,
+  fill it, take one critical refusal and release, with a drain between holders.
+  The minted chain count and the lane's chain id do not change, the generation
+  advances once per holder, there is one record per holder and none contended,
+  and the token is back after each refusal. Stale holders get `.notOwner` and
+  raise nothing while a live holder has the lane full.
+- T15, `FanInClaimChainingStress.laneHandOverAcrossThreadsNeverContends`
+  (`RealtimeHandoffTests+FanInClaimChains.swift`, because the lane-chain file is
+  near its 500-line limit). Four `Thread`s take 200 turns each on one lane while
+  a drain thread empties it. The turn counter is relaxed, so only the handoff and
+  the slot order the holders. Every turn's refusal is counted (H×R records), none
+  contends and there is no contended fault. The kernel mirror's TSan filter
+  (`Stress`) includes it.
+
+They are tests of the reference model, not a proof: section 3 is the argument.
