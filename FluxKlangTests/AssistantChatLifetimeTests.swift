@@ -128,6 +128,45 @@ struct AssistantChatLifetimeTests {
         }
     }
 
+    @Test func overtakenWiringDraftReplyCarriesNoOtherDraftCards() async throws {
+        try await withFixture { fixture in
+            let held = Equipment(name: "Held Synth", outputs: ["Out"])
+            let other = Equipment(name: "Other Synth", outputs: ["Out"])
+            let context = AssistantBackendFixture.context(equipment: [held, other], inputs: [
+                StudioInputConnection(connector: 1, equipmentID: held.id, outputPort: 0),
+                StudioInputConnection(connector: 2, equipmentID: other.id, outputPort: 0)
+            ])
+            await fixture.drafts.hold(sourceID: held.id)
+            fixture.chat.createWiringDraft(
+                sourceIDs: [held.id], effectIDs: [], destination: .finalMix, context: context)
+            try #require(await fixture.draftGate.waitForEntries())
+            _ = await fixture.coordinator.perform(.buildStudioDraft(StudioWiringRequest(
+                sourceInstrumentIDs: [other.id], effectChainIDs: [], destination: .finalMix
+            )), context: context)
+            let current = try #require(fixture.coordinator.pendingStudioDraft)
+            try #require(current.request.sourceInstrumentIDs == [other.id])
+            await fixture.draftGate.releaseAll()
+            await fixture.chat.awaitOwnedWorkSnapshot()
+            let overtaken = try #require(fixture.chat.selectedConversation?.messages.last)
+            #expect(overtaken.role == .assistant)
+            #expect(overtaken.text == "There is no pending Studio draft.")
+            #expect(overtaken.cards.isEmpty, "an overtaken build shows no other request's draft cards")
+            #expect(fixture.coordinator.pendingStudioDraft == current)
+            #expect(await fixture.drafts.load() == .loaded(current))
+
+            fixture.chat.createWiringDraft(
+                sourceIDs: [other.id], effectIDs: [], destination: .finalMix, context: context)
+            await fixture.chat.awaitOwnedWorkSnapshot()
+            let own = try #require(fixture.coordinator.pendingStudioDraft)
+            let reply = try #require(fixture.chat.selectedConversation?.messages.last)
+            try #require(reply.id != overtaken.id)
+            #expect(reply.cards.contains {
+                if case .pendingDraft(let id, _, _) = $0 { return id == own.id }
+                return false
+            }, "an unovertaken build shows its own draft card")
+        }
+    }
+
     @Test(arguments: [false, true])
     func removalWaitsForLocalTombstones(clearAll: Bool) async throws {
         try await withFixture { fixture in

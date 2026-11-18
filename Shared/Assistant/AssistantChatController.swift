@@ -241,7 +241,7 @@ final class AssistantChatController {
                 to: .live("Build pending draft", requires: [.pendingDraft]),
                 groundedBy: [result]
             )) ?? "A pending Studio draft is ready for review."
-            let cards = Self.cards(for: coordinator.pendingStudioDraft)
+            let cards = Self.cards(for: Self.reportedDraft(in: result))
             updateConversation(id: id) {
                 $0.messages.append(AssistantMessage(role: .assistant, text: text, cards: cards))
             }
@@ -571,6 +571,12 @@ extension AssistantChatController {
         messages.suffix(12).map {
             "\($0.role.rawValue): \(String($0.text.prefix(240)))"
         }.joined(separator: "\n").suffix(1_800).description
+    }
+
+    /// Cards describe only the draft this result reports, never one a newer mutation left pending.
+    private static func reportedDraft(in result: AssistantToolResult) -> StudioPatchDraft? {
+        guard case .pendingDraft(let draft) = result else { return nil }
+        return draft
     }
 
     private static func cards(for draft: StudioPatchDraft?) -> [AssistantCard] {

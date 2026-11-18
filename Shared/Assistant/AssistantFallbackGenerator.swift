@@ -72,7 +72,7 @@ struct AssistantFallbackGenerator: AssistantGenerating {
                 to: .live(request.question, requires: [.pendingDraft]),
                 groundedBy: [result]
             )
-            return (text, cards(for: coordinator.pendingStudioDraft))
+            return (text, cards(for: Self.reportedDraft(in: result)))
         }
         if normalized.contains("wire") || normalized.contains("connect") || normalized.contains("patch") {
             let entry = FluxKlangHelpCatalog.entry(for: .studio)
@@ -92,6 +92,12 @@ struct AssistantFallbackGenerator: AssistantGenerating {
     private func helpTopic(in text: String) -> AssistantHelpTopic? {
         AssistantHelpTopic.allCases.first { text.contains($0.rawValue.lowercased()) }
             ?? (text.contains("help") ? .studio : nil)
+    }
+
+    /// Cards describe only the draft this result reports, never one a newer mutation left pending.
+    private static func reportedDraft(in result: AssistantToolResult) -> StudioPatchDraft? {
+        guard case .pendingDraft(let draft) = result else { return nil }
+        return draft
     }
 
     private func cards(for draft: StudioPatchDraft?) -> [AssistantCard] {
