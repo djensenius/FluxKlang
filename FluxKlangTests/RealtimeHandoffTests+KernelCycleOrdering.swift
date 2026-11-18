@@ -18,16 +18,19 @@ extension RealtimeHandoffTests {
         /// drain order. Kills: dropping or reversing frame, lane, producer lane or sequence; lane before frame;
         /// sequence before producer.
         @Test func eachOrderKeyComponentDecidesItsTie() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 32)
-            let first = try #require(rig.events.claimProducer())
-            let second = try #require(rig.events.claimProducer())
+            let first = try RefusalCalling.claim(rig.events, &caller!)
+            let second = try RefusalCalling.claim(rig.events, &caller!)
             for (event, token) in [
                 (cycleEvent(11, noteOff(2), sequence: 0), first), (cycleEvent(10, noteOn(1), sequence: 9), second),
                 (cycleEvent(20, control(20), sequence: 0), first), (cycleEvent(20, noteOff(3), sequence: 9), second),
                 (cycleEvent(30, control(32), sequence: 0), second), (cycleEvent(30, control(31), sequence: 9), first),
                 (cycleEvent(40, control(42), sequence: 2), first), (cycleEvent(40, control(41), sequence: 1), first)
             ] {
-                #expect(rig.push(event, token) == .ok)
+                #expect(rig.push(event, token, caller: &caller!) == .ok)
             }
             let (result, emitted) = rig.run(0, 64)
             #expect(emitted.map(\.event.payload) == [noteOn(1), noteOff(2), noteOff(3), control(20), control(31),
@@ -38,15 +41,18 @@ extension RealtimeHandoffTests {
         /// Equal full keys (a producer reusing a sequence). Kills: an unstable merge sort of the new run; the run
         /// merged ahead of the kept prefix on a tie.
         @Test func equalKeysKeepDrainOrderBehindThePrefix() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 32)
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(1_000, control(1), sequence: 5), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(1_000, control(1), sequence: 5), token, caller: &caller!) == .ok)
             #expect(rig.run(0, 64).0.pending == 1)
             for value in UInt32(2)...6 {
-                #expect(rig.push(cycleEvent(1_000, control(value), sequence: 5), token) == .ok)
+                #expect(rig.push(cycleEvent(1_000, control(value), sequence: 5), token, caller: &caller!) == .ok)
             }
-            #expect(rig.push(cycleEvent(900, control(0), sequence: 5), token) == .ok)
-            #expect(rig.push(cycleEvent(1_000, control(7), sequence: 5), token) == .ok)
+            #expect(rig.push(cycleEvent(900, control(0), sequence: 5), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(1_000, control(7), sequence: 5), token, caller: &caller!) == .ok)
             #expect(rig.run(64, 64).0.pending == 8)
             let (result, emitted) = rig.run(1_000, 64)
             #expect(emitted.map(\.event.payload) == (0...7).map { control(UInt32($0)) } && result.pending == 0)
@@ -55,12 +61,15 @@ extension RealtimeHandoffTests {
         /// E2 review P2-3 across three lanes and the kept prefix. Kills: re-sorting by decided frame (all collapse
         /// onto `blockStart`, where lane order would put the `noteOff` first and leave the note stuck).
         @Test func lateBacklogNeverReSortedByDecidedFrame() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(lanes: 3, laneCapacity: 32)
-            let tokens = try (0..<3).map { _ in try #require(rig.events.claimProducer()) }
-            #expect(rig.push(cycleEvent(995, noteOff(60)), tokens[0]) == .ok)
-            #expect(rig.push(cycleEvent(990, noteOn(60)), tokens[1]) == .ok)
-            #expect(rig.push(cycleEvent(900, control(1)), tokens[2]) == .ok)
-            #expect(rig.push(cycleEvent(1_000, .clockPulse), tokens[2]) == .ok)
+            let tokens = try (0..<3).map { _ in try RefusalCalling.claim(rig.events, &caller!) }
+            #expect(rig.push(cycleEvent(995, noteOff(60)), tokens[0], caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(990, noteOn(60)), tokens[1], caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(900, control(1)), tokens[2], caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(1_000, .clockPulse), tokens[2], caller: &caller!) == .ok)
             let (result, emitted) = rig.run(1_000, 64)
             #expect(emitted.map(\.event.frame) == [900, 990, 995, 1_000] && emitted.allSatisfy { $0.frame == 1_000 })
             #expect(result.dispatched == 4 && !rig.ownership.isOwned(scope: 0, channel: 0, note: 60))
@@ -69,16 +78,19 @@ extension RealtimeHandoffTests {
         /// Kills: an empty cycle that drains, decides a late buffered event, admits a stale pulse or skips fault
         /// recovery; telemetry not counting empty or faulted cycles.
         @Test func emptyCyclesRunSafetyAndFaultsButLeaveTimedEventsQueued() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             for event in [cycleEvent(0, noteOn(60)), cycleEvent(100, control(1)), cycleEvent(101, .clockPulse)] {
-                #expect(rig.push(event, token) == .ok)
+                #expect(rig.push(event, token, caller: &caller!) == .ok)
             }
             #expect(rig.run(0, 64).0.pending == 2)
             let (idle, nothing) = rig.run(500, 0)
             #expect(idle.status == .ok && idle.dispatched == 0 && idle.skippedPulses == 0 && idle.pending == 2)
             #expect(nothing.isEmpty)
-            #expect(rig.push(cycleEvent(110, control(2)), token) == .ok)
+            #expect(rig.push(cycleEvent(110, control(2)), token, caller: &caller!) == .ok)
             #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
             for frames in [0, -1, Int64.min] {
                 let (result, emitted) = rig.run(500, frames)
@@ -99,15 +111,18 @@ extension RealtimeHandoffTests {
         /// Kills: telemetry not published, published with the wrong stamp, or counters that are per cycle rather
         /// than cumulative or that disagree with the results and the gate; a `.safetyMute` cycle counted as faulted.
         @Test func telemetryPublishesCumulativeCountersEveryCycle() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let slots = try kernelCycleTelemetrySlots()
             let output = KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 7)
             let rig = try CycleRig(laneCapacity: 32, pulsesPerBlock: 1, telemetry: output)
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             #expect(rig.cycle.latestTelemetry() == nil)
             for event in [cycleEvent(0, noteOn(1)), cycleEvent(1, .clockPulse), cycleEvent(400, .clockPulse),
                           cycleEvent(401, .clockPulse), cycleEvent(402, .clockPulse), cycleEvent(5_000, noteOn(2)),
                           cycleEvent(1_070, .clockPulse), cycleEvent(1_071, .clockPulse)] {
-                #expect(rig.push(event, token) == .ok)
+                #expect(rig.push(event, token, caller: &caller!) == .ok)
             }
             var results: [KernelCycleResult] = []
             for (blockStart, frames) in [(Int64(1_000), Int64(64)), (1_064, 0), (1_064, 64)] {
@@ -134,10 +149,13 @@ extension RealtimeHandoffTests {
         /// Ruling (E5b round 1): `.staleClock` stays off the `FaultLatch`. Kills: a stale pulse raising any fault
         /// (which would also silence the next cycle); the stale pulse not counted; the next valid pulse blocked.
         @Test func staleClockCountsWithoutLatchingAndNextPulseProceeds() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(100, .clockPulse), token) == .ok)
-            #expect(rig.push(cycleEvent(1_010, .clockPulse), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(100, .clockPulse), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(1_010, .clockPulse), token, caller: &caller!) == .ok)
             let (stale, emitted) = rig.run(1_000, 64)
             #expect(stale.status == .ok && stale.skippedPulses == 1 && stale.dispatched == 1)
             #expect(emitted == [CycleEmission(event: cycleEvent(1_010, .clockPulse), frame: 1_010)])
@@ -145,7 +163,7 @@ extension RealtimeHandoffTests {
             for scope in [CycleRig.criticalScope, CycleRig.slotsScope, CycleRig.sysexScope] {
                 #expect(!rig.faults.isLatched(scope) && rig.faults.observe(scope) == nil)
             }
-            #expect(rig.push(cycleEvent(1_070, .clockPulse), token) == .ok)
+            #expect(rig.push(cycleEvent(1_070, .clockPulse), token, caller: &caller!) == .ok)
             let (next, pulse) = rig.run(1_064, 64)
             #expect(next.status == .ok && next.skippedPulses == 0 && next.dispatched == 1 && !next.flushing)
             #expect(pulse.map(\.frame) == [1_070] && rig.cycle.telemetry.lastFaultedCycle == 0)
@@ -154,15 +172,18 @@ extension RealtimeHandoffTests {
         /// Flush watermark: the drain that proves a flushing lane empty clears its bit, yet the `noteOn` it just
         /// drained stays marked. Kills: entries losing the flush mark (the `noteOn` would sound after the latch).
         @Test func noteOnDrainedAsLaneEmptiesStaysFlushed() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
             // An idle latched cycle arms every bit without draining, so no drain has proved a lane empty yet.
             let (faulted, _) = rig.run(0, 0)
             #expect(faulted.status == .silenced(.scopeFaulted) && faulted.drained == 0 && faulted.flushing)
             #expect(rig.faults.acknowledge(try #require(rig.faults.observe(CycleRig.criticalScope))) != nil)
-            #expect(rig.push(cycleEvent(80, noteOn(70)), token) == .ok)
-            #expect(rig.push(cycleEvent(90, control(3)), token) == .ok)
+            #expect(rig.push(cycleEvent(80, noteOn(70)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(90, control(3)), token, caller: &caller!) == .ok)
             let (result, emitted) = rig.run(0, 128)
             #expect(result.status == .ok && result.drained == 2 && !result.flushing && result.pending == 0)
             #expect(result.discardedWhileSilenced == 1 && result.dispatched == 1)
@@ -175,18 +196,23 @@ extension RealtimeHandoffTests {
         /// quota keeps cutting lane 1 short. Kills: an already clear bit cleared again (the count falls to 0 while
         /// lane 1 is set); a `noteOn` from a cleared lane decided while another lane still flushes.
         @Test func clearedLaneNoteOnDiscardedWhileAnotherLaneFlushes() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let slots = try kernelCycleTelemetrySlots()
             let rig = try CycleRig(laneCapacity: 24, perLaneQuota: 2,
                                    telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
-            let cleared = try #require(rig.events.claimProducer())
-            let cut = try #require(rig.events.claimProducer())
-            for value in UInt32(0)..<5 { #expect(rig.push(cycleEvent(10, control(value)), cut) == .ok) }
+            let cleared = try RefusalCalling.claim(rig.events, &caller!)
+            let cut = try RefusalCalling.claim(rig.events, &caller!)
+            for value in UInt32(0)..<5 {
+                #expect(rig.push(cycleEvent(10, control(value)), cut, caller: &caller!) == .ok)
+            }
             #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
             #expect(rig.run(0, 0).0.flushing)
             #expect(rig.faults.acknowledge(try #require(rig.faults.observe(CycleRig.criticalScope))) != nil)
             let (first, _) = rig.run(0, 64)
             #expect(first.status == .ok && first.drained == 2 && first.flushing)
-            #expect(rig.push(cycleEvent(70, noteOn(60)), cleared) == .ok)
+            #expect(rig.push(cycleEvent(70, noteOn(60)), cleared, caller: &caller!) == .ok)
             let (second, emitted) = rig.run(64, 64)
             #expect(second.drained == 3 && second.flushing && second.discardedWhileSilenced == 1)
             #expect(emitted.map(\.event.payload) == [control(2), control(3)])
@@ -199,11 +225,16 @@ extension RealtimeHandoffTests {
         /// Ruling (E5b round 3): a drain never pops what the block cannot hold. Kills: a `limit` past the room
         /// popping events the block refuses (lost; a lost `noteOff` sticks its note); a cycle draining past room.
         @Test func drainLimitPastRoomLeavesExcessQueuedInOrder() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 24, blockCapacity: 2)
-            let token = try #require(rig.events.claimProducer())
-            for value in UInt32(0)..<3 { #expect(rig.push(cycleEvent(500, control(value)), token) == .ok) }
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            for value in UInt32(0)..<3 {
+                #expect(rig.push(cycleEvent(500, control(value)), token, caller: &caller!) == .ok)
+            }
             for event in [cycleEvent(501, noteOff(61)), cycleEvent(502, control(4))] {
-                #expect(rig.push(event, token) == .ok)
+                #expect(rig.push(event, token, caller: &caller!) == .ok)
             }
             #expect(rig.run(0, 64).0.drained == 2 && rig.run(64, 64).0.drained == 0)
             let block = KernelBlockBuffer(capacity: 2)
@@ -219,15 +250,18 @@ extension RealtimeHandoffTests {
 
         /// Kills: the discard counters missing from telemetry, or per cycle rather than cumulative.
         @Test func discardCountersAccumulateInTelemetry() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(blockCapacity: 1)
-            let first = try #require(rig.events.claimProducer())
-            let second = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(999, noteOff(60)), first) == .ok)
-            #expect(rig.push(cycleEvent(990, noteOn(60)), second) == .ok)
+            let first = try RefusalCalling.claim(rig.events, &caller!)
+            let second = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(999, noteOff(60)), first, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(990, noteOn(60)), second, caller: &caller!) == .ok)
             #expect(rig.run(1_000, 64).0.drained == 1 && rig.run(1_064, 64).0.discardedSuperseded == 1)
             #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
             for blockStart in [Int64(1_128), 1_192] {
-                #expect(rig.push(cycleEvent(blockStart &+ 2, noteOn(62)), first) == .ok)
+                #expect(rig.push(cycleEvent(blockStart &+ 2, noteOn(62)), first, caller: &caller!) == .ok)
                 #expect(rig.run(blockStart, 64).0.discardedWhileSilenced == 1)
             }
             #expect(rig.cycle.telemetry.discardedSuperseded == 1 && rig.cycle.telemetry.discardedWhileSilenced == 2)
@@ -238,22 +272,27 @@ extension RealtimeHandoffTests {
         /// wrong lane or kind, or counted for another status; another handoff's token counted on a lane; totals
         /// not published.
         @Test func admissionRefusalsCountedPerLaneWithoutLatching() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let first = try #require(rig.events.claimProducer())
-            let second = try #require(rig.events.claimProducer())
+            let first = try RefusalCalling.claim(rig.events, &caller!)
+            let second = try RefusalCalling.claim(rig.events, &caller!)
             let refusals = rig.cycle.admissionRefusals
             var one = ProducerAdmission(deadline: rig.cycle.deadline, refusals: refusals)
             var two = ProducerAdmission(deadline: rig.cycle.deadline, refusals: refusals)
-            #expect(one.push(cycleEvent(100, noteOn(60)), now: 0, into: rig.events, token: first) == .ok)
-            #expect(one.push(cycleEvent(99, noteOff(60)), now: 0, into: rig.events, token: first)
+            #expect(one.push(cycleEvent(100, noteOn(60)), now: 0, into: rig.events, token: first, caller: &caller!)
+                    == .ok)
+            #expect(one.push(cycleEvent(99, noteOff(60)), now: 0, into: rig.events, token: first, caller: &caller!)
                     == .refused(.nonMonotonic))
-            #expect(one.push(cycleEvent(98, control(1)), now: 0, into: rig.events, token: first)
+            #expect(one.push(cycleEvent(98, control(1)), now: 0, into: rig.events, token: first, caller: &caller!)
                     == .refused(.nonMonotonic))
-            #expect(two.push(cycleEvent(96_001, noteOff(61)), now: 0, into: rig.events, token: second)
+            #expect(two.push(cycleEvent(96_001, noteOff(61)), now: 0, into: rig.events, token: second, caller: &caller!)
                     == .refused(.beyondLookahead))
             let other = try CycleRig()
-            refusals.record(.refused(.nonMonotonic), token: try #require(other.events.claimProducer()))
-            refusals.record(.refused(.full), token: first)
+            let otherToken = try RefusalCalling.claim(other.events, &caller!)
+            refusals.record(.refused(.nonMonotonic), token: otherToken, caller: &caller!)
+            refusals.record(.refused(.full), token: first, caller: &caller!)
             #expect(refusals.count(lane: 0, .nonMonotonic) == 2 && refusals.count(lane: 0, .beyondLookahead) == 0)
             #expect(refusals.count(lane: 1, .nonMonotonic) == 0 && refusals.count(lane: 1, .beyondLookahead) == 1)
             #expect(refusals.count(lane: 2, .nonMonotonic) == nil && refusals.count(lane: -1, .nonMonotonic) == nil)
@@ -303,10 +342,13 @@ extension RealtimeHandoffTests {
         /// Render loads the epoch before the latch: a request made mid-cycle (here from `emit`, after the latch
         /// read) is not covered by that cycle, only by the next. Kills: the epoch loaded after the latch read.
         @Test func requestAfterTheLatchReadWaitsForTheNextFaultedCycle() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let slots = try kernelCycleTelemetrySlots()
             let rig = try CycleRig(telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(0, noteOn(4)), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(0, noteOn(4)), token, caller: &caller!) == .ok)
             #expect(rig.run(0, 64).1.count == 1)
             #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 64) == .ok)
             let observation = try #require(rig.faults.observe(CycleRig.criticalScope))
@@ -327,10 +369,13 @@ extension RealtimeHandoffTests {
         /// (a faulted cycle two past the stale read cycle) approves at once and X sounds and sticks; the epoch
         /// refuses until a faulted cycle loaded F2's epoch, which drains and discards X.
         @Test func staleReadAfterReRaiseCannotLetAQueuedNoteOnSound() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             for oldCriterion in [true, false] {
                 let slots = try kernelCycleTelemetrySlots()
                 let rig = try CycleRig(telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
-                let token = try #require(rig.events.claimProducer())
+                let token = try RefusalCalling.claim(rig.events, &caller!)
                 #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
                 let first = try #require(rig.faults.observe(CycleRig.criticalScope))
                 let firstTicket = try rig.cycle.ackRequests.request(for: first)
@@ -339,7 +384,7 @@ extension RealtimeHandoffTests {
                 #expect(staleRead.permitsAcknowledgement(firstTicket) && staleRead.lastFaultedAckEpoch == 1)
                 for block in Int64(1)...2 { #expect(rig.run(block * 64, 64).0.status == .silenced(.scopeFaulted)) }
                 #expect(rig.faults.acknowledge(first) != nil)
-                #expect(rig.push(cycleEvent(192, noteOn(9)), token) == .ok)
+                #expect(rig.push(cycleEvent(192, noteOn(9)), token, caller: &caller!) == .ok)
                 #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 192) == .ok)
                 let second = try #require(rig.faults.observe(CycleRig.criticalScope))
                 let secondTicket = try rig.cycle.ackRequests.request(for: second)
@@ -364,20 +409,25 @@ extension RealtimeHandoffTests {
         /// Kills: `lastAdmittedFrame` advanced by a refused or full push; admission skipped; lookahead not checked
         /// first; equal frames refused.
         @Test func admissionAdvancesOnlyOnSuccessfulPush() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(lanes: 1, laneCapacity: 20)
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             var admission = ProducerAdmission(deadline: rig.cycle.deadline, refusals: rig.cycle.admissionRefusals)
-            func push(_ frame: Int64, _ payload: KernelEventPayload, now: Int64 = 0) -> KernelStatus {
-                admission.push(cycleEvent(frame, payload), now: now, into: rig.events, token: token)
+            func push(_ frame: Int64, _ payload: KernelEventPayload, now: Int64 = 0,
+                      caller: inout RefusalCallerToken) -> KernelStatus {
+                admission.push(cycleEvent(frame, payload), now: now, into: rig.events, token: token, caller: &caller)
             }
-            #expect(push(100, control(0)) == .ok && admission.lastAdmittedFrame == 100)
-            #expect(push(99, control(1)) == .refused(.nonMonotonic))
-            #expect(push(96_001, control(2)) == .refused(.beyondLookahead))
-            #expect(push(50, control(3), now: -96_000) == .refused(.beyondLookahead))
+            #expect(push(100, control(0), caller: &caller!) == .ok && admission.lastAdmittedFrame == 100)
+            #expect(push(99, control(1), caller: &caller!) == .refused(.nonMonotonic))
+            #expect(push(96_001, control(2), caller: &caller!) == .refused(.beyondLookahead))
+            #expect(push(50, control(3), now: -96_000, caller: &caller!) == .refused(.beyondLookahead))
             #expect(admission.lastAdmittedFrame == 100)
-            #expect(push(96_000, control(4)) == .ok && push(96_000, noteOff(1)) == .ok)
-            #expect(push(96_000, control(5)) == .ok)
-            #expect(push(96_001, control(7), now: 96_001) == .refused(.full))
+            #expect(push(96_000, control(4), caller: &caller!) == .ok
+                    && push(96_000, noteOff(1), caller: &caller!) == .ok)
+            #expect(push(96_000, control(5), caller: &caller!) == .ok)
+            #expect(push(96_001, control(7), now: 96_001, caller: &caller!) == .refused(.full))
             #expect(admission.lastAdmittedFrame == 96_000)
             let (result, emitted) = rig.run(0, 200)
             #expect(emitted.map(\.event.payload) == [control(0)] && result.drained == 4 && result.pending == 3)
@@ -386,18 +436,25 @@ extension RealtimeHandoffTests {
         /// Kills: no reset (an earlier frame after a relocation is refused), or a reset that also bypasses the
         /// lookahead; render re-queueing a reset producer's earlier frame instead of ordering it first.
         @Test func discontinuityResetAdmitsEarlierFramesOrderedFirst() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             var admission = ProducerAdmission(deadline: rig.cycle.deadline, refusals: rig.cycle.admissionRefusals)
-            #expect(admission.push(cycleEvent(1_000, noteOn(60)), now: 0, into: rig.events, token: token) == .ok)
-            #expect(admission.push(cycleEvent(10, noteOn(61)), now: 0, into: rig.events, token: token)
+            #expect(admission.push(cycleEvent(1_000, noteOn(60)), now: 0, into: rig.events, token: token,
+                                   caller: &caller!) == .ok)
+            #expect(admission.push(cycleEvent(10, noteOn(61)), now: 0, into: rig.events, token: token, caller: &caller!)
                     == .refused(.nonMonotonic))
             admission.resetForDiscontinuity()
             #expect(admission.lastAdmittedFrame == nil)
-            #expect(admission.push(cycleEvent(96_001, noteOn(62)), now: 0, into: rig.events, token: token)
+            #expect(admission.push(cycleEvent(96_001, noteOn(62)), now: 0, into: rig.events, token: token,
+                                   caller: &caller!)
                     == .refused(.beyondLookahead))
-            #expect(admission.push(cycleEvent(10, noteOn(61)), now: 0, into: rig.events, token: token) == .ok)
-            #expect(admission.push(cycleEvent(20, noteOff(61)), now: 0, into: rig.events, token: token) == .ok)
+            #expect(admission.push(cycleEvent(10, noteOn(61)), now: 0, into: rig.events, token: token, caller: &caller!)
+                    == .ok)
+            #expect(admission.push(cycleEvent(20, noteOff(61)), now: 0, into: rig.events, token: token,
+                                   caller: &caller!) == .ok)
             let (first, emitted) = rig.run(0, 64)
             #expect(emitted.map(\.event.frame) == [10, 20] && first.pending == 1)
             let (late, nothing) = rig.run(2_000, 64)

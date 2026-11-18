@@ -251,11 +251,14 @@ private final class PublishedFlag: Sendable {
 
 /// Retries `value` until admitted, counting refusals; `false` if cancelled first. Every 16th sequence number is
 /// critical; the frame is the sequence number.
-private func push(_ handoff: FanInHandoff<FanStamp>, _ value: FanStamp, _ token: ProducerToken,
-                  _ report: inout ProducerReport, _ run: StressRun) -> Bool {
+private func push( // swiftlint:disable:this function_parameter_count
+    _ handoff: FanInHandoff<FanStamp>, _ value: FanStamp, _ token: ProducerToken, _ report: inout ProducerReport,
+    _ run: StressRun, _ caller: inout RefusalCallerToken
+) -> Bool {
     let eventClass: EventClass = value.sequence % 16 == 15 ? .critical : .general
     while true {
-        let status = handoff.tryPush(value, class: eventClass, frame: Int64(value.sequence), token: token)
+        let status = handoff.tryPush(value, class: eventClass, frame: Int64(value.sequence), token: token,
+                                     caller: &caller)
         switch (status, eventClass) {
         case (.ok, _): return true
         case (.refused(.full), .general): report.refusedGeneral += 1
@@ -276,6 +279,9 @@ extension RealtimeHandoffTests {
         /// order, from its producer's lane.
         @Test(.timeLimit(.minutes(1)))
         func stressConcurrentProducersConserveMultiset() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let producers = 4
             let perProducer = 50_000
             let faults = try Root.fanInLatch()
@@ -285,12 +291,16 @@ extension RealtimeHandoffTests {
                 producerSlotsScope: Root.fanInSlotsScope)
             let produced = CycleSlots<ProducerReport>(producers)
             let consumed = CycleSlots<ConsumerReport>(1)
+            let roles = try (0..<producers).map { _ in try #require(RefusalCaller.prepare()) }
             var workers: [@Sendable (StressRun) -> Void] = (0..<producers).map { producer in
                 { run in
+                    var caller: RefusalCallerToken? = try? RefusalCalling.take(roles[producer])
+                    defer { RefusalCalling.giveBack(roles[producer], &caller) }
+                    guard caller != nil else { return run.cancelled.store(true, ordering: .releasing) }
                     var report = ProducerReport()
                     defer { produced.set(producer, report) }
                     guard run.arriveAndWait() else { return }
-                    guard let token = handoff.claimProducer() else {
+                    guard let token = handoff.claimProducer(caller: &caller!) else {
                         return run.cancelled.store(true, ordering: .releasing)
                     }
                     report.lane = token.lane
@@ -299,9 +309,9 @@ extension RealtimeHandoffTests {
                     guard run.spin(until: { run.handshake.load(ordering: .relaxed) == producers }) else { return }
                     for sequence in 0..<perProducer {
                         let stamp = FanStamp(producer: producer, sequence: sequence)
-                        guard push(handoff, stamp, token, &report, run) else { return }
+                        guard push(handoff, stamp, token, &report, run, &caller!) else { return }
                     }
-                    report.released = handoff.releaseProducer(token)
+                    report.released = handoff.releaseProducer(token, caller: &caller!)
                     report.finished = true
                 }
             }
@@ -337,7 +347,7 @@ extension RealtimeHandoffTests {
             // The joins order every worker before this thread, which is now the only consumer: an empty drain
             // frees every retiring lane, and all lanes can be claimed again.
             #expect(handoff.drain(perLaneQuota: 1, total: producers) { _, _ in Issue.record("leftover") } == 0)
-            #expect((0..<producers).compactMap { _ in handoff.claimProducer() }.count == producers)
+            #expect((0..<producers).compactMap { _ in handoff.claimProducer(caller: &caller!) }.count == producers)
         }
 
         /// Six claimers churn three lanes until each has pushed 400 three-event blocks, one block per claim,
@@ -349,6 +359,9 @@ extension RealtimeHandoffTests {
         /// happens-before chain in both directions.
         @Test(.timeLimit(.minutes(1)))
         func stressClaimChurnKeepsLanesExclusive() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let lanes = 3
             let claimers = 6
             let blocksEach = 400
@@ -362,8 +375,12 @@ extension RealtimeHandoffTests {
             let notes = LaneNotes(lanes)
             let churned = CycleSlots<ChurnReport>(claimers)
             let consumed = CycleSlots<BlockReport>(1)
+            let roles = try (0..<claimers).map { _ in try #require(RefusalCaller.prepare()) }
             var workers: [@Sendable (StressRun) -> Void] = (0..<claimers).map { claimer in
                 { run in
+                    var caller: RefusalCallerToken? = try? RefusalCalling.take(roles[claimer])
+                    defer { RefusalCalling.giveBack(roles[claimer], &caller) }
+                    guard caller != nil else { return run.cancelled.store(true, ordering: .releasing) }
                     var report = ChurnReport()
                     defer {
                         churned.set(claimer, report)
@@ -371,7 +388,7 @@ extension RealtimeHandoffTests {
                     }
                     guard run.arriveAndWait() else { return }
                     while report.blocks < blocksEach, !run.shouldStop {
-                        guard let token = handoff.claimProducer(frame: Int64(claimer)) else {
+                        guard let token = handoff.claimProducer(frame: Int64(claimer), caller: &caller!) else {
                             report.refusedClaims += 1
                             continue
                         }
@@ -379,10 +396,11 @@ extension RealtimeHandoffTests {
                         if !notes.isWhole(token.lane) { report.partialHandovers += 1 }
                         for step in 0..<3 {
                             let stamp = FanStamp(producer: claimer, sequence: report.blocks << 2 | step)
-                            report.expectOK(handoff.tryPush(stamp, class: .general, frame: 0, token: token))
+                            report.expectOK(handoff.tryPush(stamp, class: .general, frame: 0, token: token,
+                                                            caller: &caller!))
                         }
                         flags.leave(Int(token.lane), claimer)
-                        report.expectOK(handoff.releaseProducer(token))
+                        report.expectOK(handoff.releaseProducer(token, caller: &caller!))
                         report.blocks += 1
                     }
                     report.finished = report.blocks == blocksEach
@@ -427,7 +445,7 @@ extension RealtimeHandoffTests {
             }
             #expect(claims.isLatched(Root.fanInSlotsScope) == (refused > 0))
             #expect(!faults.isLatched(Root.fanInSlotsScope) && !faults.isLatched(Root.fanInCriticalScope))
-            #expect((0..<lanes).compactMap { _ in handoff.claimProducer() }.count == lanes)
+            #expect((0..<lanes).compactMap { _ in handoff.claimProducer(caller: &caller!) }.count == lanes)
         }
 
         /// One publisher, three consumers, one of them with a two-slot ring. Each consumer receives exactly the

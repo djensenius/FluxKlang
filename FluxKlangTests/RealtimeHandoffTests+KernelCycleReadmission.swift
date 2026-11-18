@@ -28,8 +28,10 @@ private func replacement(of rig: CycleRig, blockCapacity: Int = 64, perLaneQuota
 /// Pushes `pending` through `token`, runs `rig.cycle` over [0, 64) so they stay buffered, and retires it.
 @discardableResult
 private func retire(_ rig: CycleRig, _ token: ProducerToken, pending: [(Int64, KernelEventPayload)],
-                    scope: UInt32 = 0) -> KernelRetirementLoss {
-    for (frame, payload) in pending { #expect(rig.push(cycleEvent(frame, payload, scope: scope), token) == .ok) }
+                    scope: UInt32 = 0, caller: inout RefusalCallerToken) -> KernelRetirementLoss {
+    for (frame, payload) in pending {
+        #expect(rig.push(cycleEvent(frame, payload, scope: scope), token, caller: &caller) == .ok)
+    }
     #expect(rig.run(0, 64).0.pending == pending.count)
     return rig.cycle.retire()
 }
@@ -56,9 +58,12 @@ extension RealtimeHandoffTests {
         /// by the replacement at 128, not earlier; it stays unresolved until then. Kills: no re-admission; emission
         /// at the first block; the loss resolved before delivery.
         @Test func readmissionEmitsTheProgramAt128AndThenResolvesIt() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            let loss = retire(rig, token, pending: [(128, programFive)])
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            let loss = retire(rig, token, pending: [(128, programFive)], caller: &caller!)
             let next = try replacement(of: rig)
             #expect(next.carryReadmissionReport.planned == 1 && next.unresolvedRetirementLoss == loss)
             #expect(next.carryReadmissionReport.pendingCarriedEvents == 1)
@@ -74,9 +79,12 @@ extension RealtimeHandoffTests {
         /// (110, 128 frames) dispatch at the replacement's first block start, 320; the ramp restarts there with its
         /// full duration (halfway after 64 frames). Kills: a due event kept at its old frame or dropped late.
         @Test func readmissionClampsAlreadyDueEventsToTheFirstBlock() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            retire(rig, token, pending: [(100, control(7)), (110, ramp(1, 1, 128))])
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            retire(rig, token, pending: [(100, control(7)), (110, ramp(1, 1, 128))], caller: &caller!)
             let next = try replacement(of: rig)
             let (_, emitted) = block(next, 320)
             #expect(emitted == [at(100, control(7), dispatched: 320), at(110, ramp(1, 1, 128), dispatched: 320)])
@@ -86,11 +94,14 @@ extension RealtimeHandoffTests {
         /// A smaller replacement (`blockCapacity` 4) re-admits at most 4 of 6 carried `control`s, the earliest; the
         /// cut 2 stay unresolved (stale). A larger one re-admits all 6. Kills: capacity ignored; a cut not counted.
         @Test func readmissionCapacityFollowsTheReplacementsBlockCapacity() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             for (capacity, kept) in [(4, 4), (300, 6)] {
                 let rig = try CycleRig(laneCapacity: 32)
-                let token = try #require(rig.events.claimProducer())
+                let token = try RefusalCalling.claim(rig.events, &caller!)
                 let pending = (0..<6).map { (Int64(100 + $0), control(UInt8($0 + 1))) }
-                retire(rig, token, pending: pending)
+                retire(rig, token, pending: pending, caller: &caller!)
                 let next = try replacement(of: rig, blockCapacity: capacity)
                 #expect(next.carryReadmissionCapacity == min(capacity, KernelRetirementCarry.capacity))
                 let (_, emitted) = block(next, 64)
@@ -106,15 +117,18 @@ extension RealtimeHandoffTests {
         /// 256 over five blocks; exactly the 44 stay unresolved. Three writers of one key re-admit as one event that
         /// resolves all three. Kills: droppedAtRecord resolved; superseded carried events left unresolved.
         @Test func readmissionAccountsOverflowAndSupersededCarriedEvents() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 320, blockCapacity: 300, perLaneQuota: 300)
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             var pending: [(Int64, KernelEventPayload)] = []
             for index in 0..<300 {
                 let controller = UInt8(index % 128)
                 let channel = UInt8(index / 128)
                 pending.append((1_000 + Int64(index), control(controller, channel: channel)))
             }
-            #expect(retire(rig, token, pending: pending).controls == 300)
+            #expect(retire(rig, token, pending: pending, caller: &caller!).controls == 300)
             let next = try replacement(of: rig, blockCapacity: 300, perLaneQuota: 300)
             var delivered = 0
             for start in stride(from: Int64(960), to: 1_280, by: 64) { delivered += block(next, start).1.count }
@@ -123,8 +137,9 @@ extension RealtimeHandoffTests {
             #expect(stateful(next.unresolvedRetirementLoss) == [44, 0, 0])
 
             let other = try CycleRig()
-            let writer = try #require(other.events.claimProducer())
-            retire(other, writer, pending: [(100, control(7, 1)), (110, control(7, 2)), (120, control(7, 3))])
+            let writer = try RefusalCalling.claim(other.events, &caller!)
+            retire(other, writer, pending: [(100, control(7, 1)), (110, control(7, 2)), (120, control(7, 3))],
+                   caller: &caller!)
             let single = try replacement(of: other)
             #expect(block(single, 64).1 == [at(120, control(7, 3))])
             #expect(single.carryReadmissionReport.superseded == 2 && single.carryReadmissionReport.delivered == 1)
@@ -136,14 +151,17 @@ extension RealtimeHandoffTests {
         /// it); carried and own `control`s interleave by frame and a carried event precedes an own one of the same
         /// frame. Kills: own state discarding later carried state; carried events appended after the block.
         @Test func readmissionMergesInTimelineOrder() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 32)
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             let programOne = KernelEventPayload.program(channel: 1, program: 3, bank: 0)
-            retire(rig, token, pending: [(128, programFive), (140, control(7)), (150, programOne)])
+            retire(rig, token, pending: [(128, programFive), (140, control(7)), (150, programOne)], caller: &caller!)
             let next = try replacement(of: rig)
             let programNine = KernelEventPayload.program(channel: 0, program: 9, bank: 0)
             for (frame, payload) in [(Int64(100), programNine), (135, control(8)), (150, control(9))] {
-                #expect(rig.push(cycleEvent(frame, payload), token) == .ok)
+                #expect(rig.push(cycleEvent(frame, payload), token, caller: &caller!) == .ok)
             }
             #expect(block(next, 64).1 == [at(100, programNine)])
             let (result, emitted) = block(next, 128)
@@ -158,11 +176,14 @@ extension RealtimeHandoffTests {
         /// A same-frame tie on one target: the carried `control` 7 (value 1) is emitted first, then the own one
         /// (value 2), which is the state left; nothing is superseded. Kills: the tie broken towards carried state.
         @Test func readmissionSameFrameSameTargetEmitsCarriedThenOwn() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 32)
-            let token = try #require(rig.events.claimProducer())
-            retire(rig, token, pending: [(150, control(7, 1))])
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            retire(rig, token, pending: [(150, control(7, 1))], caller: &caller!)
             let next = try replacement(of: rig)
-            #expect(rig.push(cycleEvent(150, control(7, 2)), token) == .ok)
+            #expect(rig.push(cycleEvent(150, control(7, 2)), token, caller: &caller!) == .ok)
             #expect(block(next, 128).1 == [at(150, control(7, 1)), at(150, control(7, 2))])
             let report = next.carryReadmissionReport
             #expect(report.delivered == 1 && report.supersededByReplacement == 0)
@@ -172,10 +193,13 @@ extension RealtimeHandoffTests {
         /// in frame order (the carry keys ramps per scope), so the later one is the parameter's state. Kills: a
         /// cross-scope ramp superseded inside the carry; frame order lost.
         @Test func readmissionCrossScopeRampsOnOneParameterApplyInFrameOrder() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 32)
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(100, ramp(2, 1)), token) == .ok)
-            #expect(rig.push(cycleEvent(110, ramp(2, 0.25), scope: 1), token) == .ok)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(100, ramp(2, 1)), token, caller: &caller!) == .ok)
+            #expect(rig.push(cycleEvent(110, ramp(2, 0.25), scope: 1), token, caller: &caller!) == .ok)
             #expect(rig.run(0, 64).0.pending == 2)
             #expect(rig.cycle.retire().ramps == 2)
             let next = try replacement(of: rig)
@@ -189,14 +213,18 @@ extension RealtimeHandoffTests {
         /// `program` at 4,000 does not cover the carried one at 5,000 (later state), so both are carried, own first,
         /// and the next hop keeps the later. Kills: a covered slot carried again; a later carried event superseded.
         @Test func readmissionRetireSupersedesCoveredSlotsAndCarriesTheRestAfterOwn() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 32)
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             let programSix = KernelEventPayload.program(channel: 0, program: 6, bank: 0)
-            retire(rig, token, pending: [(5_000, ramp(2, 1)), (5_000, control(7)), (5_000, programFive)])
+            retire(rig, token, pending: [(5_000, ramp(2, 1)), (5_000, control(7)), (5_000, programFive)],
+                   caller: &caller!)
             let next = try replacement(of: rig)
             let own = [cycleEvent(4_000, programSix), cycleEvent(6_000, ramp(2, 0.25), scope: 1),
                        cycleEvent(6_000, control(7, 4), scope: 1)]
-            for event in own { #expect(rig.push(event, token) == .ok) }
+            for event in own { #expect(rig.push(event, token, caller: &caller!) == .ok) }
             #expect(block(next, 64).1.isEmpty)
             #expect(stateful(next.retire()) == [2, 2, 1])
             let report = next.carryReadmissionReport
@@ -215,19 +243,22 @@ extension RealtimeHandoffTests {
         /// dropped at record. All 447 are counted in the loss. Kills: carried events crowding out own ones; a covered
         /// slot counted as loss; an unrecorded event uncounted.
         @Test func readmissionRetireOverflowRecordsOwnFirstAndCountsTheRest() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig(laneCapacity: 320, blockCapacity: 300, perLaneQuota: 300)
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             var carried: [(Int64, KernelEventPayload)] = []
             for index in 0..<256 {
                 carried.append((10_000 + Int64(index), control(UInt8(index % 128), channel: UInt8(index / 128))))
             }
-            retire(rig, token, pending: carried)
+            retire(rig, token, pending: carried, caller: &caller!)
             let next = try replacement(of: rig, blockCapacity: 300, perLaneQuota: 300)
             #expect(next.carryReadmissionReport.planned == 256)
             for index in 0..<200 {
                 let channel = UInt8(index < 10 ? 0 : 2 + index / 128)
                 let event = cycleEvent(20_000 + Int64(index), control(UInt8(index % 128), channel: channel))
-                #expect(rig.push(event, token) == .ok)
+                #expect(rig.push(event, token, caller: &caller!) == .ok)
             }
             #expect(block(next, 64).0.pending == 200)
             #expect(next.retire().controls == 447)
@@ -257,10 +288,13 @@ extension RealtimeHandoffTests {
         /// loss, carried again and re-admitted by the next replacement. Kills: re-admission while silenced; a pending
         /// carried event lost at retirement.
         @Test func readmissionWaitsWhileSilencedAndIsCarriedAgain() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             for faulted in [false, true] {
                 let rig = try CycleRig()
-                let token = try #require(rig.events.claimProducer())
-                retire(rig, token, pending: [(100, programFive)])
+                let token = try RefusalCalling.claim(rig.events, &caller!)
+                retire(rig, token, pending: [(100, programFive)], caller: &caller!)
                 let next = try replacement(of: rig)
                 if faulted {
                     #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
@@ -283,9 +317,12 @@ extension RealtimeHandoffTests {
         /// A repeated `retire()` of a replacement with a carried event pending carries it once: the second returns no
         /// loss, a `run` after it emits nothing, and the next replacement inherits one event. Kills: a double carry.
         @Test func readmissionRepeatedRetireCarriesOnce() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            retire(rig, token, pending: [(5_000, programFive)])
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            retire(rig, token, pending: [(5_000, programFive)], caller: &caller!)
             let next = try replacement(of: rig)
             #expect(block(next, 64).1.isEmpty && next.carryReadmissionReport.pendingCarriedEvents == 1)
             #expect(next.retire().programs == 1 && next.retire() == KernelRetirementLoss())
@@ -301,9 +338,13 @@ extension RealtimeHandoffTests {
         /// ramp is kept and re-admitted as a jump (the same as zero), beside the carried `program`; only the NaN one
         /// stays unresolved. Kills: one invalid ramp refusing the plan; a negative duration dropped as invalid.
         @Test func readmissionKeepsNegativeDurationRampsAsJumpsAndSkipsNonFinite() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            retire(rig, token, pending: [(100, ramp(1, .nan)), (110, programFive), (120, ramp(3, 1, -5))])
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            retire(rig, token, pending: [(100, ramp(1, .nan)), (110, programFive), (120, ramp(3, 1, -5))],
+                   caller: &caller!)
             let next = try replacement(of: rig)
             #expect(block(next, 64).1 == [at(110, programFive), at(120, ramp(3, 1, -5))])
             let report = next.carryReadmissionReport
@@ -314,10 +355,14 @@ extension RealtimeHandoffTests {
         /// The takeover releases the retired cycle's sounding note at the first block start, before the carried
         /// `program`, which keeps its own frame. Kills: re-admission held back by the takeover.
         @Test func readmissionRunsBehindTheTakeoverRelease() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(10, .noteOn(channel: 0, note: 60, velocity: 90)), token) == .ok)
-            retire(rig, token, pending: [(100, programFive)])
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            #expect(rig.push(cycleEvent(10, .noteOn(channel: 0, note: 60, velocity: 90)), token, caller: &caller!)
+                    == .ok)
+            retire(rig, token, pending: [(100, programFive)], caller: &caller!)
             let next = try replacement(of: rig)
             let release = CycleEmission(event: KernelEvent(frame: 64, scope: 0, sequence: KernelCycle.releaseSequence,
                                                            payload: .noteOff(channel: 0, note: 60)), frame: 64)
@@ -327,9 +372,12 @@ extension RealtimeHandoffTests {
         /// A carried ramp on parameter 9 (outside the rig's 4) is planned but `RampSlots` refuses it on apply: never
         /// emitted, counted `refused`, and it stays unresolved. Kills: a refused carried event counted as delivered.
         @Test func readmissionRefusedRampStaysUnresolved() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            retire(rig, token, pending: [(100, ramp(9, 1)), (110, programFive)])
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            retire(rig, token, pending: [(100, ramp(9, 1)), (110, programFive)], caller: &caller!)
             let next = try replacement(of: rig)
             #expect(block(next, 64).1 == [at(110, programFive)])
             let report = next.carryReadmissionReport
@@ -340,9 +388,12 @@ extension RealtimeHandoffTests {
         /// A carried ramp whose completion overflows `Int64` makes the plan refuse `.frameOverflow`: nothing is
         /// re-admitted and the whole carry stays unresolved. Kills: a partial plan after a refusal.
         @Test func readmissionPlanRefusalReadmitsNothing() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            retire(rig, token, pending: [(100, programFive), (Int64.max - 10, ramp(1, 1, 100))])
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            retire(rig, token, pending: [(100, programFive), (Int64.max - 10, ramp(1, 1, 100))], caller: &caller!)
             let next = try replacement(of: rig)
             let report = next.carryReadmissionReport
             #expect(report.planRefusal == .frameOverflow && report.planned == 0 && report.pendingCarriedEvents == 0)
@@ -353,9 +404,13 @@ extension RealtimeHandoffTests {
         /// A ramp whose completion would overflow `Int64` but is superseded inside the carry (a later ramp on the
         /// same scope and parameter) does not refuse the plan. Kills: the overflow checked before supersession.
         @Test func readmissionSupersededOverflowingRampDoesNotRefuse() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            retire(rig, token, pending: [(Int64.max - 10, ramp(1, 1, 100)), (Int64.max - 5, ramp(1, 0.5))])
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            retire(rig, token, pending: [(Int64.max - 10, ramp(1, 1, 100)), (Int64.max - 5, ramp(1, 0.5))],
+                   caller: &caller!)
             let report = try replacement(of: rig).carryReadmissionReport
             #expect(report.planRefusal == nil && report.planned == 1 && report.superseded == 1)
         }
@@ -365,10 +420,13 @@ extension RealtimeHandoffTests {
         /// order, would be cut; the whole plan is still refused (`.frameOverflow`) and nothing is planned or cut.
         /// Kills: the overflow checked only on the kept survivors.
         @Test func readmissionOverflowingRampRefusesThePlanEvenWhenItWouldBeCut() throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
             let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
+            let token = try RefusalCalling.claim(rig.events, &caller!)
             retire(rig, token, pending: [(100, control(7)), (110, programFive), (120, ramp(1, 0.5)),
-                                         (Int64.max - 10, ramp(1, 1, 100))])
+                                         (Int64.max - 10, ramp(1, 1, 100))], caller: &caller!)
             let next = try replacement(of: rig, blockCapacity: 2, perLaneQuota: 2)
             let report = next.carryReadmissionReport
             #expect(report.planRefusal == .frameOverflow && report.planned == 0 && report.cut == KernelRetirementLoss())
