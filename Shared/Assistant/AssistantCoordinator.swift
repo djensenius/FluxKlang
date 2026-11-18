@@ -114,7 +114,8 @@ final class AssistantCoordinator {
             settledStudioDraft = draft
             routingSubmissionID = nil
             await persistPendingDraft()
-            return .pendingDraft(draft)
+            // A discard, newer draft or commit during the save owns the pending draft; never report it as ours.
+            return .pendingDraft(pendingStudioDraft == draft ? draft : nil)
         case .validatePendingStudioDraft:
             guard let draft = pendingStudioDraft else { return .pendingDraft(nil) }
             let wasSettled = settledStudioDraft == draft
@@ -143,7 +144,7 @@ final class AssistantCoordinator {
             pendingStudioDraft = refreshed
             if wasSettled { settledStudioDraft = refreshed }
             await persistPendingDraft()
-            return .pendingDraft(refreshed)
+            return .pendingDraft(pendingStudioDraft == refreshed ? refreshed : nil)
         case .openReview:
             guard pendingStudioDraft != nil else {
                 navigationTarget = nil
