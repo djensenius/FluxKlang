@@ -283,18 +283,19 @@ extension HostAuthorityTests {
             #expect(await held.owner.authority.snapshot().lease?.windows == [other])
         }
 
-        @Test(.timeLimit(.minutes(1))) func reappearedRootAppliesAfterQueuedDetach() async throws {
+        @Test(.timeLimit(.minutes(1))) func reappearedRootAppliesOnlyAfterReopen() async throws {
             let held = try await LifecycleHeldTurn()
             let completion = held.lifecycle.detach(Bench.window)
             await held.fence(completion)
-            // The fence keeps no history: an apply after it succeeds and is detached on the turn.
-            #expect(await held.owner.beginApply(window: Bench.window) == .success(held.session))
-            #expect(await held.owner.authority.snapshot().lease?.windows == [Bench.window])
+            // The fence closes the root: an apply after it is refused and attaches nothing.
+            #expect(await held.owner.beginApply(window: Bench.window) == .failure(.windowClosed))
+            #expect(await held.owner.authority.snapshot().lease?.windows == nil)
             held.release.open()
             #expect(await held.replacement.value == .success(.connected(held.session)))
             await completion.wait()
-            #expect(await held.owner.authority.snapshot().lease?.windows == [])
-            // AppRootView keeps its WindowID across disappear/reappear.
+            // AppRootView keeps its WindowID across disappear/reappear; it applies only once reopened.
+            #expect(await held.owner.beginApply(window: Bench.window) == .failure(.windowClosed))
+            await held.lifecycle.open(Bench.window).wait()
             #expect(await held.owner.beginApply(window: Bench.window) == .success(held.session))
             #expect(await held.owner.authority.snapshot().lease?.windows == [Bench.window])
         }
