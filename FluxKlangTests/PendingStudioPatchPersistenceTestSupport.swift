@@ -185,6 +185,11 @@ final class PendingPersistenceFixture {
             draft, expectedPending: owner.pendingStudioDraft, preparedContext: context, currentContext: context)
     }
 
+    func commitResult(_ draft: StudioPatchDraft) async -> PreparedRoutingCommitResult {
+        await owner.commitPreparedRoutingResult(
+            draft, expectedPending: owner.pendingStudioDraft, preparedContext: context, currentContext: context)
+    }
+
     func attempt() throws -> PendingStudioPatchStorageAttempt {
         try #require(owner.latestStorageAttempt)
     }

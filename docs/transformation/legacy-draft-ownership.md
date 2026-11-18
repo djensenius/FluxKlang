@@ -390,3 +390,38 @@ errors" line (it reflects the card's saved snapshot, not a revalidated draft), a
 replacement while open, the saved text of earlier replies, whether commit reports a failed
 save, exclusion across coordinators, store instances or processes, and migration
 activation.
+
+## P14b10 / #836 — prepared-routing replies acknowledge their own save
+
+Part of #122 and #48; both remain open. `commitPreparedRoutingResult` returns either
+`notPublished` or the staged draft and its invocation's snapshot-qualified storage
+outcome. The Boolean API delegates once and still means in-memory staging, including
+when saving fails. Admission, cancellation/restoration and the final full-value equality
+publication gate are unchanged: equal-value ABA can still publish; no lifetime identity
+is introduced.
+
+Persistence retains the entry snapshot and its outcome locally, never reading
+`latestStorageAttempt` to acknowledge a commit. Catch-up keeps recording fresh historical
+attempts and stops on failure. A different snapshot's catch-up cannot acknowledge the
+entry snapshot; the latest same-full-value-snapshot outcome from that invocation can.
+Cancellation restoration is a separate persistence call and does not publish success.
+
+Real routing chat and natural-language Siri consume the detailed result and share
+`AssistantDraftReply`'s warning: "The draft is ready to review, but its save was not
+confirmed. It may be unavailable after restarting." A staged draft whose own write was
+not confirmed remains reviewable with its own cards in chat. Rejected, cancelled or
+nonmatching overtaken work publishes no success/cards. Confirmed saving adds no
+durability or current-file authority claim.
+
+The existing audited pending-draft suite adds real-store tests for successful and
+encoding-failed acknowledgements, Boolean compatibility, blocked-parent chat, held
+failed chat overtaken by a successful save (including equal-value ABA), different- and
+same-snapshot catch-up, and cancellation/restoration. Forwarding gates are released and
+owned tasks joined before fixture cleanup. No AppModel is initialized. The isolated
+SwiftPM mirror does not execute Siri; Apple compile gates and exact-head hosted Mac
+observation remain required.
+
+Not covered: typed build/validate/discard failure presentation, post-acceptance deletion
+failure presentation, automatic retries, native authorization, durability, writer
+exclusion across coordinators/stores/processes, startup/archive/schema changes or
+migration activation. Earlier replies and card-id matching retain their existing limits.
