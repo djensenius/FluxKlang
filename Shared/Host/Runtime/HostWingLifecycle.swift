@@ -99,6 +99,8 @@ final class HostWingLifecycle {
     private(set) var lastReplacementOutcome: Outcome?
     @ObservationIgnored private var reserved = false
     @ObservationIgnored private var waiting: [Turn] = []
+    /// Per-window count of submitted detaches; an `open` reopens only if none was submitted after it.
+    @ObservationIgnored private var detachSubmissions: [WindowID: UInt64] = [:]
 
     init(owner: HostAuthorityOwner? = nil) {
         self.owner = owner
@@ -127,16 +129,32 @@ final class HostWingLifecycle {
 
     /// Submission is synchronous, including reservation before any Observation callback.
     /// The task retains this sequencer until the actual owner call has completed.
-    /// The fence is a task started at submission (a MainActor job, then one owner hop); an apply
-    /// registered after it lands is not fenced. The detach itself still waits for its FIFO turn.
+    /// The fence is a task started at submission (a MainActor job, then one owner hop); it also closes
+    /// `window` until `open`. The detach itself waits for its FIFO turn, then for its fence.
     @discardableResult
     func detach(_ window: WindowID) -> Completion {
         let owner = owner
+        detachSubmissions[window, default: 0] &+= 1
         let fence = Task { if let owner { await owner.fenceApplies(for: window) } }
         let turn = reserve()
         return Completion(fence: fence, task: Task {
             await turn.wait()
+            await fence.value
             await owner?.windowClosed(window)
+            handoff()
+        })
+    }
+
+    /// Reopens `window` on its own FIFO turn, so a detach queued before it closes it first. A detach
+    /// submitted after it wins: its fence already closed `window`, so this turn then leaves it closed. No fence.
+    @discardableResult
+    func open(_ window: WindowID) -> Completion {
+        let owner = owner
+        let submitted = detachSubmissions[window, default: 0]
+        let turn = reserve()
+        return Completion(fence: Task {}, task: Task {
+            await turn.wait()
+            if detachSubmissions[window, default: 0] == submitted { await owner?.windowOpened(window) }
             handoff()
         })
     }

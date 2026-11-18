@@ -55,8 +55,10 @@ actor HostAuthorityOwner {
     private(set) var grantRevision: UInt64
     private var sessionVersion = UUID()
     /// In-flight `beginApply` calls only, each removed on return: its window and whether that
-    /// window closed meanwhile. No closed-window history outlives the call.
+    /// window closed meanwhile. Closed-window identity across calls lives in `closedWindows`.
     private var applies: [UUID: (window: WindowID, closed: Bool)] = [:]
+    /// Window identities closed or fenced and not reopened since (AU7c4); no permission or authority.
+    private var closedWindows: Set<WindowID> = []
     private var lifecycleBusy = false
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     /// Internal, init-only test seam; production never suspends at these checkpoints.
@@ -148,9 +150,12 @@ actor HostAuthorityOwner {
 
     /// `window`'s apply gesture: acquires a free lease, keeps its own, or attaches to an
     /// unattached one; another rendering window refuses it (decision 6). Returns the session.
-    /// A loss or a close of `window` while it is in flight refuses it, the loss first.
+    /// A loss or a close of `window` while it is in flight refuses it, the loss first; so does a
+    /// closed `window` until `windowOpened` reopens it.
     func beginApply(window: WindowID) async -> Result<UUID, ApplyRefusal> {
-        guard let session else { return .failure(.noSession) }
+        guard let session, !closedWindows.contains(window) else {
+            return .failure(session == nil ? .noSession : .windowClosed)
+        }
         let version = sessionVersion
         let apply = UUID()
         applies[apply] = (window, false)
@@ -181,18 +186,27 @@ actor HostAuthorityOwner {
 
     private func staleness(of apply: UUID, _ version: UUID) -> ApplyRefusal? {
         guard version == sessionVersion else { return .noSession }
-        return applies[apply]?.closed == true ? .windowClosed : nil
+        guard let entry = applies[apply] else { return nil }
+        // Defence in depth: any close or fence after registration also flags the entry, so the set never decides.
+        return entry.closed || closedWindows.contains(entry.window) ? .windowClosed : nil
     }
 
-    /// Marks `window`'s in-flight applies closed, so each is refused at its next recheck. Takes no lock
-    /// and keeps no history: a later apply is not fenced. A queued detach sends this before its turn.
+    /// Marks `window`'s in-flight applies closed, so each is refused at its next recheck, and closes
+    /// `window` until `windowOpened`. Takes no lock. A queued detach sends this before its turn.
     func fenceApplies(for window: WindowID) {
+        closedWindows.insert(window)
         for (id, apply) in applies where apply.window == window { applies[id]?.closed = true }
+    }
+
+    /// The root of `window` (re)appeared: later applies may render again. Takes no lock; the sequencer
+    /// FIFO orders it after a queued detach. Applies fenced in an earlier lifetime stay refused.
+    func windowOpened(_ window: WindowID) {
+        closedWindows.remove(window)
     }
 
     /// Window close: a rendering window detaches, dropping its tickets; the lease stays held.
     /// Before any wait it fences `window`'s in-flight applies, which are then refused; this close
-    /// then detaches whatever one holding the lock attached. A later apply is not fenced.
+    /// then detaches whatever one holding the lock attached. `window` stays closed until reopened.
     func windowClosed(_ window: WindowID) async {
         fenceApplies(for: window)
         await lockLifecycle()

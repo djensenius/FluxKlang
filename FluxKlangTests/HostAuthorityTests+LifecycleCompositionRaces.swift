@@ -271,10 +271,83 @@ extension HostAuthorityTests {
             #expect(lifecycle.owner == nil)
             _ = await lifecycle.replace { probe.operation(.success(.acceptanceFailure)) }
             let completion = lifecycle.detach(Bench.window)
+            let opened = lifecycle.open(Bench.window)
+            #expect(lifecycle.isBusy)
             await completion.fenced()
+            await opened.fenced()
             await completion.wait()
+            await opened.wait()
             #expect(lifecycle.lastReplacementOutcome == .success(.acceptanceFailure))
             #expect(!lifecycle.isBusy && probe.finished == 1)
+        }
+
+        @Test(.timeLimit(.minutes(1))) func queuedOpenFollowsDetachOnItsTurn() async throws {
+            let held = try await LifecycleHeldTurn()
+            let detach = held.lifecycle.detach(Bench.window)
+            let reopen = held.lifecycle.open(Bench.window)
+            await held.fence(detach)
+            await reopen.fenced()
+            // Both wait behind the replacement, so the reopen cannot overtake the queued detach.
+            #expect(await held.owner.beginApply(window: Bench.window) == .failure(.windowClosed))
+            #expect(held.lifecycle.isBusy)
+            held.release.open()
+            #expect(await held.replacement.value == .success(.connected(held.session)))
+            await reopen.wait()
+            await detach.wait()
+            #expect(await held.owner.beginApply(window: Bench.window) == .success(held.session))
+            #expect(await held.owner.authority.snapshot().lease?.windows == [Bench.window])
+            // A later detach closes it again, and it stays closed after that detach completes.
+            await held.lifecycle.detach(Bench.window).wait()
+            #expect(await held.owner.beginApply(window: Bench.window) == .failure(.windowClosed))
+            #expect(await held.owner.authority.snapshot().lease?.windows == [])
+            #expect(!held.lifecycle.isBusy)
+        }
+
+        @Test(.timeLimit(.minutes(1))) func laterDetachKeepsEarlierOpenFromReopening() async throws {
+            let held = try await LifecycleHeldTurn()
+            let (probe, later, queued, holding, hold) = (LifecycleProbe(), UUID(), LifecycleGate(), LifecycleGate(),
+                                                        LifecycleGate())
+            let reopen = held.lifecycle.open(Bench.window)
+            // A second replacement queued between them holds the turn after the open's and before the detach's.
+            let replacement = Task {
+                queued.open()
+                return await held.lifecycle.replace {
+                    probe.operation(.success(.connected(later)), hooks: .init(finish: {
+                        holding.open()
+                        await hold.wait()
+                    }))
+                }
+            }
+            await queued.wait()
+            let detach = held.lifecycle.detach(Bench.window)
+            await held.fence(detach)
+            held.release.open()
+            await reopen.wait()
+            await holding.wait()
+            // The open's turn ran before the detach's, but the detach was submitted later, so the root stays closed.
+            #expect(await held.owner.beginApply(window: Bench.window) == .failure(.windowClosed))
+            hold.open()
+            #expect(await replacement.value == .success(.connected(later)))
+            await detach.wait()
+            #expect(await held.owner.beginApply(window: Bench.window) == .failure(.windowClosed))
+            #expect(!held.lifecycle.isBusy)
+        }
+
+        @Test(.timeLimit(.minutes(1))) func openAfterLaterDetachReopens() async throws {
+            let held = try await LifecycleHeldTurn()
+            let first = held.lifecycle.open(Bench.window)
+            let detach = held.lifecycle.detach(Bench.window)
+            let second = held.lifecycle.open(Bench.window)
+            await held.fence(detach)
+            #expect(await held.owner.beginApply(window: Bench.window) == .failure(.windowClosed))
+            held.release.open()
+            #expect(await held.replacement.value == .success(.connected(held.session)))
+            await first.wait()
+            await detach.wait()
+            await second.wait()
+            // Only the open submitted after the detach reopens the root.
+            #expect(await held.owner.beginApply(window: Bench.window) == .success(held.session))
+            #expect(await held.owner.authority.snapshot().lease?.windows == [Bench.window])
         }
     }
 }

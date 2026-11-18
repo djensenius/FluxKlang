@@ -117,6 +117,33 @@ extension HostAuthorityTests {
             #expect(await owner.beginApply(window: Owner.windowOne) == .failure(.noSession))
             #expect(await owner.authority.snapshot().lease == nil)
         }
+
+        @Test func closedRootRefusesUntilReopened() async throws {
+            let owner = try await Owner.applying()
+            let session = try #require(await owner.session)
+            await owner.windowClosed(Owner.windowOne)
+            #expect(await owner.beginApply(window: Owner.windowOne) == .failure(.windowClosed))
+            #expect(await owner.authority.snapshot().lease?.windows == [])
+            await owner.windowOpened(Owner.windowOne)
+            #expect(await owner.beginApply(window: Owner.windowOne) == .success(session))
+            #expect(await owner.authority.snapshot().lease?.windows == [Owner.windowOne])
+            // Another window is never closed by windowOne's close or reopened by its open.
+            await owner.windowClosed(Owner.windowOne)
+            #expect(await owner.beginApply(window: Owner.windowTwo) == .success(session))
+            #expect(await owner.authority.snapshot().lease?.windows == [Owner.windowTwo])
+        }
+
+        @Test func fenceAloneClosesTheRoot() async throws {
+            let owner = try await Owner.owner()
+            let session = UUID()
+            await owner.connected(session: session)
+            await owner.fenceApplies(for: Owner.windowOne)
+            #expect(await owner.beginApply(window: Owner.windowOne) == .failure(.windowClosed))
+            #expect(await owner.authority.snapshot().lease == nil)
+            // Liveness of a never-opened window is not claimed: it is simply not closed.
+            #expect(await owner.beginApply(window: Owner.windowTwo) == .success(session))
+            #expect(await owner.authority.snapshot().lease?.windows == [Owner.windowTwo])
+        }
     }
 }
 
