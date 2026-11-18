@@ -65,9 +65,16 @@ final class HostWingLifecycle {
     }
 
     struct Completion {
+        fileprivate let fence: Task<Void, Never>
         fileprivate let task: Task<Void, Never>
 
-        func wait() async { await task.value }
+        /// Joins only the early fence of the window's in-flight applies, not the detach itself.
+        func fenced() async { await fence.value }
+
+        func wait() async {
+            await fence.value
+            await task.value
+        }
     }
 
     @MainActor
@@ -120,10 +127,14 @@ final class HostWingLifecycle {
 
     /// Submission is synchronous, including reservation before any Observation callback.
     /// The task retains this sequencer until the actual owner call has completed.
+    /// The fence is a task started at submission (a MainActor job, then one owner hop); an apply
+    /// registered after it lands is not fenced. The detach itself still waits for its FIFO turn.
     @discardableResult
     func detach(_ window: WindowID) -> Completion {
+        let owner = owner
+        let fence = Task { if let owner { await owner.fenceApplies(for: window) } }
         let turn = reserve()
-        return Completion(task: Task {
+        return Completion(fence: fence, task: Task {
             await turn.wait()
             await owner?.windowClosed(window)
             handoff()
