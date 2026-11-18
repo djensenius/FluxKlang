@@ -184,11 +184,17 @@ actor HostAuthorityOwner {
         return applies[apply]?.closed == true ? .windowClosed : nil
     }
 
+    /// Marks `window`'s in-flight applies closed, so each is refused at its next recheck. Takes no lock
+    /// and keeps no history: a later apply is not fenced. A queued detach sends this before its turn.
+    func fenceApplies(for window: WindowID) {
+        for (id, apply) in applies where apply.window == window { applies[id]?.closed = true }
+    }
+
     /// Window close: a rendering window detaches, dropping its tickets; the lease stays held.
     /// Before any wait it fences `window`'s in-flight applies, which are then refused; this close
     /// then detaches whatever one holding the lock attached. A later apply is not fenced.
     func windowClosed(_ window: WindowID) async {
-        for (id, apply) in applies where apply.window == window { applies[id]?.closed = true }
+        fenceApplies(for: window)
         await lockLifecycle()
         defer { unlockLifecycle() }
         _ = await opened.value
