@@ -94,14 +94,10 @@ indirect enum RingOutcome: Sendable, Equatable {
 private final class RingWatch: Sendable {
     static let retryLimit = 200_000_000
     let total: UInt64
-    /// `waitLimit` bounds the arrival wait and the cleanup join.
-    let stallLimit, capLimit, waitLimit: Duration
-    let arrived = Atomic<Int>(0)
-    let started = Atomic<Bool>(false)
-    let cancelled = Atomic<Bool>(false)
-    let exited = Atomic<Int>(0)
-    let produced = Atomic<UInt64>(0)
-    let consumed = Atomic<UInt64>(0)
+    let stallLimit, capLimit, waitLimit: Duration  // `waitLimit` bounds the arrival wait and the cleanup join.
+    let arrived = Atomic<Int>(0), exited = Atomic<Int>(0)
+    let started = Atomic<Bool>(false), cancelled = Atomic<Bool>(false)
+    let produced = Atomic<UInt64>(0), consumed = Atomic<UInt64>(0)
     let sides = Mutex<(producer: SideResult, consumer: SideResult)>((SideResult(), SideResult()))
 
     init(total: UInt64, stall: Duration = .seconds(10), cap: Duration = .seconds(45), wait: Duration = .seconds(3)) {
@@ -167,19 +163,25 @@ private final class RingWatch: Sendable {
 
 private func mix(_ value: UInt64) -> UInt64 { (value &+ 1) &* 0x9E37_79B9_7F4A_7C15 }
 
-/// Bounded spin retry: `false` once `watch` is cancelled or after `retryLimit` consecutive failures (worker loops also
-/// check `cancelled` whenever their count is a multiple of 1,024). `sched_yield` adds no happens-before edge under
-/// TSan, whereas Swift concurrency's runtime annotations do, which would hide a missing release or acquire in the ring.
+/// Bounded spin retry: `false` once `watch` is cancelled or after `retryLimit` consecutive failures. `sched_yield` adds
+/// no happens-before edge under TSan, whereas Swift concurrency's runtime annotations do, which would hide a missing
+/// release or acquire in the ring.
 private func retry(_ failures: inout Int, _ watch: RingWatch) -> Bool {
     failures += 1
     if failures & 1_023 == 0 { sched_yield() }
     return failures < RingWatch.retryLimit && !watch.cancelled.load(ordering: .relaxed)
 }
 
+/// Worker loops poll `cancelled` once `count` reaches `next`, then 1,024 later (a `popAll` batch skips multiples).
+private func stopped(_ count: UInt64, _ next: inout UInt64, _ watch: RingWatch) -> Bool {
+    guard count >= next else { return false }
+    next = count + 1_024
+    return watch.cancelled.load(ordering: .relaxed)
+}
+
 private func produce(_ ring: SPSCRing<Stamp>, _ watch: RingWatch) -> SideResult {
-    var side = SideResult()
-    var failures = 0
-    while side.count < watch.total, side.count & 1_023 != 0 || !watch.cancelled.load(ordering: .relaxed) {
+    var (side, failures, nextPoll) = (SideResult(), 0, UInt64(0))
+    while side.count < watch.total, !stopped(side.count, &nextPoll, watch) {
         if ring.tryPush(Stamp(side.count)) == .ok {
             side.checksum &+= mix(side.count)
             side.count += 1
@@ -195,8 +197,7 @@ private func produce(_ ring: SPSCRing<Stamp>, _ watch: RingWatch) -> SideResult 
 
 /// Alternates `tryPop` and `popAll` and checks exact FIFO order and element integrity.
 private func consume(_ ring: SPSCRing<Stamp>, _ watch: RingWatch) -> SideResult {
-    var side = SideResult()
-    var failures = 0
+    var (side, failures, nextPoll) = (SideResult(), 0, UInt64(0))
     let receive = { (value: Stamp) in
         if !value.isConsistent { side.torn += 1 }
         if value.sequence != side.count { side.mismatches += 1 }
@@ -205,7 +206,7 @@ private func consume(_ ring: SPSCRing<Stamp>, _ watch: RingWatch) -> SideResult 
         watch.consumed.store(side.count, ordering: .relaxed)
         failures = 0
     }
-    while side.count < watch.total, side.count & 1_023 != 0 || !watch.cancelled.load(ordering: .relaxed) {
+    while side.count < watch.total, !stopped(side.count, &nextPoll, watch) {
         if side.count % 2 == 0, let value = ring.tryPop() {
             receive(value)
         } else if ring.popAll(limit: 7, receive) == 0, !retry(&failures, watch) {
