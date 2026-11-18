@@ -3,8 +3,9 @@ extension MIDICIPropertyDataMessage {
     /// the length H of the header data can be read.
     private static let lengthOfHeaderEnd = MIDICILayout.headerBytes + 3
     /// Bytes of everything but the header data and the property data (the common header, the request id, three
-    /// length or chunk fields of two bytes and the length of the property data).
-    private static let fixedBytes = 22
+    /// length or chunk fields of two bytes and the length of the property data). `MIDICIPropertyChunker` sizes its
+    /// chunks with it too.
+    static let fixedBytes = 22
 
     // MARK: Decode
 

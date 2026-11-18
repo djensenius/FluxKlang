@@ -101,14 +101,17 @@ jobs:
           echo "| Debug | $n | source scans ran |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Release, allocation probe
-        # Optimized: readmissionRenderPathAllocatesNothing() expects zero render-path allocations.
+        # Optimized: readmissionRenderPathAllocatesNothing() expects zero render-path allocations, and the four
+        # FaultRaiseAllocationBounds probes zero allocations on the fault-chain raise paths they drive.
         run: |
           cd "$MIRROR"
           FLUXKLANG_AUDIT_RUN_ID=$(uuidgen) swift test --disable-xctest -c release -Xswiftc -enable-testing 2>&1 \
             | tee "$LOGS/release.log"
           n=$(bash "$GITHUB_WORKSPACE/scripts/kernel-mirror/check-log.sh" "$LOGS/release.log" \
-            'readmissionRenderPathAllocatesNothing()' 'readmissionRenderSourcesHaveNoLockOrArrayToken()')
-          echo "| Release | $n | allocation probe ran and passed |" >> "$GITHUB_STEP_SUMMARY"
+            'readmissionRenderPathAllocatesNothing()' 'readmissionRenderSourcesHaveNoLockOrArrayToken()' \
+            'chainTokenRaisePathsAllocateNothing()' 'sysexFaultingAcceptAllocatesNothing()' \
+            'retireBacklogAndContendedRetireAllocateNothing()' 'criticalRefusalAllocatesNothing()')
+          echo "| Release | $n | allocation probes ran and passed |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Thread Sanitizer, stress/cycle/re-admission suites
         run: |

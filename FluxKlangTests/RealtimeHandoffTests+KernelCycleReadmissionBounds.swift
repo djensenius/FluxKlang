@@ -450,31 +450,38 @@ private let countingLogger: MallocLogger = { type, _, _, _, _, _ in
     probedAllocations.add(1, ordering: .relaxed)
 }
 
-/// Whether this build is optimized (`-O`), where the existing `run` path allocates nothing either.
-private let optimizedBuild = !_isDebugAssertConfiguration()
+/// Serializes every allocation probe in the process (this suite's and `FaultRaiseAllocationBounds`'): held across
+/// the hook's install, the body and the uninstall, so parallel probes never find the hook set by one another.
+private let allocationProbeGate = Mutex(())
 
-/// Whether libmalloc's `malloc_logger` hook exists and is unset (no other tool is using it).
-private func mallocLoggerIsFree() -> Bool {
+/// Whether this build is optimized (`-O`), where the existing `run` path and the fault raise paths allocate nothing.
+let optimizedBuild = !_isDebugAssertConfiguration()
+
+/// Whether libmalloc's `malloc_logger` hook exists and is unset (no other tool is using it). Reads it under
+/// `allocationProbeGate`, so a probe running in parallel is not mistaken for another tool.
+func mallocLoggerIsFree() -> Bool {
     guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "malloc_logger") else { return false }
-    return symbol.assumingMemoryBound(to: MallocLogger?.self).pointee == nil
+    return allocationProbeGate.withLock { _ in symbol.assumingMemoryBound(to: MallocLogger?.self).pointee == nil }
 }
 
 /// Whether this process runs under Thread Sanitizer.
-private let threadSanitized = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "__tsan_init") != nil
+let threadSanitized = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "__tsan_init") != nil
 
 /// The allocations `body` makes on the calling thread, counted through libmalloc's process-wide `malloc_logger`
 /// hook, or `nil` when the hook is missing or already in use. Counts every zone's `malloc`, `calloc`, `realloc` and
 /// `valloc`, including Swift's object and buffer allocations; does not see stack memory, `mmap` or allocations on
-/// other threads.
-private func allocations(_ body: () -> Void) -> Int? {
+/// other threads. Holds `allocationProbeGate` throughout.
+func allocations(_ body: () -> Void) -> Int? {
     guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "malloc_logger") else { return nil }
     let slot = symbol.assumingMemoryBound(to: MallocLogger?.self)
-    guard slot.pointee == nil else { return nil }
-    probedAllocations.store(0, ordering: .relaxed)
-    probedThread.store(UInt(bitPattern: pthread_self()), ordering: .relaxed)
-    slot.pointee = countingLogger
-    body()
-    slot.pointee = nil
-    probedThread.store(0, ordering: .relaxed)
-    return probedAllocations.load(ordering: .relaxed)
+    return allocationProbeGate.withLock { _ -> Int? in
+        guard slot.pointee == nil else { return nil }
+        probedAllocations.store(0, ordering: .relaxed)
+        probedThread.store(UInt(bitPattern: pthread_self()), ordering: .relaxed)
+        slot.pointee = countingLogger
+        body()
+        slot.pointee = nil
+        probedThread.store(0, ordering: .relaxed)
+        return probedAllocations.load(ordering: .relaxed)
+    }
 }
