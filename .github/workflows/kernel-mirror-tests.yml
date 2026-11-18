@@ -91,6 +91,7 @@ jobs:
           FLUXKLANG_AUDIT_RUN_ID=$(uuidgen) swift test --disable-xctest 2>&1 | tee "$LOGS/debug.log"
           n=$(bash "$GITHUB_WORKSPACE/scripts/kernel-mirror/check-log.sh" "$LOGS/debug.log" \
             'readmissionRenderSourcesHaveNoLockOrArrayToken()' \
+            'carryPlanningSourcesHaveNoAllocationGrowthOrLockToken()' \
             'retirementCarryHandoffRetireSourceHasNoArrayOrLockToken()' \
             'carryRecordSourceContainsNoArrayMutation()' \
             'faultRaiseInventoryMatchesTheDocumentedSites()' \
@@ -109,6 +110,7 @@ jobs:
             | tee "$LOGS/release.log"
           n=$(bash "$GITHUB_WORKSPACE/scripts/kernel-mirror/check-log.sh" "$LOGS/release.log" \
             'readmissionRenderPathAllocatesNothing()' 'readmissionRenderSourcesHaveNoLockOrArrayToken()' \
+            'carryPlanningAndConsumptionAllocateNothing()' 'carryPlanningSourcesHaveNoAllocationGrowthOrLockToken()' \
             'chainTokenRaisePathsAllocateNothing()' 'sysexFaultingAcceptAllocatesNothing()' \
             'retireBacklogAndContendedRetireAllocateNothing()' 'criticalRefusalAllocatesNothing()')
           echo "| Release | $n | allocation probes ran and passed |" >> "$GITHUB_STEP_SUMMARY"

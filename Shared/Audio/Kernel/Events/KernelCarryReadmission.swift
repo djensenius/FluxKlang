@@ -1,8 +1,8 @@
 import Synchronization
 
 // #364 E5c, slice KCR1: re-admits the carry a `.replacingCycle` replacement inherited (`KernelRetirementCarry`) into
-// its own emission. Control plans it in `init` (allocates); render only drains the prepared slots (no allocation, no
-// lock, at most `capacity` slots per block). Reference model; not RT-certified.
+// its own emission. Control constructs it in `init` (object/slots allocate; the fixed planner does not); render only
+// drains the prepared slots (no allocation, no lock, at most `capacity` slots per block). Not RT-certified.
 
 /// What a replacement's re-admission has done so far. The plan fields are fixed at preparation; the render counts
 /// are each read once (acquire) and only grow, so one report may mix two moments of render. Lost: `invalidRamps`,
@@ -101,20 +101,6 @@ final class KernelCarryReadmission: @unchecked Sendable {
         var superseded = false
     }
 
-    /// The control-side plan: the slots' events in delivery order and what planning dropped or refused.
-    private struct Plan {
-        let events: [KernelEvent]
-        let cut: KernelRetirementLoss
-        let superseded: Int
-        let refusal: KernelCarryRefusal?
-    }
-
-    private enum PlanKey: Hashable {
-        case control(UInt32, UInt8, UInt8)
-        case program(UInt32, UInt8)
-        case ramp(UInt32, UInt32)
-    }
-
     /// Most events this replacement re-admits: `min(KernelRetirementCarry.capacity, blockCapacity)`.
     let capacity: Int
     private let planRefusal: KernelCarryRefusal?
@@ -140,28 +126,18 @@ final class KernelCarryReadmission: @unchecked Sendable {
     /// Control only (allocates): plans `carry` for a cycle of `blockCapacity` (`1...KernelCycle.maximumBlockCapacity`).
     init(carry: KernelRetirementCarry, blockCapacity: Int) {
         capacity = min(KernelRetirementCarry.capacity, max(1, blockCapacity))
-        var valid: [(index: Int, event: KernelEvent)] = []
-        var invalid = 0
-        for (index, event) in carry.events.enumerated() {
-            if case let .rampTo(_, value, _) = event.payload, !KernelEventPayload.isAdmissibleRampTarget(value) {
-                invalid += 1
-            } else {
-                valid.append((index, event))
-            }
-        }
-        let plan = Self.plan(valid, ownCount: carry.ownCount, capacity: capacity)
+        let plan = KernelCarryPlan(carry: carry, capacity: capacity)
         planRefusal = plan.refusal
-        invalidRamps = invalid
+        invalidRamps = plan.invalidRamps
         cut = plan.cut
         plannerSuperseded = plan.superseded
-        droppedAtRecord = carry.droppedForCapacity
-        var weights: [PlanKey: Int] = [:]
-        for (_, event) in valid { if let key = Self.planKey(event) { weights[key, default: 0] += 1 } }
-        planned = plan.events.count
+        droppedAtRecord = plan.droppedAtRecord
+        planned = plan.count
         slots = .allocate(capacity: max(1, planned))
-        for (index, event) in plan.events.enumerated() {
-            let weight = Self.planKey(event).flatMap { weights[$0] } ?? 1
-            (slots + index).initialize(to: Slot(event: event, weight: weight))
+        var index = 0
+        while let entry = plan.entry(at: index) {
+            (slots + index).initialize(to: Slot(event: entry.event, weight: entry.weight))
+            index += 1
         }
         head = .allocate(capacity: 1)
         head.initialize(to: 0)
@@ -169,36 +145,6 @@ final class KernelCarryReadmission: @unchecked Sendable {
         pendingByKind.initialize(repeating: 0, count: 3)
         for index in 0..<planned { if let kind = Self.kind(slots[index].event.payload) { pendingByKind[kind] += 1 } }
         pendingTotal = Atomic(planned)
-    }
-
-    /// Control only (allocates): the plan of `valid` (each with its recorded index; indexes from `ownCount` on were
-    /// re-carried) for `capacity` slots, as the type documents: delivery order (original frame, re-carried before
-    /// own, recorded index), last survivor per key, overflow check, cut.
-    private static func plan(_ valid: [(index: Int, event: KernelEvent)], ownCount: Int, capacity: Int) -> Plan {
-        let ordered = valid.sorted { lhs, rhs in
-            if lhs.event.frame != rhs.event.frame { return lhs.event.frame < rhs.event.frame }
-            let leftOwn = lhs.index < ownCount
-            if leftOwn != (rhs.index < ownCount) { return !leftOwn }
-            return lhs.index < rhs.index
-        }
-        var seen = Set<PlanKey>()
-        var survivors: [KernelEvent] = []
-        var superseded = 0
-        for (_, event) in ordered.reversed() {
-            if let key = planKey(event), !seen.insert(key).inserted {
-                superseded += 1
-                continue
-            }
-            if case let .rampTo(_, _, duration) = event.payload,
-               event.frame.addingReportingOverflow(KernelEventPayload.rampFrames(duration)).overflow {
-                return Plan(events: [], cut: KernelRetirementLoss(), superseded: 0, refusal: .frameOverflow)
-            }
-            survivors.append(event)
-        }
-        survivors.reverse()
-        var cut = KernelRetirementLoss()
-        for event in survivors.dropFirst(capacity) { cut.drop(event.payload) }
-        return Plan(events: Array(survivors.prefix(capacity)), cut: cut, superseded: superseded, refusal: nil)
     }
 
     /// Control-side teardown only.
@@ -355,18 +301,6 @@ final class KernelCarryReadmission: @unchecked Sendable {
             parameter == ownParameter
         default:
             false
-        }
-    }
-
-    /// The supersede key within the carry: (scope, channel, controller), (scope, channel) or (scope, parameter); `nil`
-    /// when `isCoalescible` is `false` (a data-entry control keeps its own slot and weight).
-    private static func planKey(_ event: KernelEvent) -> PlanKey? {
-        guard event.payload.isCoalescible else { return nil }
-        return switch event.payload {
-        case let .control(channel, controller, _): .control(event.scope, channel, controller)
-        case let .program(channel, _, _): .program(event.scope, channel)
-        case let .rampTo(parameter, _, _): .ramp(event.scope, parameter)
-        case .noteOn, .noteOff, .clockPulse: nil
         }
     }
 }
