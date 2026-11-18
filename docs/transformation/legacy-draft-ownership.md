@@ -207,7 +207,9 @@ failed discard held after IO while a different real draft commits. Link absence
 uses owned-parent enumeration, not follow-link existence alone. Forwarding gates,
 coordinator and load/write behavior are unchanged. Initial Debug compiled but failed
 the former exact-decoded-NUL fixture assertion; the platform-aware correction was
-independently source-reviewed and its rerun is pending.
+independently source-reviewed, then rerun in an isolated SwiftPM mirror: clean Debug
+and Release passed (19 tests / 23 cases) and four mutation controls failed at their
+intended assertions.
 
 The promise is application-level nonrecursive one-name removal, not universal
 directory refusal. XNU `xnu-12377.1.9` research is not shipping-OS qualification;
@@ -231,8 +233,35 @@ Real-store tests with the existing forwarding gates cover a late load versus a n
 commit, a completed discard (no in-memory resurrection), a newer load, and a later
 cancelled commit restoring the newer settled draft retained across the stale load.
 
-The check is per-coordinator identity only. A load that *starts* while a mutation is
-in flight becomes the latest attempt and still publishes when it completes; closing
-that window is a follow-up. Other coordinators, store instances and processes are not
-excluded, and no admission/revocation, durability, authority, migration activation,
-failure UI, AppModel or provider/card freshness is claimed.
+The check is per-coordinator identity only; P14b5 below closes the window for a load
+that *starts* while a mutation is in flight. Other coordinators, store instances and
+processes are not excluded, and no admission/revocation, durability, authority, migration
+activation, failure UI, AppModel or provider/card freshness is claimed.
+
+## P14b5 / #797 — loads started during a pending-draft mutation do not publish
+
+Part of #122 and #48; both remain open. `AssistantCoordinator` counts its own
+`persistPendingDraft()` calls in flight: incremented on entry, decremented in a `defer`,
+so overlapping mutations and failed writes each release only their own count. `load()`
+records whether the count was zero before awaiting the store, still completes its own
+attempt with the actual read outcome, and publishes only if it started quiescent and is
+still the latest attempt (the P14b4 identity check). A skipped load leaves the pending
+and settled drafts, routing submission and navigation untouched. Store, outcomes and UI
+code are unchanged.
+
+Real-store tests with the existing forwarding gates cover a load during a held commit
+(the commit is kept and no catch-up re-saves the older read), during a held discard (no
+resurrection; the file stays deleted), during a commit held after its save and then
+cancelled (rollback still restores), a mutation that finishes while the load is still
+reading (quiescence is decided at load start), and an overlapping `encodingFailed` write.
+
+Memory can be newer than disk. When a skipped load overlaps a write that fails, the
+pending draft keeps the unsaved value while disk keeps the older one; the skipped read
+is recorded but not published and nothing re-reads automatically. A later load that
+starts quiescent publishes disk again, replacing that unsaved value; in the app the only
+such load is the next launch's `loadStores()` (`reloadStores()` does not re-read the
+pending draft), so until relaunch memory stays ahead of disk and the unsaved value is
+lost at the next launch. A save that never completes keeps the count above zero and
+suppresses load publication for that coordinator. The count is per coordinator: other coordinators, store instances and processes are not excluded, and no
+admission/revocation, durability, authority, migration activation, failure UI, AppModel,
+Siri, startup wiring or provider/card freshness is claimed.

@@ -151,3 +151,118 @@ extension PendingStudioPatchPersistenceTests {
         }
     }
 }
+
+// A load that starts while any pending-draft mutation is in flight records its read but never publishes.
+extension PendingStudioPatchPersistenceTests {
+    @Test func loadDuringCommitDoesNotLoseCommit() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let built = try await fixture.build()
+            let newer = fixture.draft(1)
+            let gate = await fixture.forwarding.hold(.beforeSave(2))
+            let commit = fixture.start { await fixture.commit(newer) }
+            try #require(await gate.waitForEntry())
+            await fixture.owner.load()
+            let read = try fixture.attempt()
+            #expect(read.observation == .load(.loaded(built)))
+            #expect(fixture.owner.pendingStudioDraft == newer)
+            await gate.release()
+            #expect(await commit.value)
+            #expect(fixture.owner.latestStorageAttempt === read)
+            #expect(fixture.owner.pendingStudioDraft == newer)
+            #expect(await fixture.store.load() == .loaded(newer))
+            #expect(await fixture.forwarding.snapshots == [built, newer])
+        }
+    }
+
+    @Test func loadDuringDiscardDoesNotResurrectDraft() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let built = try await fixture.build()
+            let gate = await fixture.forwarding.hold(.beforeSave(2))
+            let discard = fixture.start { await fixture.owner.discardPendingStudioDraft() }
+            try #require(await gate.waitForEntry())
+            await fixture.owner.load()
+            let read = try fixture.attempt()
+            #expect(read.observation == .load(.loaded(built)))
+            #expect(fixture.owner.pendingStudioDraft == nil)
+            await gate.release()
+            await discard.value
+            #expect(fixture.owner.latestStorageAttempt === read)
+            #expect(fixture.owner.pendingStudioDraft == nil)
+            #expect(!FileManager.default.fileExists(atPath: fixture.file.path))
+            #expect(await fixture.store.load() == .absent)
+            #expect(await fixture.forwarding.snapshots == [built, nil])
+        }
+    }
+
+    @Test func loadDuringCancelledCommitKeepsRollback() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let built = try await fixture.build()
+            let newer = fixture.draft(1)
+            let gate = await fixture.forwarding.hold(.afterSave(2))
+            let commit = fixture.start { await fixture.commit(newer) }
+            try #require(await gate.waitForEntry())
+            await fixture.owner.load()
+            let read = try fixture.attempt()
+            #expect(read.observation == .load(.loaded(newer)))
+            commit.cancel()
+            await gate.release()
+            #expect(await commit.value == false)
+            #expect(fixture.owner.pendingStudioDraft == built, "cancel restores the settled draft")
+            #expect(try fixture.attempt().observation == .mutation(snapshot: built, outcome: .writeCompleted))
+            #expect(await fixture.store.load() == .loaded(built))
+            #expect(await fixture.forwarding.snapshots == [built, newer, built])
+        }
+    }
+
+    @Test func loadStartedDuringMutationStaysSkippedAfterItCompletes() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let built = try await fixture.build()
+            let newer = fixture.draft(1)
+            let saveGate = await fixture.forwarding.hold(.beforeSave(2))
+            let commit = fixture.start { await fixture.commit(newer) }
+            try #require(await saveGate.waitForEntry())
+            let readGate = await fixture.forwarding.hold(.afterLoad(1))
+            let load = fixture.start { await fixture.owner.load() }
+            try #require(await readGate.waitForEntry())
+            let read = try fixture.attempt()
+            await saveGate.release()
+            #expect(await commit.value)
+            await readGate.release()
+            await load.value
+            #expect(read.observation == .load(.loaded(built)))
+            #expect(fixture.owner.latestStorageAttempt === read)
+            #expect(fixture.owner.pendingStudioDraft == newer, "quiescence is decided before the read")
+            #expect(await fixture.store.load() == .loaded(newer))
+            #expect(await fixture.forwarding.snapshots == [built, newer])
+        }
+    }
+
+    @Test func failedMutationOverlappingLoadLeavesMemoryAheadOfDisk() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let built = try await fixture.build()
+            let newer = fixture.draft(1)
+            var invalid = newer
+            try #require(!invalid.fragment.nodes.isEmpty)
+            invalid.fragment.nodes[0].node.position.x = .infinity
+            let gate = await fixture.forwarding.hold(.afterSave(2))
+            let commit = fixture.start { await fixture.commit(newer) }
+            try #require(await gate.waitForEntry())
+            // An overlapping mutation fails and finishes while the first is still in flight.
+            #expect(await fixture.commit(invalid)) // Pinned: commit success ignores the persist outcome today.
+            #expect(try fixture.attempt().observation == .mutation(snapshot: invalid, outcome: .encodingFailed))
+            await fixture.owner.load()
+            let read = try fixture.attempt()
+            #expect(read.observation == .load(.loaded(newer)))
+            #expect(fixture.owner.pendingStudioDraft == invalid, "one finished mutation does not end the window")
+            await gate.release()
+            #expect(await commit.value == false)
+            #expect(try fixture.attempt().observation == .mutation(snapshot: invalid, outcome: .encodingFailed))
+            #expect(fixture.owner.pendingStudioDraft == invalid)
+            #expect(await fixture.store.load() == .loaded(newer))
+            #expect(await fixture.forwarding.snapshots == [built, newer, invalid, invalid])
+            // Failed writes still leave the window; a later quiescent load publishes disk again.
+            await fixture.owner.load()
+            #expect(fixture.owner.pendingStudioDraft == newer)
+        }
+    }
+}
