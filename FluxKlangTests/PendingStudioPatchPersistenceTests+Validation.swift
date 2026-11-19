@@ -231,6 +231,143 @@ extension PendingStudioPatchPersistenceTests {
         }
     }
 
+    @Test func provenanceFollowsActualEqualWritesAndForwardedObservations() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let draft = fixture.draft()
+            let first = UUID()
+            let second = UUID()
+            let third = UUID()
+            let delayedSave = await fixture.forwarding.hold(.afterSave(1))
+            let saving = fixture.start { await fixture.forwarding.save(draft, provenance: first) }
+            try #require(await delayedSave.waitForEntry())
+            #expect(await fixture.forwarding.save(draft, provenance: second) == .writeCompleted)
+            await delayedSave.release()
+            #expect(await saving.value == .writeCompleted)
+
+            let delayedLoad = await fixture.forwarding.hold(.afterLoad(1))
+            let loading = fixture.start { await fixture.forwarding.loadWithProvenance() }
+            try #require(await delayedLoad.waitForEntry())
+            #expect(await fixture.forwarding.save(draft, provenance: third) == .writeCompleted)
+            #expect(await fixture.forwarding.loadWithProvenance() == .init(
+                outcome: .loaded(draft), provenance: third))
+            await delayedLoad.release()
+            #expect(await loading.value == .init(outcome: .loaded(draft), provenance: second))
+        }
+    }
+
+    @Test func provenanceTracksMutationOrderNotSubmissionOrder() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let draft = fixture.draft()
+            let first = UUID()
+            let second = UUID()
+            let gate = await fixture.forwarding.hold(.beforeSave(1))
+            let saving = fixture.start { await fixture.forwarding.save(draft, provenance: first) }
+            try #require(await gate.waitForEntry())
+            #expect(await fixture.forwarding.save(draft, provenance: second) == .writeCompleted)
+            await gate.release()
+            #expect(await saving.value == .writeCompleted)
+            #expect(await fixture.store.loadWithProvenance() == .init(
+                outcome: .loaded(draft), provenance: first))
+        }
+    }
+
+    @Test func provenanceUnknownAndDeletionTransitions() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let draft = fixture.draft()
+            let token = UUID()
+            let store = fixture.store
+            #expect(await store.loadWithProvenance() == .init(outcome: .absent, provenance: nil))
+            #expect(await store.save(draft, provenance: token) == .writeCompleted)
+            #expect(await store.load() == .loaded(draft))
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: token))
+            let other = PendingStudioPatchStore(fileURL: fixture.file)
+            #expect(await other.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: nil))
+            #expect(await store.save(draft) == .writeCompleted)
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: nil))
+            #expect(await store.save(draft, provenance: token) == .writeCompleted)
+            let beforeMismatch = try Data(contentsOf: fixture.file)
+            let different = fixture.draft(1)
+            try JSONEncoder().encode(different).write(to: fixture.file)
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(different), provenance: nil))
+            try beforeMismatch.write(to: fixture.file)
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: nil))
+            #expect(await store.save(draft, provenance: token) == .writeCompleted)
+            let beforeMalformed = try Data(contentsOf: fixture.file)
+            try Data("{".utf8).write(to: fixture.file)
+            #expect(await store.load() == .malformedOrUnsupported)
+            try beforeMalformed.write(to: fixture.file)
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: nil))
+            #expect(await store.save(draft, provenance: token) == .writeCompleted)
+            let beforeDeletion = try Data(contentsOf: fixture.file)
+            #expect(await store.save(nil, provenance: UUID()) == .deleteCompleted)
+            try beforeDeletion.write(to: fixture.file)
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: nil))
+            #expect(await store.save(draft, provenance: token) == .writeCompleted)
+            let beforeAbsentDelete = try Data(contentsOf: fixture.file)
+            try FileManager.default.removeItem(at: fixture.file)
+            #expect(await store.save(nil) == .alreadyAbsent)
+            try beforeAbsentDelete.write(to: fixture.file)
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: nil))
+            #expect(await store.save(draft, provenance: token) == .writeCompleted)
+            let beforeAbsentLoad = try Data(contentsOf: fixture.file)
+            try FileManager.default.removeItem(at: fixture.file)
+            #expect(await store.load() == .absent)
+            try beforeAbsentLoad.write(to: fixture.file)
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: nil))
+        }
+    }
+
+    @Test func provenancePreservesPremutationFailureAndForgetsUnconfirmedEffects() async throws {
+        try await PendingPersistenceFixture.run { fixture in
+            let store = fixture.store
+            let draft = fixture.draft()
+            let token = UUID()
+            #expect(await store.save(draft, provenance: token) == .writeCompleted)
+            var invalid = draft
+            invalid.fragment.nodes[0].node.position.x = .infinity
+            #expect(await store.save(invalid, provenance: UUID()) == .encodingFailed)
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: token))
+
+            let manager = FileManager.default
+            let parent = fixture.file.deletingLastPathComponent()
+            let backup = fixture.root.appendingPathComponent("backup")
+            try manager.moveItem(at: parent, to: backup)
+            try Data("blocker".utf8).write(to: parent)
+            guard case .directoryPreparationFailed = await store.save(draft, provenance: UUID()) else {
+                Issue.record("Expected directory preparation failure")
+                return
+            }
+            try manager.removeItem(at: parent)
+            try manager.moveItem(at: backup, to: parent)
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: token))
+            try manager.moveItem(at: parent, to: backup)
+            try Data("blocker".utf8).write(to: parent)
+            #expect(await store.load() == .readFailed(.notDirectory))
+            try manager.removeItem(at: parent)
+            try manager.moveItem(at: backup, to: parent)
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: nil))
+            #expect(await store.save(draft, provenance: token) == .writeCompleted)
+            let beforeWriteFailure = try Data(contentsOf: fixture.file)
+            try manager.removeItem(at: fixture.file)
+            try manager.createDirectory(at: fixture.file, withIntermediateDirectories: false)
+            guard case .mutationFailedEffectUnconfirmed = await store.save(draft, provenance: UUID()) else {
+                Issue.record("Expected unconfirmed write failure")
+                return
+            }
+            try manager.removeItem(at: fixture.file)
+            try beforeWriteFailure.write(to: fixture.file)
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: nil))
+            #expect(await store.save(draft, provenance: token) == .writeCompleted)
+            let beforeDeleteFailure = try Data(contentsOf: fixture.file)
+            try manager.removeItem(at: fixture.file)
+            try manager.createDirectory(at: fixture.file, withIntermediateDirectories: false)
+            #expect(!(await store.save(nil)).completed)
+            try manager.removeItem(at: fixture.file)
+            try beforeDeleteFailure.write(to: fixture.file)
+            #expect(await store.loadWithProvenance() == .init(outcome: .loaded(draft), provenance: nil))
+        }
+    }
+
     static func expectValidationOutcome(_ outcome: PendingStudioPatchMutationOutcome, blocked: Bool) {
         if blocked {
             guard case .directoryPreparationFailed = outcome else {

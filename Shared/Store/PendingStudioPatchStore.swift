@@ -6,6 +6,17 @@ protocol PendingStudioPatchPersisting: Sendable {
     func save(_ draft: StudioPatchDraft?) async -> PendingStudioPatchMutationOutcome
 }
 
+// Opt-in observations belong to the actual store, not to a forwarding caller's order.
+protocol PendingStudioPatchProvenancePersisting: PendingStudioPatchPersisting {
+    func loadWithProvenance() async -> PendingStudioPatchLoadObservation
+    func save(_ draft: StudioPatchDraft?, provenance: UUID) async -> PendingStudioPatchMutationOutcome
+}
+
+struct PendingStudioPatchLoadObservation: Sendable, Equatable {
+    let outcome: PendingStudioPatchLoadOutcome
+    let provenance: UUID?
+}
+
 enum PendingStudioPatchLoadOutcome: Sendable, Equatable {
     case loaded(StudioPatchDraft)
     case absent
@@ -73,8 +84,9 @@ enum PendingStudioPatchIOError: Equatable {
     }
 }
 
-actor PendingStudioPatchStore: PendingStudioPatchPersisting {
+actor PendingStudioPatchStore: PendingStudioPatchProvenancePersisting {
     private let fileURL: URL
+    private var slot: (data: Data, provenance: UUID)?
 
     init(fileURL: URL? = nil, directory: URL = AppPersistence.directory) {
         if let fileURL {
@@ -86,25 +98,46 @@ actor PendingStudioPatchStore: PendingStudioPatchPersisting {
     }
 
     func load() async -> PendingStudioPatchLoadOutcome {
+        observeLoad().outcome
+    }
+
+    func loadWithProvenance() async -> PendingStudioPatchLoadObservation {
+        observeLoad()
+    }
+
+    private func observeLoad() -> PendingStudioPatchLoadObservation {
         let data: Data
         do {
             data = try Data(contentsOf: fileURL)
         } catch {
+            slot = nil
             switch PendingStudioPatchIOError.classify(error) {
-            case .absent: return .absent
-            case .failure(let failure): return .readFailed(failure)
+            case .absent: return .init(outcome: .absent, provenance: nil)
+            case .failure(let failure): return .init(outcome: .readFailed(failure), provenance: nil)
             }
         }
         guard let draft = try? JSONDecoder().decode(StudioPatchDraft.self, from: data) else {
-            return .malformedOrUnsupported
+            slot = nil
+            return .init(outcome: .malformedOrUnsupported, provenance: nil)
         }
-        return .loaded(draft)
+        if slot?.data != data { slot = nil }
+        return .init(outcome: .loaded(draft), provenance: slot?.provenance)
     }
 
     // Completion is API success, not fsync durability or current-file authority.
     func save(_ draft: StudioPatchDraft?) async -> PendingStudioPatchMutationOutcome {
+        mutate(draft, provenance: nil)
+    }
+
+    func save(_ draft: StudioPatchDraft?, provenance: UUID) async -> PendingStudioPatchMutationOutcome {
+        mutate(draft, provenance: provenance)
+    }
+
+    private func mutate(_ draft: StudioPatchDraft?, provenance: UUID?) -> PendingStudioPatchMutationOutcome {
         guard let draft else {
-            return removeEntry()
+            let outcome = removeEntry()
+            slot = nil
+            return outcome
         }
         guard let data = try? JSONEncoder().encode(draft) else { return .encodingFailed }
         do {
@@ -115,8 +148,10 @@ actor PendingStudioPatchStore: PendingStudioPatchPersisting {
         }
         do {
             try data.write(to: fileURL, options: .atomic)
+            slot = provenance.map { (data: data, provenance: $0) }
             return .writeCompleted
         } catch {
+            slot = nil
             return .mutationFailedEffectUnconfirmed(failure(error))
         }
     }
