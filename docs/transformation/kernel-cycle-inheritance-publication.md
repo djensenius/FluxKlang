@@ -82,13 +82,16 @@ stale, foreign and losing installations must change neither the winner's
 metadata/counters nor ownership state; they must never release the winner's
 claim. Equal payloads do not make a duplicate authorized.
 
-**Unresolved identity obligation (P1):** current `CycleClaimState` and
-`CycleClaim` hold words, not an encoded ownership-instance identity, and
-`CycleClaim` is copyable ([declarations][ownership]). Current cycle encapsulation
-keeps the correct ownership and claim together; it is not a general foreign-claim
-or one-shot staged-installation protocol. A future binder must prove provenance,
-exclusive use, nonreuse and exact predecessor association before exposing such
-a path. This document adds no token, allocator, CAS state or forced release.
+**Current provenance status (P1a; P1 remains unresolved):** `CycleClaimState` and
+`CycleClaim` privately retain the exact originating ownership, and equality includes
+instance identity ([declarations][ownership]). Foreign snapshots receive a typed
+refusal before claim CAS/inheritance reads; both release overloads ignore foreign
+claims before inheritance writes/CAS. Claims remain copyable under the existing
+exclusive-release caller contract, not a one-shot staged-installation protocol.
+Immediate cycle construction/retirement keeps the claim and immutable report
+metadata retained after retirement; added ARC/lifetime retention is not RT proof.
+P1's exclusive one-shot binder and P2-P5 remain unresolved, including staged
+candidate association, publication, cancellation and reader/teardown quiescence.
 
 ## 3. Transition and ownership table
 

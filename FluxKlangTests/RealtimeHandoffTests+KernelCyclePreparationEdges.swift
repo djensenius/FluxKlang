@@ -62,6 +62,168 @@ extension RealtimeHandoffTests.CycleOrdering {
 }
 
 extension RealtimeHandoffTests.CycleOrderingRetirement {
+    /// Equal free words from different ownerships must not authorize a claim.
+    @Test func foreignSnapshotCannotClaimEqualFreeWord() throws {
+        let origin = try NoteOwnership(scopes: 2)
+        let target = try NoteOwnership(scopes: 2)
+        let originState = origin.cycleClaimState()
+        let targetState = target.cycleClaimState()
+        #expect(originState != targetState)
+        #expect(originState == origin.cycleClaimState())
+        for fresh in [false, true] {
+            #expect(throws: NoteOwnership.CycleClaimRefusal.foreignOwnership) {
+                _ = try target.claimForCycle(fresh: fresh, from: originState)
+            }
+            #expect(origin.cycleClaimState() == originState)
+            #expect(target.cycleClaimState() == targetState)
+        }
+        print("claim provenance layout: state=\(MemoryLayout<NoteOwnership.CycleClaimState>.size) "
+              + "claim=\(MemoryLayout<NoteOwnership.CycleClaim>.size)")
+    }
+
+    /// Both release overloads must leave a real live cycle held, with its own retirement still authoritative.
+    @Test func foreignReleaseCannotRetireLiveCycleOrReplaceItsInheritance() throws {
+        let role = try #require(RefusalCaller.prepare())
+        var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+        defer { RefusalCalling.giveBack(role, &caller) }
+        for withCarry in [false, true] {
+            let rig = try CycleRig(laneCapacity: 32)
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            let pending: [KernelEvent] = [
+                cycleEvent(100, .noteOn(channel: 0, note: 60, velocity: 90)),
+                cycleEvent(110, .control(channel: 0, controller: 7, value: 42)),
+                cycleEvent(120, .program(channel: 0, program: 5, bank: 0)),
+                cycleEvent(130, .rampTo(parameter: 1, value: 1, durationFrames: 64)),
+                cycleEvent(140, .clockPulse)
+            ]
+            for event in pending { #expect(rig.push(event, token, caller: &caller!) == .ok) }
+            #expect(rig.run(0, 64).0.pending == pending.count)
+            let origin = try NoteOwnership(scopes: 2)
+            let foreign = try origin.claimForCycle(fresh: true, from: origin.cycleClaimState())
+            let originBefore = origin.cycleClaimState()
+            let before = rig.ownership.cycleClaimState()
+            let telemetry = rig.cycle.telemetry
+            let poison = KernelRetirementLoss(noteOns: 7, controls: 8, programs: 9, ramps: 10, clockPulses: 11)
+            var poisonCarry = KernelRetirementCarry()
+            poisonCarry.record(cycleEvent(999, .program(channel: 0, program: 99, bank: 0)))
+            if withCarry {
+                rig.ownership.releaseCycleClaim(foreign, loss: poison, carry: poisonCarry)
+            } else {
+                rig.ownership.releaseCycleClaim(foreign, loss: poison)
+            }
+            #expect(rig.ownership.cycleClaimState() == before)
+            #expect(origin.cycleClaimState() == originBefore)
+            #expect(rig.cycle.telemetry == telemetry)
+            #expect(rig.cycle.bufferedCount == pending.count)
+            let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
+                                         safety: rig.safety, ramps: rig.ramps,
+                                         admissionRefusals: rig.cycle.admissionRefusals)
+            let gate = try ClockPulseGate(maximumPulsesPerBlock: 4, staleTolerance: 48)
+            #expect(throws: KernelCycle.PreparationError.ownershipClaim(.predecessorNotRetired)) {
+                _ = try KernelCycle(parts, pulses: gate, blockCapacity: 64, perLaneQuota: 64)
+            }
+            let loss = KernelRetirementLoss(noteOns: 1, controls: 1, programs: 1, ramps: 1, clockPulses: 1)
+            #expect(rig.cycle.retire() == loss)
+            let next = try KernelCycle(parts, pulses: gate, blockCapacity: 64, perLaneQuota: 64)
+            var carry = KernelRetirementCarry()
+            for event in pending { carry.record(event) }
+            #expect(next.inheritedRetirementLoss == loss && next.inheritedRetirementCarry == carry)
+            var emitted: [KernelEvent] = []
+            #expect(next.run(blockStart: 64, frames: 128) { event, _ in emitted.append(event) }.status == .ok)
+            #expect(emitted == Array(pending[1...3]))
+            #expect(next.retire() == KernelRetirementLoss())
+            #expect(next.retire() == KernelRetirementLoss())
+            #expect(next.inheritedRetirementLoss == loss && next.inheritedRetirementCarry == carry)
+            origin.releaseCycleClaim(foreign, loss: KernelRetirementLoss())
+        }
+    }
+
+    /// Equal nonempty payloads and held/free words still carry different provenance. Foreign snapshots refuse
+    /// before same-owner word errors; foreign releases cannot overwrite either owner's already-published metadata.
+    @Test func equalPayloadClaimsKeepDistinctOriginsAndForeignCallsKeepMetadata() throws {
+        let origin = try NoteOwnership(scopes: 1)
+        let target = try NoteOwnership(scopes: 1)
+        let loss = KernelRetirementLoss(noteOns: 1, controls: 2, programs: 3, ramps: 4, clockPulses: 5)
+        var carry = KernelRetirementCarry()
+        carry.record(cycleEvent(100, .program(channel: 0, program: 5, bank: 0)))
+        let originClaim = try origin.claimForCycle(fresh: true, from: origin.cycleClaimState())
+        let targetClaim = try target.claimForCycle(fresh: true, from: target.cycleClaimState())
+        #expect(originClaim != targetClaim)
+        let heldOrigin = origin.cycleClaimState()
+        origin.releaseCycleClaim(originClaim, loss: loss, carry: carry)
+        target.releaseCycleClaim(targetClaim, loss: loss, carry: carry)
+        let originState = origin.cycleClaimState()
+        let targetState = target.cycleClaimState()
+        #expect(originState != targetState)
+        for state in [heldOrigin, originState] {
+            for fresh in [false, true] {
+                #expect(throws: NoteOwnership.CycleClaimRefusal.foreignOwnership) {
+                    _ = try target.claimForCycle(fresh: fresh, from: state)
+                }
+            }
+        }
+        target.releaseCycleClaim(originClaim, loss: KernelRetirementLoss())
+        target.releaseCycleClaim(originClaim, loss: KernelRetirementLoss(), carry: KernelRetirementCarry())
+        #expect(origin.cycleClaimState() == originState && target.cycleClaimState() == targetState)
+        let originNext = try origin.claimForCycle(fresh: false, from: originState)
+        let targetNext = try target.claimForCycle(fresh: false, from: targetState)
+        #expect(originNext != targetNext)
+        let copy = targetNext
+        #expect(copy == targetNext)
+        #expect(originNext.inherited == loss && targetNext.inherited == loss)
+        #expect(originNext.inheritedCarry == carry && targetNext.inheritedCarry == carry)
+        origin.releaseCycleClaim(originNext, loss: loss, carry: carry)
+        target.releaseCycleClaim(targetNext, loss: loss, carry: carry)
+    }
+
+    /// The last retained snapshot/claim copy, not an address, keeps the origin alive. All final releases below
+    /// happen synchronously on this test's control side; no render destruction or ARC timing claim.
+    @Test func claimProvenanceRetainsOriginUntilControlDropsLastCopy() throws {
+        weak var observed: NoteOwnership?
+        var state: NoteOwnership.CycleClaimState?
+        do {
+            let owner = try NoteOwnership(scopes: 1)
+            observed = owner
+            state = owner.cycleClaimState()
+        }
+        withExtendedLifetime(state) { #expect(observed != nil) }
+        state = nil
+        #expect(observed == nil)
+
+        var claim: NoteOwnership.CycleClaim?
+        do {
+            let owner = try NoteOwnership(scopes: 1)
+            observed = owner
+            claim = try owner.claimForCycle(fresh: true, from: owner.cycleClaimState())
+            owner.releaseCycleClaim(try #require(claim), loss: KernelRetirementLoss())
+        }
+        withExtendedLifetime(claim) { #expect(observed != nil) }
+        var copy = claim
+        claim = nil
+        withExtendedLifetime(copy) { #expect(observed != nil) }
+        copy = nil
+        #expect(observed == nil)
+    }
+
+    /// Legitimate retirement retains ownership and immutable reports until control releases the last cycle.
+    /// A weak observer becoming nil after that release also detects a claim/ownership retention cycle.
+    @Test func retiredCycleKeepsOwnershipUntilControlTeardown() throws {
+        weak var observed: NoteOwnership?
+        var cycle: KernelCycle?
+        do {
+            let rig = try CycleRig()
+            observed = rig.ownership
+            cycle = rig.cycle
+        }
+        #expect(observed != nil)
+        #expect(cycle?.retire() == KernelRetirementLoss())
+        withExtendedLifetime(cycle) { #expect(observed != nil) }
+        #expect(cycle?.inheritedRetirementLoss == KernelRetirementLoss())
+        #expect(cycle?.inheritedRetirementCarry == KernelRetirementCarry())
+        cycle = nil
+        #expect(observed == nil)
+    }
+
     /// Copilot round 4 (4487174356): a `.freshFanIn` preparation reads the never-claimed claim word, then another
     /// cycle claims, sounds note 9 (set directly: the racer never runs) and retires before it claims. Its claim
     /// from that stale state is `.alreadyUsed` and changes nothing. A `.replacingCycle` claim from the retired
