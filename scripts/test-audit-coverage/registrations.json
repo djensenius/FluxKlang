@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "15d7eaf5a7aab867b65d3b095b1ff97b7bcb1daea11d84fe287d746904aeaebf",
+    "sha256": "d1b985fc05fbb02de4664c13d0cb99cf3333dfd0fdb868100795430749204da1",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -557,6 +557,7 @@
         "FluxKlangTests/UMPTranslationStreamTests.swift",
         "FluxKlangTests/UMPTranslationStreamTests+Property.swift",
         "FluxKlangTests/UMPTranslationStreamTests+System.swift",
+        "FluxKlangTests/UMPTranslationStreamTests+SysEx.swift",
         "FluxKlangTests/UMPTranslationStreamTests+Driver.swift",
         "FluxKlangTests/UMPTranslationStreamTests+DriverRemoval.swift",
         "FluxKlangTests/UMPFlexDataTests.swift",
@@ -848,6 +849,7 @@
         "FluxKlangTests/PluginEditorStateTests+Restore.swift",
         "FluxKlangTests/PluginEditorStateTests+Snapshot.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift",
+        "FluxKlangTests/RealtimeHandoffTests+KernelCycleCandidate.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleFixtures.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCyclePreparationEdges.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleStress.swift",

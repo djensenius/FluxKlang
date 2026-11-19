@@ -7,7 +7,8 @@ enum UMPTranslationStreamRefusal: Error, Equatable, Sendable {
     case timeWentBackward(previous: UInt64, got: UInt64)
     /// The CC 6 received at `heldAt` would be held until `heldAt + timeoutNanoseconds`, which is past `UInt64.max`.
     case deadlineOverflow(heldAt: UInt64, timeoutNanoseconds: UInt64)
-    /// The translator refused the message. This cannot happen for a checked `UMPMIDI1ChannelVoice`; the case exists
-    /// only because `UMPMIDI1ToMIDI2Translator.translate` is throwing.
+    /// A complete SysEx payload exceeds the stream's inclusive local limit, before byte or time validation.
+    case sysExPayloadTooLarge(count: Int, limit: Int)
+    /// A wrapped translator, system-message constructor or SysEx7 packetizer refusal.
     case translation(UMPRefusal)
 }

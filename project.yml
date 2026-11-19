@@ -659,6 +659,7 @@ targets:
       - path: FluxKlangTests/UMPTranslationStreamTests.swift
       - path: FluxKlangTests/UMPTranslationStreamTests+Property.swift
       - path: FluxKlangTests/UMPTranslationStreamTests+System.swift
+      - path: FluxKlangTests/UMPTranslationStreamTests+SysEx.swift
       - path: FluxKlangTests/UMPTranslationStreamTests+Driver.swift
       - path: FluxKlangTests/UMPTranslationStreamTests+DriverRemoval.swift
       - path: FluxKlangTests/UMPFlexDataTests.swift
@@ -950,6 +951,7 @@ targets:
       - path: FluxKlangTests/PluginEditorStateTests+Restore.swift
       - path: FluxKlangTests/PluginEditorStateTests+Snapshot.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleCandidate.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleFixtures.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCyclePreparationEdges.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleStress.swift
