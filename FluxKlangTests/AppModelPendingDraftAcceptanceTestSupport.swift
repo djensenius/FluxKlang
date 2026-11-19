@@ -14,6 +14,7 @@ final class AppModelPendingDraftAcceptanceFixture {
     let wing = WingController(transport: InertWingTransport())
     let presentation = StudioDraftDiscardPresentation()
     private let resources: AssistantFixtureResources
+    private let instrument = Equipment(name: "Acceptance fixture source", outputs: ["Out"])
     private var model: AppModel?
     private var acceptance: Task<StudioPatchMergeResult?, Never>?
     private var cancellations: [@MainActor () -> Void] = []
@@ -66,7 +67,6 @@ final class AppModelPendingDraftAcceptanceFixture {
         try Self.requireNoProductionEntries()
         // AppIcon's existing macOS Dock mutation is permitted, outside the 14-operation audit.
         // No loadStores, preview, availability, chat load, discovery, connection or LCXL load.
-        let instrument = Equipment(name: "Acceptance fixture source", outputs: ["Out"])
         model.equipment.add(instrument)
         let environmentID = model.environments.addEnvironment(named: "Acceptance fixture environment")
         if seedGraph {
@@ -110,11 +110,13 @@ final class AppModelPendingDraftAcceptanceFixture {
     }
 
     func buildAgain(_ model: AppModel) async throws -> StudioPatchDraft {
-        let instrument = try #require(model.equipment.items.first)
+        // The seeded library's first device is not the fixture source wired into Home.
+        try #require(model.equipment.item(instrument.id) == instrument)
         _ = await coordinator.perform(
             .buildStudioDraft(.init(sourceInstrumentIDs: [instrument.id])), context: model.assistantToolContext())
         let draft = try #require(coordinator.pendingStudioDraft)
-        try #require(!draft.hasErrors && draft.liveReferences == [])
+        try #require(!draft.hasErrors && draft.liveReferences == [],
+                     "Validation: \(draft.validation); live references: \(String(describing: draft.liveReferences))")
         return draft
     }
 
