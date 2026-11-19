@@ -15,6 +15,7 @@ extension AppModelPendingDraftAcceptanceTests {
             let olderBefore = await fixture.forwarding.hold(.beforeSave(3))
             let olderAfter = await fixture.forwarding.hold(.afterSave(3))
             let older = fixture.presentation.accept(using: model)
+            defer { older.cancel() }
             try #require(await olderBefore.waitForEntry())
             let firstSaves = await fixture.forwarding.snapshots
             try #require(firstSaves.count == 3)
@@ -46,6 +47,7 @@ extension AppModelPendingDraftAcceptanceTests {
             let newerBefore = await fixture.forwarding.hold(.beforeSave(6))
             let newerAfter = await fixture.forwarding.hold(.afterSave(6))
             let newer = fixture.presentation.accept(using: model)
+            defer { newer.cancel() }
             #expect(fixture.presentation.warning == nil)
             try #require(await newerBefore.waitForEntry())
             let saves = await fixture.forwarding.snapshots
