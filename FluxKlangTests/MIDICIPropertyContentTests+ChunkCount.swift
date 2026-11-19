@@ -155,7 +155,7 @@ extension MIDICIPropertyContentTests {
                 #expect(Self.refusal(header) == .header(.unexpectedEnd(offset: 0)))
                 let body = try Self.reassembly(
                     kind, chunkCount: count, headerData: Self.zlibHeader, propertyData: [0x80])
-                #expect(Self.refusal(body) == .body(.unsupportedEncoding(.zlibMcoded7)))
+                #expect(Self.refusal(body) == .body(.byteHigh(offset: 0)))
             }
         }
     }

@@ -4,7 +4,7 @@
 //
 //  The content of one reassembled MIDI-CI Property Exchange message (#83, slice M83-PXD, issue #828): its header data
 //  parsed and its property data decoded by the encoding that header names. A pure, bounded composition of
-//  `MIDICIPropertyHeader.parse(_:)` and `MIDICIPropertyHeader.decodeBody(_:)` that uses only the standard library.
+//  `MIDICIPropertyHeader.parse(_:)` and `MIDICIPropertyHeader.decodeBody(_:)`, including bounded system zlib (#858).
 //  Nothing calls it yet.
 //
 //  Provenance: the Property Exchange specifications (M2-102-UM, the Common Rules, and M2-103-UM, the resources) were

@@ -208,7 +208,7 @@ struct MIDICIPropertyContentTests {
     @Test func kindsWithoutPropertyDataSkipTheBodyAndKeepTheirEncoding() throws {
         try #require(Self.kinds.filter(\.hasNoPropertyData) == [.getInquiry, .setReply])
         let header = try MIDICIPropertyReassemblerTests.header()
-        // `zlib+Mcoded7` and an unknown name refuse any body, an empty one included; Mcoded7 decodes an empty one.
+        // Absent compressed input is malformed; an unknown name is unsupported; Mcoded7 decodes an empty body.
         let headers: [(data: [UInt8], encoding: MIDICIPropertyEncoding)] = [
             (Self.zlibHeader, .zlibMcoded7), (Self.gzipHeader, .other("gzip")), (Self.mcoded7Header, .mcoded7)
         ]
@@ -219,6 +219,8 @@ struct MIDICIPropertyContentTests {
                     #expect(outcome == .success(MIDICIPropertyContent(
                         kind: kind, header: header, requestID: 0x2A,
                         propertyHeader: MIDICIPropertyHeader(encoding: encoding), body: [])), "\(kind)")
+                } else if encoding == .zlibMcoded7 {
+                    #expect(outcome == .failure(.body(.invalidCompressedData)), "\(kind)")
                 } else {
                     #expect(outcome == .failure(.body(.unsupportedEncoding(encoding))), "\(kind)")
                 }
@@ -298,8 +300,8 @@ struct MIDICIPropertyContentTests {
         try Self.expectBody(Self.mcoded7Header, [0x00, 0x7F, 0xFF], .byteHigh(offset: 2))
         try Self.expectBody(Self.mcoded7Header, [0x00], .truncatedGroup(offset: 0))
         try Self.expectBody(Self.mcoded7Header, [UInt8](repeating: 0x00, count: 9), .truncatedGroup(offset: 8))
-        try Self.expectBody(Self.zlibHeader, [], .unsupportedEncoding(.zlibMcoded7))
-        try Self.expectBody(Self.zlibHeader, MIDICIPropertyBodyTests.jsonMcoded7, .unsupportedEncoding(.zlibMcoded7))
+        try Self.expectBody(Self.zlibHeader, [], .invalidCompressedData)
+        try Self.expectBody(Self.zlibHeader, MIDICIPropertyBodyTests.jsonMcoded7, .invalidCompressedData)
         try Self.expectBody(Self.gzipHeader, [0x41], .unsupportedEncoding(.other("gzip")))
         // 262,145 bytes fit in no reassembly, and every encoding refuses them before reading a byte; 262,144 decode.
         let over = [UInt8](repeating: 0x41, count: 262_145)
@@ -338,7 +340,7 @@ struct MIDICIPropertyContentTests {
             #expect(Self.refusal(empty) == .header(.unexpectedEnd(offset: 0)))
             // The body last.
             let zlib = try Self.reassembly(kind, chunkCount: 1, headerData: Self.zlibHeader, propertyData: [0x80])
-            #expect(Self.refusal(zlib) == .body(.unsupportedEncoding(.zlibMcoded7)))
+            #expect(Self.refusal(zlib) == .body(.byteHigh(offset: 0)))
         }
     }
 
