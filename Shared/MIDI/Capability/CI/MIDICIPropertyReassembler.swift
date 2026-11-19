@@ -44,13 +44,14 @@ enum MIDICIPropertyReassemblyRefusal: Error, Equatable, Hashable, Sendable {
     case tooManyOpenRequests(limit: Int)
 }
 
-/// One complete Property Exchange message: chunk 1's kind, MIDI-CI header, request id and header data, and the
-/// property data of every chunk concatenated in chunk order. The bytes are as received (still Mcoded7 or zlib coded
-/// if the header says so, and the header data is unparsed JSON).
+/// One complete Property Exchange message: chunk 1's kind, MIDI-CI header, request id, declared chunk count and header
+/// data, and the property data of every chunk concatenated in chunk order. The bytes are as received (still Mcoded7
+/// or zlib coded if the header says so, and the header data is unparsed JSON).
 struct MIDICIPropertyReassembly: Equatable, Sendable {
     let kind: MIDICIPropertyDataKind
     let header: MIDICIHeader
     let requestID: UInt8
+    let chunkCount: UInt16
     let headerData: [UInt8]
     let propertyData: [UInt8]
 }
@@ -67,8 +68,9 @@ struct MIDICIPropertyReassembly: Equatable, Sendable {
 /// is refused, not supported. The kinds whose tables fix one chunk with no property data (`hasNoPropertyData`:
 /// Get Inquiry and Set Reply) are not special-cased: chunk 1 of 1 passes through like any single chunk, and the
 /// content rules for them stay with `MIDICIPropertyDataMessage.encode` (the codec's decoder is lenient on receive).
-/// On receive, `MIDICIPropertyContent.decode(_:)` refuses their property data (fail closed); neither type checks
-/// their chunk count.
+/// On receive, `MIDICIPropertyContent.decode(_:)` refuses their property data and then any completed count other
+/// than one (local content policy, #846). This reassembler preserves the validated count without restricting those
+/// kinds. See `docs/transformation/midi-property-content-chunk-count.md`.
 ///
 /// Compatibility tightening (#838): every appended continuation must have the same full `MIDICIHeader` as chunk 1.
 /// Previously changed destination, device or format bytes were accepted and the discrepancy lost on completion.
@@ -180,7 +182,8 @@ struct MIDICIPropertyReassembler: Sendable {
         }
         open[key] = nil
         return MIDICIPropertyReassembly(
-            kind: entry.kind, header: entry.header, requestID: chunk.requestID, headerData: entry.headerData,
+            kind: entry.kind, header: entry.header, requestID: chunk.requestID, chunkCount: entry.chunkCount,
+            headerData: entry.headerData,
             propertyData: entry.propertyData)
     }
 
@@ -207,7 +210,8 @@ struct MIDICIPropertyReassembler: Sendable {
         }
         guard chunk.chunkCount > 1 else {
             return MIDICIPropertyReassembly(
-                kind: message.kind, header: message.header, requestID: chunk.requestID, headerData: chunk.headerData,
+                kind: message.kind, header: message.header, requestID: chunk.requestID, chunkCount: chunk.chunkCount,
+                headerData: chunk.headerData,
                 propertyData: chunk.propertyData)
         }
         if open.count + 1 > maximumOpenRequests { throw .tooManyOpenRequests(limit: maximumOpenRequests) }
