@@ -228,20 +228,20 @@ enum SiriDraftStudioAction {
             effects.map(\.id),
             available: Set(context.effects.map(\.id))
         )
-        let result = await model.assistant.perform(
-            .buildStudioDraft(StudioWiringRequest(
+        let result = await model.assistant.buildStudioDraftResult(
+            StudioWiringRequest(
                 sourceInstrumentIDs: validSourceIDs,
                 effectChainIDs: validEffectIDs,
                 destination: destination.destination
-            )),
+            ),
             context: context
         )
-        guard case .pendingDraft(let draft?) = result else {
+        guard case .staged(let draft, let outcome) = result else {
             return "I couldn't create a Studio draft."
         }
         _ = await model.assistant.perform(.openReview, context: context)
         model.section = .studio
-        return spokenSummary(for: draft)
+        return AssistantDraftReply.acknowledgingSave(spokenSummary(for: draft), outcome: outcome)
     }
 
     private static func prepareContext(model: AppModel) async -> AssistantToolContext {

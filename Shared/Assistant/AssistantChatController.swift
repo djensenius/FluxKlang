@@ -229,19 +229,22 @@ final class AssistantChatController {
         let workID = UUID()
         producerWork.register(Task {
             defer { producerWork.remove(workID) }
-            let result = await coordinator.perform(
-                .buildStudioDraft(StudioWiringRequest(
+            let result = await coordinator.buildStudioDraftResult(
+                StudioWiringRequest(
                     sourceInstrumentIDs: sourceIDs,
                     effectChainIDs: effectIDs,
                     destination: destination
-                )),
+                ),
                 context: context
             )
-            let text = (try? AssistantFallbackResponder.response(
+            var text = (try? AssistantFallbackResponder.response(
                 to: .live("Build pending draft", requires: [.pendingDraft]),
-                groundedBy: [result]
+                groundedBy: [.pendingDraft(result.draft)]
             )) ?? "A pending Studio draft is ready for review."
-            let cards = Self.cards(for: Self.reportedDraft(in: result))
+            if case .staged(_, let outcome) = result {
+                text = AssistantDraftReply.acknowledgingSave(text, outcome: outcome)
+            }
+            let cards = Self.cards(for: result.draft)
             updateConversation(id: id) {
                 $0.messages.append(AssistantMessage(role: .assistant, text: text, cards: cards))
             }
@@ -576,12 +579,6 @@ extension AssistantChatController {
         messages.suffix(12).map {
             "\($0.role.rawValue): \(String($0.text.prefix(240)))"
         }.joined(separator: "\n").suffix(1_800).description
-    }
-
-    /// Cards describe only the draft this result reports, never one a newer mutation left pending.
-    private static func reportedDraft(in result: AssistantToolResult) -> StudioPatchDraft? {
-        guard case .pendingDraft(let draft) = result else { return nil }
-        return draft
     }
 
     private static func cards(for draft: StudioPatchDraft?) -> [AssistantCard] {
