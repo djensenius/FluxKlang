@@ -59,11 +59,11 @@ final class PendingStudioPatchStorageAttempt {
 @MainActor
 @Observable
 final class AssistantCoordinator {
-    private enum AcceptanceState { case fresh, accepted, unknown }
+    fileprivate enum AcceptanceState { case fresh, accepted, unknown }
 
     @MainActor
     @Observable
-    private final class Acceptance {
+    fileprivate final class Acceptance {
         var state: AcceptanceState
 
         init(_ state: AcceptanceState = .fresh) { self.state = state }

@@ -55,7 +55,7 @@ final class StudioDraftDiscardPresentation {
         let coordinator = model.assistant
         let id = coordinator.pendingPublicationID
         if let id, let existing = acceptances[id] { return existing }
-        guard coordinator.canAcceptPendingDraft(hasActiveEnvironment: model.environments.active != nil) else {
+        if id != nil, !coordinator.canAcceptPendingDraft(hasActiveEnvironment: model.environments.active != nil) {
             return Task {}
         }
         let task = start(using: coordinator) {
