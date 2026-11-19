@@ -4,9 +4,9 @@ import SwiftUI
 struct StudioView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
     @State private var isApplying = false
     @State private var applyVerification: WingApplyVerification?
+    @State private var discardPresentation = StudioDraftDiscardPresentation()
     private var store: EnvironmentStore { appModel.environments }
     private var graph: StudioGraph { store.activeStudioGraph }
     private var endpoints: [StudioEndpoint] { store.activeStudioEndpoints }
@@ -23,6 +23,18 @@ struct StudioView: View {
         content
             .navigationTitle("Studio")
             .toolbar { toolbar }
+            .safeAreaInset(edge: .top) {
+                if appModel.assistant.pendingStudioDraft == nil, let warning = discardPresentation.warning {
+                    HStack {
+                        Text(warning.message).fixedSize(horizontal: false, vertical: true)
+                        Button("Dismiss", action: discardPresentation.dismiss)
+                    }.padding().background(.regularMaterial).accessibilityIdentifier("studio.discardWarning")
+                }
+            }
+            .onChange(of: appModel.assistant.pendingStudioDraft) { _, draft in
+                discardPresentation.pendingDraftChanged(draft)
+            }
+            .onDisappear { discardPresentation.disappear() }
             .sheet(isPresented: reviewPresented) {
                 if let draft = appModel.assistant.pendingStudioDraft {
                     PendingStudioPatchReviewView(
@@ -36,7 +48,6 @@ struct StudioView: View {
                 }
             }
     }
-
     @ViewBuilder
     private var content: some View {
         #if os(macOS)
@@ -460,7 +471,6 @@ private extension StudioView {
             }
         }
     }
-
     var reviewPresented: Binding<Bool> {
         Binding(
             get: {
@@ -474,17 +484,13 @@ private extension StudioView {
             }
         )
     }
-
     func acceptPendingDraft() {
         Task {
             _ = await appModel.acceptPendingAssistantDraft()
         }
     }
-
     func discardPendingDraft() {
-        Task {
-            await appModel.assistant.discardPendingStudioDraft()
-        }
+        discardPresentation.discard(using: appModel.assistant)
     }
 }
 

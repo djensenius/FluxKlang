@@ -251,11 +251,16 @@ final class AssistantCoordinator {
     }
 
     func discardPendingStudioDraft() async {
+        _ = await discardPendingStudioDraftResult()
+    }
+
+    /// Historical nil-snapshot outcome, not a guarantee about the current saved draft.
+    func discardPendingStudioDraftResult() async -> PendingStudioPatchMutationOutcome {
         pendingStudioDraft = nil
         settledStudioDraft = nil
         routingSubmissionID = nil
         navigationTarget = nil
-        await persistPendingDraft()
+        return await persistPendingDraft()
     }
 
     @discardableResult
