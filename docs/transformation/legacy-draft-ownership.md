@@ -5,6 +5,22 @@ Source baseline: `17045692aaedac5abeb0f79c9893e8081436548d` (P14a #770).
 This document implements no exclusion, loader, migration admission or startup wiring.
 Current legacy editing, review, acceptance and discard remain unchanged.
 
+## #884 — instance-local pending-slot provenance
+
+The opt-in store refinement associates a caller-supplied UUID with the bytes of a
+successful tagged write in the same actor turn as the file mutation. A load returns
+its actual outcome and that token only when its decoded bytes still match. Forwarders
+must return the store's observation, not reconstruct it from submission or completion
+order. Legacy APIs and on-disk JSON remain unchanged; no coordinator or AppModel
+behavior is wired to this metadata.
+
+The single in-memory slot is forgotten on untagged successful writes, confirmed
+deletion or absence, mismatched/malformed reads, read failures and unconfirmed
+mutation effects. Encoding and directory-preparation failures preserve it. This is
+not authority over outside writers or other instances/processes: an external
+exact-equal write is indistinguishable. It provides no crash durability, migration
+admission, writer exclusion or current-file guarantee after the observation.
+
 ## P14b13 / #854 — explicit Studio removal acknowledgement
 
 Explicit Studio discard now consumes `discardPendingStudioDraftResult()`: the

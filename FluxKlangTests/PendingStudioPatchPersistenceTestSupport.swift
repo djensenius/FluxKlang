@@ -52,7 +52,7 @@ actor PendingPersistenceGate {
 }
 
 // Scheduling only: every outcome is returned unchanged from the actual store.
-actor PendingPersistenceForwarder: PendingStudioPatchPersisting {
+actor PendingPersistenceForwarder: PendingStudioPatchProvenancePersisting {
     enum Point: Hashable {
         case beforeLoad(Int), afterLoad(Int), beforeSave(Int), afterSave(Int)
     }
@@ -87,11 +87,29 @@ actor PendingPersistenceForwarder: PendingStudioPatchPersisting {
         return outcome
     }
 
+    func loadWithProvenance() async -> PendingStudioPatchLoadObservation {
+        loads += 1
+        let index = loads
+        await pause(.beforeLoad(index))
+        let observation = await store.loadWithProvenance()
+        await pause(.afterLoad(index))
+        return observation
+    }
+
     func save(_ draft: StudioPatchDraft?) async -> PendingStudioPatchMutationOutcome {
         snapshots.append(draft)
         let index = snapshots.count
         await pause(.beforeSave(index))
         let outcome = await store.save(draft)
+        await pause(.afterSave(index))
+        return outcome
+    }
+
+    func save(_ draft: StudioPatchDraft?, provenance: UUID) async -> PendingStudioPatchMutationOutcome {
+        snapshots.append(draft)
+        let index = snapshots.count
+        await pause(.beforeSave(index))
+        let outcome = await store.save(draft, provenance: provenance)
         await pause(.afterSave(index))
         return outcome
     }
