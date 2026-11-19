@@ -261,7 +261,7 @@ final class KernelCycle: @unchecked Sendable {
     let perLaneQuota: Int
     /// The producers' admission refusal counts for `events` (see `ProducerAdmission`): producers count through it,
     /// and each cycle publishes its totals. Its API only counts and reads; its storage is private.
-    let admissionRefusals: KernelAdmissionRefusals
+    var admissionRefusals: KernelAdmissionRefusals { execution.admissionRefusals }
     /// Control's acknowledgement requests (see the type's Acknowledgement contract). Its API only requests and
     /// loads; its epoch is private.
     let ackRequests: KernelAckRequests
@@ -284,12 +284,11 @@ final class KernelCycle: @unchecked Sendable {
     private let criticalScope: FaultScope
     private let telemetryOutput: KernelCycleTelemetryOutput?
     private let block: KernelBlockBuffer
-    private let watermark: KernelFlushWatermark
-    private let decider: KernelBlockDecider
+    private let execution: KernelCycleExecutionStorage
+    private var watermark: KernelFlushWatermark { execution.watermark }
+    private var decider: KernelBlockDecider { execution.decider }
     /// The inherited carry, planned in `init`; render drains it in step 4 and re-carries what is left in `retire()`.
     private let carryReadmission: KernelCarryReadmission
-    /// The cumulative telemetry counters.
-    private let counters: UnsafeMutablePointer<KernelCycleTelemetry>
     /// The epoch loaded by this cycle's latest `.scopeFaulted` run; 0 before any. Render stores it (release) once per
     /// faulted cycle; `acknowledgeCritical` acquire-loads it. Private, so no sample forged into the slot approves.
     private let lastFaultedAckEpoch = Atomic<UInt64>(0)
@@ -321,20 +320,11 @@ final class KernelCycle: @unchecked Sendable {
         criticalScope = parts.events.criticalScope
         telemetryOutput = parts.telemetry
         block = payload.block // Adopt the preclaim component; the terminal candidate retains no payload.
+        execution = payload.execution // Move the same owner; no component replacement or second binder.
+        // The only remaining explicit component construction depends on the successful claim's inheritance.
         carryReadmission = KernelCarryReadmission(carry: ownershipClaim.inheritedCarry,
                                                   reservation: payload.reservation)
-        watermark = KernelFlushWatermark(laneCount: parts.events.laneCount, armed: parts.start == .replacingCycle)
-        decider = KernelBlockDecider(deadline: checked.deadline, ownership: parts.ownership, ramps: parts.ramps,
-                                     pulses: payload.pulses, takeover: parts.start == .replacingCycle,
-                                     readmission: carryReadmission)
-        admissionRefusals = parts.admissionRefusals ?? KernelAdmissionRefusals(laneCount: parts.events.laneCount,
-                                                                               handoff: parts.events.identity)
-        counters = .allocate(capacity: 1)
-        counters.initialize(to: KernelCycleTelemetry(ackCycle: ackRequests.identity))
     }
-
-    /// Control-side teardown only.
-    deinit { counters.deallocate() }
 
     /// Render only. Runs one block `[blockStart, blockStart + frames)`; see the type's steps. Never throws, traps
     /// or blocks, for any `blockStart` and `frames`. After `retire()` it does nothing and returns a result with
@@ -366,7 +356,8 @@ final class KernelCycle: @unchecked Sendable {
         if status != .ok {
             decider.consumeNotesWhileSilenced(block, blockStart, &tally, emit)
         } else if frames > 0 {
-            decider.decide(block, flushing: flushing, (blockStart, frames), &tally, emit)
+            decider.decide((block: block, readmission: carryReadmission),
+                           flushing: flushing, (blockStart, frames), &tally, emit)
         }
         if frames > 0 { decider.advanceRamps(to: frames) }
         let result = KernelCycleResult(status: status, drained: drained, tally: tally, flushing: flushing,
@@ -442,11 +433,11 @@ final class KernelCycle: @unchecked Sendable {
     var pulses: ClockPulseGate { decider.pulses }
 
     /// The cumulative counters after the last `run`, as published. Render only.
-    var telemetry: KernelCycleTelemetry { counters.pointee }
+    var telemetry: KernelCycleTelemetry { execution.telemetry }
 
     /// Step 7: folds `result` into the cumulative counters and publishes them when an output is set.
     private func publishTelemetry(_ blockStart: Int64, _ ackEpoch: UInt64, _ result: KernelCycleResult) {
-        var totals = counters.pointee
+        var totals = execution.telemetry
         totals.cycle = KernelCycleTelemetry.saturatingAdd(totals.cycle, 1)
         totals.ackEpochSeen = ackEpoch
         if result.status == .silenced(.scopeFaulted) {
@@ -470,7 +461,7 @@ final class KernelCycle: @unchecked Sendable {
         totals.refusedBeyondLookahead = admissionRefusals.total(.beyondLookahead)
         totals.refusedNonFinite = admissionRefusals.total(.nonFinite)
         totals.blockAppendRefused = watermark.appendRefused
-        counters.pointee = totals
+        execution.telemetry = totals
         guard let output = telemetryOutput else { return }
         _ = output.slots.publish(slot: output.slot, value: totals,
                                  stamp: TelemetryStamp(clockGeneration: output.clockGeneration, frame: blockStart))

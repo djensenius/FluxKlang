@@ -16,7 +16,8 @@ struct KernelCycleTally: Sendable, BitwiseCopyable, Equatable {
 
 /// Steps 4–6 of a `KernelCycle`: decides buffered events in buffer order, applies them to ownership, tombstones,
 /// the clock gate and ramps, consumes notes while silenced and advances ramps. All storage is allocated in
-/// `init`. Render only after init; owned privately by one `KernelCycle`. Reference model; not RT-certified.
+/// `init`, before claim, without reading shared execution state. Render only after the owning cycle is ready;
+/// its completed readmission is supplied on each `decide`, never installed here. Reference model; not RT-certified.
 final class KernelBlockDecider {
     let deadline: DeadlinePolicy
     private let ownership: NoteOwnership
@@ -40,15 +41,12 @@ final class KernelBlockDecider {
     /// never emits a second `noteOff` for that release. An owned (re-struck) note's `noteOff` releases it as usual
     /// and keeps the bit. Per cycle: a later replacement starts with no bits.
     private let takenOver: UnsafeMutablePointer<UInt64>
-    /// The inherited carry's prepared slots (#364 KCR1), merged into `decide`; empty unless a carry was inherited.
-    private let readmission: KernelCarryReadmission
 
     /// `takeover`: a `.replacingCycle` start, so the notes `ownership` marks sounding are released (see
     /// `releaseTakeover`).
     init(deadline: DeadlinePolicy, ownership: NoteOwnership, ramps: RampSlots, pulses: ClockPulseGate,
-         takeover: Bool, readmission: KernelCarryReadmission) {
+         takeover: Bool) {
         self.deadline = deadline
-        self.readmission = readmission
         self.ownership = ownership
         self.ramps = ramps
         tombstones = ownership.tombstones
@@ -134,18 +132,22 @@ final class KernelBlockDecider {
     /// otherwise a `noteOn` in a scope the takeover still holds is discarded (`discardedDuringTakeover`).
     /// Re-admitted carried events (`KernelCarryReadmission`) are merged in by original frame, each before a buffered
     /// event of the same frame; they are not counted in `tally`.
-    func decide(_ block: KernelBlockBuffer, flushing: Bool, _ window: (start: Int64, frames: Int64),
+    /// Both input components belong to the invoking ready cycle. Readmission is used only for this execution,
+    /// never retained or installed in the decider.
+    func decide(_ input: (block: KernelBlockBuffer, readmission: KernelCarryReadmission),
+                flushing: Bool, _ window: (start: Int64, frames: Int64),
                 _ tally: inout KernelCycleTally, _ emit: (KernelEvent, Int64) -> Void) {
+        let (block, readmission) = input
         let (blockStart, frames) = window
         var index = 0
         while index < block.count {
             let entry = block[index]
             let event = entry.event
-            readmit(through: event.frame, window, emit)
+            readmit(readmission, through: event.frame, window, emit)
             switch deadline.decide(event, blockStart: blockStart, blockFrames: frames) {
             case .notYet:
                 block.removeFirst(index)
-                readmit(through: Int64.max, window, emit)
+                readmit(readmission, through: Int64.max, window, emit)
                 tally.resync = gate.pointee.takeResync()
                 return
             case .dropLate:
@@ -164,14 +166,15 @@ final class KernelBlockDecider {
             index &+= 1
         }
         block.removeFirst(index)
-        readmit(through: Int64.max, window, emit)
+        readmit(readmission, through: Int64.max, window, emit)
         tally.resync = gate.pointee.takeResync()
     }
 
     /// Applies and emits, in order, the pending re-admitted events with an original frame at or before `limit` that
     /// are due in `window`; stops at the first one not yet due. A carried event is never dropped late (only
     /// `noteOn`s are), so an already-due one dispatches at `blockStart`.
-    private func readmit(through limit: Int64, _ window: (start: Int64, frames: Int64),
+    private func readmit(_ readmission: KernelCarryReadmission, through limit: Int64,
+                         _ window: (start: Int64, frames: Int64),
                          _ emit: (KernelEvent, Int64) -> Void) {
         while let event = readmission.next, event.frame <= limit {
             var counted = KernelCycleTally()
