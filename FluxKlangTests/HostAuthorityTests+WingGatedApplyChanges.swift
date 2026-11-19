@@ -163,3 +163,86 @@ extension HostAuthorityTests {
         }
     }
 }
+
+/// Why an AU8d state re-read must not verify.
+enum WingRereadRefusal: CaseIterable, Sendable {
+    case missing, olderThanRequest, otherSession, demo, disconnect, reconnect, cancelled
+}
+
+extension HostAuthorityTests {
+    /// AU8d: `WingController.verifyReread(session:)`, the state re-read that verifies a live connect. It sends
+    /// paced GETs only and succeeds only when every observed address answered after the request, on that
+    /// session, within the deadline. Fakes only; no socket.
+    @MainActor
+    struct WingStateReread {
+        private static let addresses = WingLiveObservations.addresses
+
+        /// A connected controller whose connect-time GETs are stalled, then the transport armed.
+        private func connected(_ transport: RereadTransport, mode: WingMode = .live) async throws -> WingController {
+            let controller = WingController(transport: transport, mode: mode)
+            await controller.connect(host: console)
+            try #require(controller.connection.isConnected)
+            try await Self.until { await transport.stalled >= 2 }
+            return controller
+        }
+
+        @Test func everyObservedAddressAnsweredFreshlyThroughPacedGetsVerifies() async throws {
+            let transport = RereadTransport(observed: Self.addresses)
+            let controller = try await connected(transport)
+            let session = try #require(controller.sessionID)
+            await transport.arm()
+            #expect(await controller.verifyReread(session: session))
+            let gets = await transport.gets
+            #expect(Self.addresses.count == 144)
+            try #require(gets.count == Self.addresses.count)
+            #expect(gets.map(\.address) == Self.addresses.sorted())
+            #expect(await transport.sets.isEmpty)
+            let size = WingNetwork.bulkRefreshBatchSize
+            for boundary in stride(from: size, to: gets.count, by: size) {
+                #expect(gets[boundary - 1].at.duration(to: gets[boundary].at) >= WingNetwork.bulkRefreshBatchDelay)
+            }
+            await controller.disconnect()
+            await transport.finish()
+        }
+
+        /// Polls `condition` for up to 5 s.
+        private static func until(_ condition: @MainActor () async -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while ContinuousClock.now < deadline, await !condition() { try await Task.sleep(for: .milliseconds(5)) }
+        }
+
+        @Test(arguments: WingRereadRefusal.allCases)
+        func anIncompleteStaleOrForeignRereadNeverVerifies(_ refusal: WingRereadRefusal) async throws {
+            let transport = RereadTransport(observed: Self.addresses)
+            let controller = try await connected(transport, mode: refusal == .demo ? .demo : .live)
+            let session = try #require(controller.sessionID)
+            let last = try #require(Self.addresses.sorted().last)
+            switch refusal {
+            case .missing: await transport.silence(last)
+            case .olderThanRequest:
+                await transport.answer(Self.addresses)
+                try await Self.until { Self.addresses.allSatisfy { controller.confirmedReceivedAt[$0] != nil } }
+                try #require(Self.addresses.allSatisfy { controller.confirmedReceivedAt[$0] != nil })
+                await transport.silence(last)
+            case .disconnect, .reconnect, .cancelled: await transport.hold(at: last)
+            case .otherSession, .demo: break
+            }
+            await transport.arm()
+            let read = Task { await controller.verifyReread(session: refusal == .otherSession ? UUID() : session) }
+            if [.disconnect, .reconnect, .cancelled].contains(refusal) {
+                try await Self.until { await transport.held }
+                #expect(await transport.held)
+                switch refusal {
+                case .disconnect: await controller.disconnect()
+                case .reconnect: await controller.connect(host: console)
+                default: read.cancel()
+                }
+            }
+            #expect(await read.value == false)
+            if refusal == .demo || refusal == .otherSession { #expect(await transport.gets.isEmpty) }
+            #expect(await transport.sets.isEmpty)
+            await controller.disconnect()
+            await transport.finish()
+        }
+    }
+}
