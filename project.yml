@@ -179,6 +179,8 @@ targets:
       # Platform-neutral helper shared with FluxKlangTests; it must not import an app module.
       - path: FluxKlangTests/TestSupport.swift
       - path: FluxKlangTests/AppPersistenceSelectionTests.swift
+      - path: FluxKlangTests/AppModelPendingDraftAcceptanceTests.swift
+      - path: FluxKlangTests/AppModelPendingDraftAcceptanceTestSupport.swift
       - path: FluxKlangTests/AssistantBackendDraftStore.swift
       - path: FluxKlangTests/StartupHardwareIsolationTests.swift
       - path: FluxKlangTests/StartupHardwareLifecycleFixtures.swift
