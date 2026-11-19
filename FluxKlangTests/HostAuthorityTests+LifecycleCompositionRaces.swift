@@ -397,3 +397,40 @@ extension HostAuthorityTests {
         }
     }
 }
+
+extension HostAuthorityTests.LifecycleReread {
+    @Test func aSlowRereadHoldsNoTurnAndANewerSessionIgnoresIt() async throws {
+        let (owner, lifecycle) = try await Self.dropped()
+        let (probe, first, release) = (LifecycleProbe(), LifecycleFirst(), LifecycleGate())
+        let (slow, newer) = (UUID(), UUID())
+        let replacement = Task {
+            await lifecycle.replace {
+                probe.operation(.success(.connected(slow)), hooks: .init(reread: { _ in
+                    first.signal("reading")
+                    await release.wait()
+                    return true
+                }))
+            }
+        }
+        Task {
+            _ = await replacement.value
+            await lifecycle.reread?.value
+            first.signal("settled")
+        }
+        guard await first.wait() == "reading" else {
+            Issue.record("the published connect started no re-read")
+            return
+        }
+        let busy = lifecycle.isBusy
+        #expect(!busy, "the re-read holds the FIFO turn")
+        if busy { release.open() }
+        #expect(await replacement.value == .success(.connected(slow)))
+        let stale = try #require(lifecycle.reread)
+        // A replace during the re-read does not wait for it, and publishes a newer, unverified session.
+        #expect(await lifecycle.replace { probe.operation(.success(.connected(newer))) } == .success(.connected(newer)))
+        #expect(await owner.session == newer)
+        release.open()
+        await stale.value
+        #expect(try await Self.admission(owner) == Self.recovering)
+    }
+}

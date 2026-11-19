@@ -32,6 +32,8 @@ final class LifecycleProbe {
         var current: (@MainActor () -> Bool)?
         var stop: @MainActor () async -> Void = {}
         var finish: @MainActor () async -> Void = {}
+        /// The candidate's state re-read (AU8d); nil keeps the never-verifying default.
+        var reread: (@MainActor (UUID) async -> Bool)?
     }
 
     var identity = UUID()
@@ -63,7 +65,7 @@ final class LifecycleProbe {
                 await hooks.start()
                 return outcome
             }
-            return Lifecycle.Candidate(outcome: result, isCurrent: {
+            var candidate = Lifecycle.Candidate(outcome: result, isCurrent: {
                 hooks.current?() ?? (self.identity == candidateID)
             }, stop: {
                 self.stopped += 1
@@ -75,6 +77,8 @@ final class LifecycleProbe {
                 self.events.append("finish")
                 await hooks.finish()
             })
+            if let reread = hooks.reread { candidate.reread = reread }
+            return candidate
         })
     }
 }
@@ -247,5 +251,90 @@ struct LifecycleHeldTurn {
         }
         await completion.fenced()
         pause.queued = nil
+    }
+}
+
+/// No socket. For the AU8d state re-read: once armed, records each send and answers each GET of an `observed`
+/// address (`WingLiveObservations.addresses`) at once on the current session, unless silenced. Unarmed GETs
+/// (the connect's bulk refresh and keep-alive) wait until `finish()`, unrecorded, so only the read under test
+/// is seen. `hold(at:)` holds that address's next armed GET until `finish()`.
+actor RereadTransport: WingTransporting {
+    nonisolated let incoming: AsyncStream<WingIncoming>
+    private let continuation: AsyncStream<WingIncoming>.Continuation
+    private(set) var sessionID: UUID?
+    private(set) var peerHosts: Set<String> = []
+    private(set) var gets: [(address: String, at: ContinuousClock.Instant)] = []
+    private(set) var sets: [String] = []
+    private(set) var stalled = 0
+    private(set) var held = false
+    private let observed: Set<String>
+    private var armed: Bool
+    private var silent: Set<String> = []
+    private var holding: String?
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    init(observed: [String], armed: Bool = false) {
+        self.observed = Set(observed)
+        self.armed = armed
+        (incoming, continuation) = AsyncStream.makeStream()
+    }
+
+    deinit { continuation.finish() }
+
+    func start(remoteHost: String, localPort: UInt16?, broadcast: Bool) {
+        sessionID = UUID()
+        peerHosts = [remoteHost]
+    }
+
+    func stop() {
+        sessionID = nil
+        peerHosts = []
+    }
+
+    func arm() { armed = true }
+    func silence(_ address: String) { silent.insert(address) }
+    func hold(at address: String) { holding = address }
+
+    /// Resumes every stalled or held send.
+    func finish() {
+        armed = true
+        waiting.forEach { $0.resume() }
+        waiting.removeAll()
+    }
+
+    /// Answers `addresses` now, as replies that predate any later request would.
+    func answer(_ addresses: [String]) {
+        guard let sessionID, let host = peerHosts.first else { return }
+        for address in addresses {
+            continuation.yield(WingIncoming(address: address, value: .string("reread"), host: host,
+                                            port: WingNetwork.defaultPort, transportSessionID: sessionID))
+        }
+    }
+
+    func send(_ address: String, _ value: WingValue?, to host: String?, port: UInt16?) async {
+        guard value == nil else { return sets.append(address) }
+        guard armed else {
+            stalled += 1
+            return await withCheckedContinuation { waiting.append($0) }
+        }
+        gets.append((address, .now))
+        if holding == address {
+            (holding, held) = (nil, true)
+            await withCheckedContinuation { waiting.append($0) }
+        }
+        if !silent.contains(address), observed.contains(address) { answer([address]) }
+    }
+
+    /// Records any attempted write so `sets.isEmpty` covers every write path, then refuses it.
+    func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID,
+                        authorization: WingMixerWriteAuthorization) async throws {
+        sets.append("mixer \(node)")
+        throw WingTransportError.notStarted
+    }
+
+    func sendDirect(_ setting: WingSetting, sessionID: UUID,
+                    authorization: DirectWriteAuthorization) async throws {
+        sets.append(setting.address)
+        throw WingTransportError.notStarted
     }
 }

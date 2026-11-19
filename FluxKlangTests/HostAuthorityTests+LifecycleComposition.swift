@@ -371,3 +371,74 @@ extension HostAuthorityTests {
         }
     }
 }
+
+extension HostAuthorityTests {
+    /// AU8d: the lifecycle re-reads each published live connect off its FIFO turn and reports only a
+    /// successful re-read, whose candidate is still current, to the owner's verified reconnect. The drop is
+    /// the test-only `dropped()`; production has no drop producer yet.
+    @MainActor
+    struct LifecycleReread {
+        static let window = OwnerBench.windowOne
+        static let recovering = DirectWriteRefusal.gate(.unavailable(.recovering))
+
+        /// A granted owner with open roots, whose lifecycle published a connect that applied, then dropped.
+        static func dropped() async throws -> (HostAuthorityOwner, HostWingLifecycle) {
+            let owner = try await OwnerBench.owner()
+            let lifecycle = Lifecycle(owner: owner)
+            _ = await lifecycle.replace { LifecycleProbe().operation(.success(.connected(UUID()))) }
+            await lifecycle.reread?.value
+            _ = try await owner.beginApply(window: window).get()
+            _ = try await owner.dropped().get()
+            #expect(try await admission(owner) == recovering)
+            return (owner, lifecycle)
+        }
+
+        /// The Studio window's apply gesture, then the refusal of its admission (nil when admitted).
+        static func admission(_ owner: HostAuthorityOwner) async throws -> DirectWriteRefusal? {
+            _ = await owner.beginApply(window: window)
+            return OwnerBench.refusal(try await OwnerBench.admit(owner, window))
+        }
+
+        @Test(arguments: [false, true], [false, true])
+        func onlyASuccessfulRereadOfTheNewSessionCompletesTheRestore(throughController: Bool,
+                                                                     succeeds: Bool) async throws {
+            let (owner, lifecycle) = try await Self.dropped()
+            let transport = RereadTransport(observed: WingLiveObservations.addresses, armed: true)
+            // One observed address never answers, so the real re-read reaches its deadline.
+            if !succeeds { await transport.silence(try #require(WingLiveObservations.addresses.last)) }
+            let controller = WingController(transport: transport, mode: .live)
+            await controller.connect(host: "192.0.2.10")
+            let session = try #require(controller.sessionID)
+            let probe = LifecycleProbe()
+            let outcome = await lifecycle.replace {
+                probe.operation(.success(.connected(session)), hooks: .init(reread: { read in
+                    probe.events.append("reread")
+                    if throughController { return await controller.verifyReread(session: read) }
+                    return succeeds && read == session
+                }))
+            }
+            #expect(outcome == .success(.connected(session)))
+            await lifecycle.reread?.value
+            #expect(probe.events.filter { $0 == "reread" }.count == 1)
+            #expect(try await Self.admission(owner) == (succeeds ? nil : Self.recovering))
+            let snapshot = await owner.authority.snapshot()
+            #expect(snapshot.outputsMuted == !succeeds && (snapshot.restoring == nil) == succeeds)
+            await controller.disconnect()
+        }
+
+        @Test func aRereadWhoseCandidateIsNoLongerCurrentNeverVerifies() async throws {
+            let (owner, lifecycle) = try await Self.dropped()
+            let (probe, session) = (LifecycleProbe(), UUID())
+            _ = await lifecycle.replace {
+                probe.operation(.success(.connected(session)), hooks: .init(reread: { _ in
+                    // The controller moved off `session` without a lifecycle publication.
+                    probe.identity = UUID()
+                    return true
+                }))
+            }
+            await lifecycle.reread?.value
+            #expect(await owner.session == session)
+            #expect(try await Self.admission(owner) == Self.recovering)
+        }
+    }
+}

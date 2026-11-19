@@ -62,6 +62,9 @@ final class HostWingLifecycle {
         let isCurrent: @MainActor () -> Bool
         let stop: @MainActor () async -> Void
         let finish: @MainActor () async -> Void
+        /// The WING state re-read for a published `.connected(session)` (#62 AU8d); true only when it
+        /// succeeded on that session. The default never verifies, so an unwired candidate stays recovering.
+        var reread: @MainActor (UUID) async -> Bool = { _ in false }
     }
 
     struct Completion {
@@ -102,6 +105,9 @@ final class HostWingLifecycle {
     /// Count of submitted detaches across all windows, never reset: the generation a detach fences and
     /// closes with and an `open` reopens with. A scalar, so it holds no per-window state.
     @ObservationIgnored private var detachSubmissions: UInt64 = 0
+    /// The latest published connect's state re-read. It holds no FIFO turn; the next replacement cancels it.
+    /// Readable only so tests can await it.
+    @ObservationIgnored private(set) var reread: Task<Void, Never>?
 
     init(owner: HostAuthorityOwner? = nil) {
         self.owner = owner
@@ -188,6 +194,8 @@ final class HostWingLifecycle {
     }
 
     private func perform(_ operation: Operation) async -> Outcome {
+        reread?.cancel()
+        reread = nil
         let released = await owner?.disconnected()
         await operation.stopOld()
         if case .failure(let refusal)? = released {
@@ -222,7 +230,20 @@ final class HostWingLifecycle {
             }
         }
         if candidate.outcome.succeeded { await candidate.finish() }
+        if case .success(.connected(let session)) = candidate.outcome, let owner {
+            startReread(candidate, session: session, owner: owner)
+        }
         return candidate.outcome
+    }
+
+    /// Verifies the published `session` without holding the turn: the owner hears only a re-read that
+    /// succeeded, was not cancelled, and whose candidate is still current on `session` (#62 AU8d).
+    private func startReread(_ candidate: Candidate, session: UUID, owner: HostAuthorityOwner) {
+        reread = Task {
+            guard await candidate.reread(session), !Task.isCancelled else { return }
+            guard candidate.isCurrent() else { return }
+            await owner.verifiedReconnect(session: session)
+        }
     }
 }
 

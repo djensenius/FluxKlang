@@ -318,13 +318,17 @@ final class AppModel {
         _ controller: WingController, outcome: HostWingLifecycle.Outcome,
         finish: @escaping @MainActor () async -> Void = {}
     ) -> HostWingLifecycle.Candidate {
-        HostWingLifecycle.Candidate(outcome: outcome, isCurrent: {
+        var candidate = HostWingLifecycle.Candidate(outcome: outcome, isCurrent: {
             guard self.wing === controller else { return false }
             if case .success(.connected(let session)) = outcome {
                 return controller.connection.isConnected && controller.sessionID == session
             }
             return true
         }, stop: { await controller.disconnect() }, finish: finish)
+        if case .success(.connected) = outcome {
+            candidate.reread = { session in await controller.verifyReread(session: session) }
+        }
+        return candidate
     }
 
     // MARK: - Selection & navigation

@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Issue | Part of #62 (slice AU8 design); roadmap #48. #62 remains open |
-| Status | AU8 design archive plus AU7c1 planned lifecycle composition, the AU7c2 owner close fence, the AU7c3 detach-time fence, the AU7c4 closed-root list, the AU8c-1 open-window set with root `open` and the AU8c-2 gated real-session Studio Apply (§12); pure Debug/Release checked, hosted compilation pending |
+| Status | AU8 design archive plus AU7c1 planned lifecycle composition, the AU7c2 owner close fence, the AU7c3 detach-time fence, the AU7c4 closed-root list, the AU8c-1 open-window set with root `open`, the AU8c-2 gated real-session Studio Apply and the AU8d S1 verified re-read (§12); pure Debug/Release checked, hosted compilation pending |
 | Source baseline | Historical citations: `41f69372`; AU7c1 implementation base: `2165503ab27043999cda062c10ba9132a2085262` |
 | Scope | Authority input sources, original AU8a plan, and bounded planned replacement/session/detach composition |
 
@@ -248,9 +248,11 @@ The user delegated these choices ("make your best assumption"); the coordinator 
   `connect` and `disconnect` (`Shared/WING/WingController.swift:104-144`), and the keep-alive ignores send errors
   (`:458-460`). AU8a exposes and tests the owner's drop hook; detecting a transport failure in production is a
   follow-up outside AU8.
-- **"State re-read succeeded" has no signal today.** The connect starts a bulk refresh task (`:462-467`) that
-  reports no completion. AU8a takes the verified reconnect as an explicit input to the owner; a separate follow-up
-  slice, AU8d (verified-reconnect signal), supplies it from the WING path. AU7c does not.
+- **"State re-read succeeded" had no signal at this baseline.** The connect starts a bulk refresh task (`:462-467`)
+  that reports no completion. AU8a takes the verified reconnect as an explicit input to the owner. AU8d S1 (§12) now
+  supplies it: after every published live connect, `WingController.verifyReread(session:)` must see a fresh reply
+  from every `WingLiveObservations.addresses` entry on that session within 2 s, and only then does the lifecycle
+  call `verifiedReconnect(session:)`. Drop detection (S2) is still open.
 - **Mute commands reach no hardware.** The lane's `.setOutputsMuted` commands model engine outputs, which do not exist
   (section 2). The owner consumes them so the lane can progress and sends nothing to the WING for them.
 - **A pending recovery survives a planned release.** If an unplanned drop's restore is never completed, outputs stay
@@ -269,7 +271,7 @@ The user delegated these choices ("make your best assumption"); the coordinator 
 | AU7c2 | Worker | Owner-only close fence (§12): `windowClosed` fences in-flight applies for its window before waiting; `beginApply` refuses `.windowClosed` | No sequencer, root-lifetime or AppRootView change; no closed-window history |
 | AU7c3 | Worker | Detach-time fence (§12): the owner's lock-free `fenceApplies(for:)`, which `windowClosed` still calls first; `HostWingLifecycle.detach` sends it when submitted, while the detach itself keeps its FIFO turn; `Completion.fenced()` joins it | No queue-order change or early detach; no root lifetime, `windowOpened` or closed-window history; no AppRootView, AppModel or WingController change |
 | AU7c4 | Worker | Closed root (§12): the owner's `closedWindows` set, filled by `fenceApplies`/`windowClosed` and cleared by a lock-free `windowOpened`; `beginApply` and `staleness` refuse a closed root `.windowClosed` (`.noSession` first); `HostWingLifecycle.open(_:)` reopens on its FIFO turn unless the owner has fenced a later detach generation, and a detach's turn awaits its early fence | No production `windowOpened`/`open` caller (AU8c); never-opened windows are not refused; no AppRootView, AppModel or WingController change |
-| AU8d | Worker (follow-up, after AU7c) | Verified-reconnect signal: report from the WING path that a new session is connected and its state re-read, and feed it to the owner's verified-reconnect input | Until it lands, a drop leaves gated writes refused. Deferred: no grounded "state re-read succeeded" signal exists (`refreshAll` only sends queries) and nothing produces a drop; pairs with a future drop-detector slice |
+| AU8d | Worker (S1 #878; S2 later) | S1: the verified-reconnect signal (§12). After every published live connect, the lifecycle runs the WING state re-read off its FIFO turn and feeds a successful, current re-read to the owner's verified-reconnect input. S2: the drop producer | S1 ships the signal first, which satisfies D2 for S2: production still calls no `dropped()`. S2 (drop detection and the first `dropped()` caller) waits for the #62 decisions |
 | AU8c-1 | Worker | Root `open` and the open-window set (§12): `AppRootView` calls `wingLifecycle.open` on every appear; the owner's strict `openWindows` replaces `closedWindows`, so `beginApply`/`staleness` refuse any window not open `.windowClosed` (`.noSession` first), including one never opened; a detach's close releases its window's generation entry unless a later detach's fence raised it; the sequencer's per-window `detachSubmissions` becomes one monotonic counter | Prerequisites AU8a, AU8b and AU7c are merged; AU8d is not an AU8c prerequisite, so the earlier AU8d → AU8c order is relaxed for this slice only. Ships `open` before any production `beginApply` caller, which keeps the AU8c invariant. No `beginApply` caller, `applyStudio`, `StudioView`, minter or `WingController` change; no automatic grant |
 | AU8c-2 | Worker | `applyStudio` calls the gated overload for real sessions; the ungated `applyAndVerify(_:safetySettings:)` stays only for Demo Mode; `StudioView` threads the root window; production minter (§12) | Needs AU8c-1 (root `open` already wired); must not ship without it. The AU8d → AU8c relaxation extends to this slice: production calls no `dropped()`, so `.recovering` is unreachable and a drop cannot block Apply. Whichever slice adds the first production `dropped()` caller must ship AU8d with it |
 
@@ -319,7 +321,7 @@ network or UI.
 - No migration of the other direct WING write paths listed in `docs/transformation/baseline.md` (Dispatch gap).
 - No change to `HostAuthority`, the book, the gate or the minter.
 
-## 12. AU7c1 lifecycle composition, AU7c2 close fence, AU7c3 detach-time fence, AU7c4 closed root, AU8c-1 open roots, AU8c-2 gated Apply
+## 12. AU7c1 lifecycle composition, AU7c2 close fence, AU7c3 detach-time fence, AU7c4 closed root, AU8c-1 open roots, AU8c-2 gated Apply, AU8d S1 verified re-read
 
 Part of #62 and roadmap #48; both remain open. Source implementation follows the approved #779 plan.
 Approval was design/source feasibility only. The exact 71-input closure now compiles without missing dependencies.
@@ -456,9 +458,28 @@ of the same plan, the owner's provider) and calls the gated overload; a refused 
 result and never falls back. A revoke between the check and the mint is refused by the mint. A session mismatch
 after `beginApply` leaves the window rendering, as any later refusal does. Real-session Apply therefore needs a
 Host-role grant each launch, the root window open, and that window to be the only one rendering; Demo Mode and the
-mixer are unchanged. Production still calls no `dropped()` or verified reconnect. Mirror-run `StudioApplyRouting`
-tests cover this; the Views/AppModel wiring needs hosted compilation.
-Still open: window liveness beyond root appear/disappear, and AU8d.
+mixer are unchanged. Production still calls no `dropped()`; AU8d S1 below adds the verified reconnect. Mirror-run
+`StudioApplyRouting` tests cover this; the Views/AppModel wiring needs hosted compilation.
+AU8d S1 (#878) verifies every live connect. `connected(session:)` clears the owner's verified session on each
+connect, so after `candidate.finish()` for a published `.connected(session)` the lifecycle starts a task it owns
+that runs `Candidate.reread(session)`; the next replacement's turn cancels it, and it holds no FIFO turn, so a
+later replace, detach or open never waits for it. It calls `owner.verifiedReconnect(session:)` only when the
+re-read returned true, the task was not cancelled and the candidate is still current; the owner's own session check
+is defence in depth. `Candidate.reread` defaults to never verifying; AppModel passes
+`WingController.verifyReread(session:)` for connected outcomes only, and Demo, disconnected and failed outcomes
+never re-read. `verifyReread` reads all 144 `WingLiveObservations.addresses` through `readFreshConfirmed`
+(GET-only, 2 s, paced `bulkRefreshBatchSize`/`bulkRefreshBatchDelay`): only replies received after the request, on
+that session, count, and Demo Mode, a disconnect, a session change, a timeout or cancellation is false. Existing
+`readFreshConfirmed` callers keep the unpaced 750 ms default, and shared Listen/Temporary Move confirmations are not
+invalidated. Mirror-run `LifecycleReread` and `WingStateReread` tests cover this; the AppModel wiring needs hosted
+compilation. Production still calls no `dropped()` (S2).
+A failed re-read is not retried: one lost UDP reply or a console slower than 2 s leaves the project recovering until
+the next connect, and `beginApply` cannot complete that restore because the owner has no verified session. A Listen
+confirmation started during the 2 s window can also clear an observed address's confirmation and fail the re-read.
+Both outcomes refuse rather than allow. Neither can strand a project today: only `dropped()` owes a restore, and
+production calls no `dropped()`.
+Still open: window liveness beyond root appear/disappear, and AU8d S2 (drop detection). S2 must settle a re-read
+retry or re-trigger policy before it adds any production `dropped()` caller.
 Root disappearance is not native close qualification, and native close remains unqualified.
 WingController.disconnect cancels but does not join its tasks; awaited socket stop is not callback quiescence.
 Nothing here qualifies #191/G2 native reclamation.

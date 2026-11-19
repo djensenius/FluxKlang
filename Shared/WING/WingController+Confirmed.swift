@@ -25,9 +25,11 @@ extension WingController {
 
     /// Address replies have no OSC transaction ID. This is a bounded,
     /// incoming-only read requiring new replies, not a transactional hardware lock.
+    /// `pacing` (off by default) pauses `delay` after every `size` GETs, as the bulk refresh does.
     func readFreshConfirmed(
         _ addresses: [String], session: UUID,
-        timeout: Duration = .milliseconds(750)
+        timeout: Duration = .milliseconds(750),
+        pacing: (size: Int, delay: Duration)? = nil
     ) async -> [String: WingValue]? {
         guard !Task.isCancelled, !isDemo, connection.isConnected, sessionID == session else { return nil }
         let addresses = Array(Set(addresses)).sorted()
@@ -39,10 +41,13 @@ extension WingController {
         // Queries run separately so even a delayed transport send cannot extend
         // the read deadline. Cancellation stops further GETs, never replays SETs.
         let queryTask = Task { [weak self] in
-            for address in addresses {
+            for (offset, address) in addresses.enumerated() {
                 guard let self, !Task.isCancelled, self.sessionID == session,
                       self.connection.isConnected, ContinuousClock.now < deadline else { return }
                 await self.refresh(address)
+                if let pacing, (offset + 1).isMultiple(of: pacing.size) {
+                    do { try await Task.sleep(for: pacing.delay) } catch { return }
+                }
             }
         }
         defer { queryTask.cancel() }
@@ -57,6 +62,15 @@ extension WingController {
             do { try await Task.sleep(for: .milliseconds(10)) } catch { return nil }
         }
         return nil
+    }
+
+    /// The state re-read that verifies a live connect (#62 AU8d): GET-only, paced like the metadata poll, and
+    /// true only when every observed address answered after the request, on `session`, within the 2 s
+    /// metadata-poll deadline. Demo Mode, a disconnect, a session change, a timeout or cancellation is false.
+    func verifyReread(session: UUID) async -> Bool {
+        await readFreshConfirmed(
+            WingLiveObservations.addresses, session: session, timeout: .seconds(2),
+            pacing: (WingNetwork.bulkRefreshBatchSize, WingNetwork.bulkRefreshBatchDelay)) != nil
     }
 
     func refreshLiveReferences(_ references: [AssistantLiveReference]) async -> Bool {
