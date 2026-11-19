@@ -111,16 +111,28 @@ actor JSONFileStore {
     }
 
     func save(_ value: some Encodable, to name: String) {
+        _ = saveReportingLocalWrite(value, to: name)
+    }
+
+    /// Reports only completion of the local atomic write, not cloud persistence or fsync.
+    func saveReportingLocalWrite(_ value: some Encodable, to name: String) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(value) else { return }
+        guard let data = try? encoder.encode(value) else { return false }
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? data.write(to: directory.appendingPathComponent(name), options: .atomic)
+        let localWriteCompleted: Bool
+        do {
+            try data.write(to: directory.appendingPathComponent(name), options: .atomic)
+            localWriteCompleted = true
+        } catch {
+            localWriteCompleted = false
+        }
         // Mirror to iCloud and let the system flush changes automatically. We
         // deliberately avoid calling `synchronize()` per write: stores persist on
         // high-frequency interactions (e.g. dragging a spatial source), and the
         // app already synchronises on launch / iCloud change notifications.
         syncedCloud(for: name)?.setData(data, forKey: cloudKey(for: name))
+        return localWriteCompleted
     }
 
     /// The cloud store, only for a file whose key is on the shipped key-value allowlist (#124). Any other file,

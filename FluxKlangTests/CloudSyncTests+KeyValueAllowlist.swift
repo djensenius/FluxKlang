@@ -28,6 +28,32 @@ extension CloudSyncTests {
         "store." + name.replacingOccurrences(of: ".", with: "_")
     }
 
+    @Test func failedLocalWriteStillSubmitsEncodedValueToCloud() async throws {
+        let directory = uniqueDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("environments.json")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+        try Data("block replacement".utf8).write(to: destination.appendingPathComponent("blocker"))
+        let cloud = MemoryCloudStore()
+        let store = JSONFileStore(directory: directory, cloud: cloud)
+
+        #expect(await store.saveReportingLocalWrite(Model(value: 42), to: "environments.json") == false)
+        let data = try #require(cloud.data(forKey: "store.environments_json"))
+        #expect(try JSONDecoder().decode(Model.self, from: data) == Model(value: 42))
+        #expect(cloud.synchronizeCount == 0)
+    }
+
+    @Test func encodingFailureDoesNotSubmitToCloud() async {
+        let directory = uniqueDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = MemoryCloudStore()
+        let store = JSONFileStore(directory: directory, cloud: cloud)
+        #expect(await store.saveReportingLocalWrite(Double.nan, to: "environments.json") == false)
+        #expect(cloud.writeCount == 0)
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("environments.json").path))
+    }
+
     @Test func fileNameListsMatchTheShippedAllowlist() {
         let allowlisted = KeyValueAllowlist.shipped.entries.map(\.key.rawValue)
         #expect(Set(Self.syncedFileNames.map(cloudKey(for:))) == Set(allowlisted))

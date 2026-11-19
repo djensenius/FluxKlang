@@ -26,7 +26,7 @@ final class EnvironmentStore {
     private let legacyChainFileName = "chain.json"
     private let injectedStore: JSONFileStore?
     private var loaded = false
-    @ObservationIgnored private var saveTail: Task<Void, Never>?
+    @ObservationIgnored private var saveTail: Task<Bool, Never>?
     /// Whether the one-time fold of the old global `chain.json` into the active
     /// environment's graph has happened. Persisted so it runs at most once.
     private var migratedChain = false
@@ -270,12 +270,33 @@ final class EnvironmentStore {
         ).endpoints
     }
 
+    enum StudioLocalSaveReceipt: Sendable {
+        case noActiveEnvironment
+        case localWriteCompleted
+        case localWriteFailed
+    }
+
     func replaceStudio(graph: StudioGraph, endpoints: [StudioEndpoint]) {
-        mutateEnvironment { environment in
-            let normalized = StudioEndpointNormalizer.normalize(graph: graph, endpoints: endpoints)
-            environment.studioGraph = normalized.graph
-            environment.studioEndpoints = normalized.endpoints
+        _ = scheduleStudioReplacement(graph: graph, endpoints: endpoints)
+    }
+
+    /// Mutates synchronously and returns a receipt for this invocation's ordered local write.
+    /// Cancellation of a waiter does not cancel the owned save; no cloud durability is implied.
+    func replaceStudioReportingLocalSave(
+        graph: StudioGraph, endpoints: [StudioEndpoint]
+    ) -> Task<StudioLocalSaveReceipt, Never> {
+        guard let save = scheduleStudioReplacement(graph: graph, endpoints: endpoints) else {
+            return Task { .noActiveEnvironment }
         }
+        return Task { await save.value ? .localWriteCompleted : .localWriteFailed }
+    }
+
+    private func scheduleStudioReplacement(graph: StudioGraph, endpoints: [StudioEndpoint]) -> Task<Bool, Never>? {
+        guard let index = activeIndex() else { return nil }
+        let normalized = StudioEndpointNormalizer.normalize(graph: graph, endpoints: endpoints)
+        environments[index].studioGraph = normalized.graph
+        environments[index].studioEndpoints = normalized.endpoints
+        return persist()
     }
 
     func addStudioEndpoint(_ endpoint: StudioEndpoint) {
@@ -438,10 +459,11 @@ final class EnvironmentStore {
     /// Cancelling the waiter does not cancel the save chain.
     func awaitScheduledSavesSnapshot() async {
         let tail = saveTail
-        await tail?.value
+        _ = await tail?.value
     }
 
-    private func persist() {
+    @discardableResult
+    private func persist() -> Task<Bool, Never> {
         let snapshot = Persisted(
             environments: environments,
             activeID: activeID,
@@ -451,11 +473,13 @@ final class EnvironmentStore {
         let fileName = fileName
         let injectedStore = injectedStore
         let previousTail = saveTail
-        saveTail = Task {
-            await previousTail?.value
+        let save = Task {
+            _ = await previousTail?.value
             let store = injectedStore ?? JSONFileStore.shared
-            await store.save(snapshot, to: fileName)
+            return await store.saveReportingLocalWrite(snapshot, to: fileName)
         }
+        saveTail = save
+        return save
     }
 
     private static func clamp(_ point: CGPoint) -> CGPoint {
