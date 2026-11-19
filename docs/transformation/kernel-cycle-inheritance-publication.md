@@ -11,10 +11,13 @@ staging, overlap, claim transfer or reclamation machinery. #715, #64, #190,
 1. [`KernelCycle.prepare`][prepare] checks shape, wiring and ownership, including
    the shared admission-refusal table over a retired ownership. It captures the
    claim state without claiming. [`KernelCycleCandidate`][candidate] captures these
-   checks, parts, pulses and capacities, then creates acknowledgement requests.
+   checks, parts, pulses and capacities, then creates acknowledgement requests
+   and reserves three readmission backings (raw slots, head and pending-by-kind
+   counters) before claiming.
    [`KernelCycle.init(binding:)`][cycle-init] consumes that candidate and calls
-   `claimForCycle` before allocating the
-   block buffer, readmission slots, watermark, decider and telemetry counters.
+   `claimForCycle` before constructing the readmission object and initializing
+   its reserved slots, and before allocating the block buffer, watermark,
+   decider and telemetry counters.
    The implementation order, not the older “last in init” claim comment, governs.
 2. [`NoteOwnership.claimForCycle`][claim] acquires exactly the observed claim
    word by compare-exchange. Only success reads inherited loss and carry.
@@ -228,9 +231,43 @@ fillers, those objects count in its `I`/`D`; it must not pretend they are raw sp
 The [inline carry][carry] and plan already initialize all 256 entries including fillers;
 their logical counts are not raw-pointer initialization counts.
 
-Current code instead allocates `max(1, planned)` readmission slots after planning,
-initializes `planned`, and deinitializes `planned` ([constructor/deinit][readmission-init]).
-That is safe for current construction but cannot describe unknown-carry staging.
+The control-only #856 prerequisite now reserves exactly three backings after
+candidate validation and acknowledgement issuance: raw slots `[R]` (event, weight,
+superseded together), initialized head `[1] = 0`, and pending-by-kind `[3] = 0`.
+The non-Sendable, move-only reservation belongs to the noncopyable pending
+candidate payload. Terminal extraction still precedes the sole existing claim
+CAS; a loser privately destroys its reservation at `I = 0`, with no snapshot
+refresh, retry or revocation. Successful binding consumes that owner into
+readmission, uses the unchanged canonical fixed planner, initializes each slot
+then increments `I`, and seals `I = N` before returning ready.
+
+Consumption, supersession and retirement leave `I` unchanged. The single owner
+deinitializes exactly `I` slots and frees them, separately deinitializing/freeing
+the always-initialized head and three counters. There is no pointer accessor,
+cleanup callback, destructor receipt or new destruction authority. Read-only
+diagnostics expose reserved/initialized counts and an opaque equatable
+three-allocation fingerprint (private address representation). Candidate
+diagnostics exist only while pending; ready cycle/readmission diagnostics are
+sealed. Equality demonstrates reuse only while allocations are live, not global
+lifetime/ABA identity. Runtime extent/reuse/lifetime tests complement independent
+source review of initialize-then-increment and exact-I teardown: trivial slots
+cannot expose per-slot runtime destruction counts.
+
+Every existing cycle constructor, including reference prepare/publish/poll, uses
+this path; no application activation is claimed. The standalone readmission
+initializer delegates while preserving `min(256, max(1, blockCapacity))`, including
+out-of-candidate-range values. Empty and overflow-refused plans remain ready with
+`N = I = 0`; capacity cuts remain successful. Reports, inheritance and loss
+semantics are unchanged.
+
+This is only the partial control-only P5 reservation prerequisite, not T/P,
+asynchronous transfer or P5 completion. Exactly three allocations move preclaim;
+readmission object/atomics, cycle block/scratch, watermark, decider, telemetry and
+optional refusal table still allocate on their existing post-claim paths.
+Increased pending-candidate and empty-standalone storage (`R`, formerly
+`max(1, planned)` after planning), and unbounded aggregate candidate retention,
+are explicitly accepted. No global budget or allocation-free whole-bind claim.
+
 Before P, seal inherited loss, the full carry including `ownCount` and
 `droppedForCapacity`, plan refusal/count/invalid/cut/superseded/drop metadata,
 slot events/weights, head zero, pending-by-kind, pending total `N`, and zero

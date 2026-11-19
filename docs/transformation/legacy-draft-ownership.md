@@ -5,6 +5,50 @@ Source baseline: `17045692aaedac5abeb0f79c9893e8081436548d` (P14a #770).
 This document implements no exclusion, loader, migration admission or startup wiring.
 Current legacy editing, review, acceptance and discard remain unchanged.
 
+## P14b13 / #854 — explicit Studio removal acknowledgement
+
+Explicit Studio discard now consumes `discardPendingStudioDraftResult()`: the
+unchanged persistence loop's own nil-entry-snapshot-qualified outcome. Legacy Void
+discard delegates once. Pending/settled memory, navigation, cancellation, catch-up
+and prepared-commit rollback behavior remain unchanged. AppModel acceptance's
+separate post-graph-mutation discard is not part of this presentation workflow.
+
+`StudioDraftDiscardPresentation` is a Foundation/Observation MainActor owner retained
+in Studio's local `@State`. Both card and review-sheet callbacks use it. Each click
+clears the old warning immediately and receives a fresh local UUID. Actual tasks
+remain owned until completion and remove only their own handle; snapshot joining
+supports fixture teardown without introducing a queue or cancelling accepted IO.
+Only the latest local invocation, with pending draft currently nil and its own
+unconfirmed outcome, can show the payload-free `.removalUnconfirmed` warning:
+
+> Removing the saved draft was not confirmed. It may reappear after restarting.
+
+One dismissible outer top safe-area banner serves both layouts, outside conditional
+card/sheet content and without competing alerts. Visibility also requires pending
+nil. Observing a nonnil draft clears a shown warning; dismissal changes presentation
+only. Outer Studio disappearance invalidates presentation and clears the warning,
+not storage work. No late completion/reappearance replay occurs. Unrelated Listen
+or editing success is not wired to acknowledge removal.
+
+This UUID orders **local clicks**, not global storage or draft lifetimes. Explicit
+nil ABA remains intentional: another caller may publish B and return to nil before
+A's failed removal completes. A can then warn about its historical failure, even
+after the other caller successfully saved nil. Observing B clears an already-shown
+warning but does not invalidate an unfinished A. No global generation, diagnostic
+borrowing from `latestStorageAttempt`, confirmation read, retry or restoration is
+introduced. Successful API completion is not a durability/current-file guarantee.
+
+Existing-root Discard tests exercise this actual owner, coordinator and forwarding
+real store with deterministic gates, including reverse completions, nil ABA and
+cancellation/catch-up. Fixture teardown releases gates and joins owned presentation
+work even on throwing paths. Before-change evidence uses the existing legacy
+failed-discard test (a passing characterization of silent failure, not a new-API
+red test). Focused exact-source canonical-audit Debug/Release and changed-Swift lint
+evidence lives in `files/p14b13-*`. Native compilation, full AppModel and actual
+SwiftUI interaction/lifecycle qualification remain separate; the mirror does not
+prove them. Coordinator-owned registration/generated membership and hosted gates
+remain required. #122, #48, #512 and migration activation remain open.
+
 ## P14b12 / #849 — revalidation save acknowledgement
 
 The actual fallback pending/draft query now consumes `validatePendingStudioDraftResult`,
