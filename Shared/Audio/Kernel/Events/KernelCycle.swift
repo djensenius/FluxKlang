@@ -273,6 +273,7 @@ final class KernelCycle: @unchecked Sendable {
     /// Any thread: the inherited carry's re-admission report, slot capacity and resolved stateful events by kind.
     var carryReadmissionReport: KernelCarryReadmissionReport { carryReadmission.report }
     var carryReadmissionCapacity: Int { carryReadmission.capacity }
+    var carryReadmissionStorageInfo: KernelReadmissionStorageInfo { carryReadmission.storageInfo }
     var carryResolution: KernelCarryResolution { carryReadmission.resolved() }
 
     // Render-owned components and parts; private, so only this file can reach them.
@@ -320,7 +321,8 @@ final class KernelCycle: @unchecked Sendable {
         criticalScope = parts.events.criticalScope
         telemetryOutput = parts.telemetry
         block = KernelBlockBuffer(capacity: blockCapacity)
-        carryReadmission = KernelCarryReadmission(carry: ownershipClaim.inheritedCarry, blockCapacity: blockCapacity)
+        carryReadmission = KernelCarryReadmission(carry: ownershipClaim.inheritedCarry,
+                                                  reservation: payload.reservation)
         watermark = KernelFlushWatermark(laneCount: parts.events.laneCount, armed: parts.start == .replacingCycle)
         decider = KernelBlockDecider(deadline: checked.deadline, ownership: parts.ownership, ramps: parts.ramps,
                                      pulses: payload.pulses, takeover: parts.start == .replacingCycle,
@@ -332,9 +334,7 @@ final class KernelCycle: @unchecked Sendable {
     }
 
     /// Control-side teardown only.
-    deinit {
-        counters.deallocate()
-    }
+    deinit { counters.deallocate() }
 
     /// Render only. Runs one block `[blockStart, blockStart + frames)`; see the type's steps. Never throws, traps
     /// or blocks, for any `blockStart` and `frames`. After `retire()` it does nothing and returns a result with
