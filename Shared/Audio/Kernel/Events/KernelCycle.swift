@@ -297,13 +297,14 @@ final class KernelCycle: @unchecked Sendable {
     /// `retire()` ran: render-only plain memory (render-thread-confined), checked first by `run` and `retire()`.
     private var retired = false
 
-    /// Control-side preparation; allocates the block buffer and the ramp bookkeeping.
-    init(_ parts: KernelCycleParts, pulses: ClockPulseGate, blockCapacity: Int,
-         perLaneQuota: Int) throws(PreparationError) {
-        let checked = try Self.prepare(parts, blockCapacity: blockCapacity, perLaneQuota: perLaneQuota)
-        let deadline = checked.deadline
-        guard let ackRequests = KernelAckRequests(faults: parts.faults, criticalScope: parts.events.criticalScope)
-        else { throw .ackIdentitiesExhausted }
+    /// Control-only, terminal binding; consumes before claiming, then initializes the ready cycle in full.
+    init(binding candidate: KernelCycleCandidate) throws(PreparationError) {
+        let payload = try candidate.consumeForBinding()
+        let parts = payload.parts
+        let checked = payload.checked
+        let blockCapacity = payload.blockCapacity
+        let perLaneQuota = payload.perLaneQuota
+        let ackRequests = payload.ackRequests
         do {
             ownershipClaim = try parts.ownership.claimForCycle(fresh: checked.fresh, from: checked.claimState)
         } catch {
@@ -321,8 +322,8 @@ final class KernelCycle: @unchecked Sendable {
         block = KernelBlockBuffer(capacity: blockCapacity)
         carryReadmission = KernelCarryReadmission(carry: ownershipClaim.inheritedCarry, blockCapacity: blockCapacity)
         watermark = KernelFlushWatermark(laneCount: parts.events.laneCount, armed: parts.start == .replacingCycle)
-        decider = KernelBlockDecider(deadline: deadline, ownership: parts.ownership, ramps: parts.ramps,
-                                     pulses: pulses, takeover: parts.start == .replacingCycle,
+        decider = KernelBlockDecider(deadline: checked.deadline, ownership: parts.ownership, ramps: parts.ramps,
+                                     pulses: payload.pulses, takeover: parts.start == .replacingCycle,
                                      readmission: carryReadmission)
         admissionRefusals = parts.admissionRefusals ?? KernelAdmissionRefusals(laneCount: parts.events.laneCount,
                                                                                handoff: parts.events.identity)

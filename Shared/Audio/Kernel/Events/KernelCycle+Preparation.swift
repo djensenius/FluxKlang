@@ -12,6 +12,13 @@ struct KernelCyclePreparation {
 }
 
 extension KernelCycle {
+    /// Legacy control-side construction: one candidate, one cycle, one claim attempt. No refreshed retry.
+    convenience init(_ parts: KernelCycleParts, pulses: ClockPulseGate, blockCapacity: Int,
+                     perLaneQuota: Int) throws(PreparationError) {
+        try self.init(binding: KernelCycleCandidate(parts, pulses: pulses, blockCapacity: blockCapacity,
+                                                    perLaneQuota: perLaneQuota))
+    }
+
     /// Why `KernelCycle.init` refused (moved here from `KernelCycle.swift`, which is at the file-length cap).
     enum PreparationError: Error, Equatable, Sendable {
         /// The fan-in is not `.events` consumed on `.render`.
@@ -42,13 +49,17 @@ extension KernelCycle {
         /// nonzero and even): a new table would leave producers admitted earlier counting elsewhere. Checked
         /// after `.ownershipClaim`; refuses with nothing claimed. A first cycle may omit it.
         case admissionRefusalsRequired
+        /// The candidate was cancelled on control before binding.
+        case candidateCancelled
+        /// A previous bind through any alias consumed the candidate, whether or not its claim succeeded.
+        case candidateConsumed
     }
 
     /// Checks, in this order: the shape (`.notRenderEvents`, `.deadline`, `.blockCapacityOutOfRange`,
     /// `.perLaneQuotaOutOfRange`), the wiring (`.scopeCountMismatch`, `.telemetrySlotOutOfRange`,
     /// `.admissionRefusalsMismatch`, `.faultsNotLaneAuthority`), then the ownership (`.ownershipClaim`,
-    /// `.admissionRefusalsRequired`). `init` then issues the acknowledgement identity (`.ackIdentitiesExhausted`) and
-    /// makes the claim itself. The first defect found is the one reported; nothing is claimed or issued here.
+    /// `.admissionRefusalsRequired`). Candidate preparation then issues the acknowledgement identity
+    /// (`.ackIdentitiesExhausted`); binding makes the claim. Nothing is claimed or issued by these checks.
     static func prepare(_ parts: KernelCycleParts, blockCapacity: Int,
                         perLaneQuota: Int) throws(PreparationError) -> KernelCyclePreparation {
         let deadline = try checkShape(parts, blockCapacity: blockCapacity, perLaneQuota: perLaneQuota)

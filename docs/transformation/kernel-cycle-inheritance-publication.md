@@ -1,7 +1,7 @@
 # Kernel cycle inheritance publication contract (#843)
 
 Part of #715 (E5d review prerequisite), #64 and roadmap #48.
-**Documentation only; independently reviewed contract.** This records the ratified
+**Independently reviewed contract, with P1a/P1b implementation status below.** This records the ratified
 compatibility direction and exact remaining proof obligations, not implemented
 staging, overlap, claim transfer or reclamation machinery. #715, #64, #190,
 #191 and #48 remain open. Source baseline: `80313d383a9e58ba9a35c32aa28e0701c31732de`.
@@ -10,8 +10,10 @@ staging, overlap, claim transfer or reclamation machinery. #715, #64, #190,
 
 1. [`KernelCycle.prepare`][prepare] checks shape, wiring and ownership, including
    the shared admission-refusal table over a retired ownership. It captures the
-   claim state without claiming. [`KernelCycle.init`][cycle-init] then creates
-   acknowledgement requests and calls `claimForCycle` before allocating the
+   claim state without claiming. [`KernelCycleCandidate`][candidate] captures these
+   checks, parts, pulses and capacities, then creates acknowledgement requests.
+   [`KernelCycle.init(binding:)`][cycle-init] consumes that candidate and calls
+   `claimForCycle` before allocating the
    block buffer, readmission slots, watermark, decider and telemetry counters.
    The implementation order, not the older “last in init” claim comment, governs.
 2. [`NoteOwnership.claimForCycle`][claim] acquires exactly the observed claim
@@ -57,7 +59,7 @@ previous cycle's report but cannot treat it as the next hop's result.
 
 Staging reserves private storage; it does not claim the predecessor, drain
 fan-in, access render-owned notes/tombstones, retire a cycle or grant render
-authority. A candidate may exist while the predecessor runs, but it may not
+authority. In a future overlap design a candidate may exist while the predecessor runs, but it may not
 bind until a successful matching claim is possible under the existing rules.
 The canonical planner is complete; this is not another planning algorithm.
 
@@ -90,8 +92,59 @@ claims before inheritance writes/CAS. Claims remain copyable under the existing
 exclusive-release caller contract, not a one-shot staged-installation protocol.
 Immediate cycle construction/retirement keeps the claim and immutable report
 metadata retained after retirement; added ARC/lifetime retention is not RT proof.
-P1's exclusive one-shot binder and P2-P5 remain unresolved, including staged
-candidate association, publication, cancellation and reader/teardown quiescence.
+P1b below supplies a serialized control-only one-shot binder, not asynchronous
+staging custody. P1's remainder and P2-P5 remain unresolved, including publication,
+concurrent transfer/cancel arbitration and reader/teardown quiescence.
+
+### Implemented P1b: control-only candidate (#851)
+
+The existing constructor was already structurally one-shot; this is a new API
+and lifetime boundary, not a duplicate-adoption bug fix. The legacy initializer
+keeps its labels and typed `PreparationError`, creates exactly one candidate and
+delegates to the actual designated `init(binding:)`: one cycle, one claim attempt.
+
+The internal final reference candidate is deliberately non-Sendable. All calls
+through all aliases, including destruction, must be strictly serialized on control.
+Independent candidates arbitrate only through the existing ownership CAS. There
+is no same-candidate concurrency promise, actor, render lock or new identity counter.
+
+| Candidate state | Bind | Cancel / destruction |
+| --- | --- | --- |
+| Pending | Remove payload and mark consumed **before** the exact-snapshot claim CAS. Only success reads inheritance and finishes the ready cycle. | First cancel returns true, clears payload on control; abandonment releases only unclaimed storage. |
+| Cancelled | Typed `.candidateCancelled`, no claim attempt. | Further cancel returns false. |
+| Consumed (success or refusal) | Typed `.candidateConsumed`, no claim attempt or refreshed retry. | Cancel returns false; cannot revoke, retire or destroy a cycle. No payload or cycle back-reference remains. |
+
+Preparation retains validated parts (including the selected telemetry, admission
+table and start mode), copied pulses, capacities, the exact originating free
+snapshot, and allocated acknowledgement requests. Validation and identity issuance
+order is unchanged. Held ownership still refuses preparation: **no predecessor-overlap
+staging**. No inheritance, reports, events or render authority are exposed by a candidate.
+The module-internal extraction helper has only the designated initializer as its
+consumer; there is no payload-adopting cycle initializer or claim exposure.
+
+A refused first bind destroys extracted storage synchronously on control and is
+terminal. Held replacement losers report `.predecessorNotRetired`; losers first
+bound after the winner retired report `.claimRaced`. Fresh stale snapshots preserve
+`.alreadyUsed`. Only a genuinely new preparation can capture a later free state.
+No recoverable failure is added after a successful claim: a refused carry plan
+still constructs a ready cycle with its immutable refusal report. Ready cycles
+store no candidate; retirement and final control teardown retain their existing rules.
+
+[`CycleCandidate` tests][candidate-tests] cover captured inputs/equal-word owners,
+alias cancel/consume, independent losers on both sides of retirement, fresh stale
+refusal, empty/nonempty/refused plans, partial carry progress and successor binding.
+Weak observers cover pending retention, cancel, abandonment, unsuccessful binding,
+terminal aliases and ready/retired cycle retention until final control release.
+These are serialized control-lifetime tests, not a render teardown/quiescence proof.
+
+Costs: legacy construction has one additional candidate object lifetime (no
+assumption of optimizer removal), control-side ARC and value copies. Cancelled or
+abandoned preparations spend acknowledgement identities. Aggregate pending
+retention is unbounded. Reference `MemoryLayout` is not heap footprint. No extra
+inherited-carry copy, claim-layout change or candidate property in the ready cycle
+is required. No deadline, general RT, quiescence, runtime adoption or app-completion
+claim follows. The prior #841/#769 ScratchHarness start-deadline failure followed
+by an unchanged diagnostic retry remains disclosed and unresolved.
 
 ## 3. Transition and ownership table
 
@@ -236,8 +289,9 @@ This document neither removes the gap nor completes E5d overlap acceptance.
 
 ## 7. Review disposition and limits
 
-**Independent review: APPROVE (documentation-only contract).** P1–P5 remain unresolved:
-identity-qualified one-shot binding; transfer/cancel arbitration; quiescent
+**Independent review: APPROVE (original documentation-only contract).** P1a/P1b
+are partial reference-model progress, not approval of overlap. P1 remainder and
+P2–P5 remain unresolved: asynchronous transfer/cancel arbitration; quiescent
 control destruction; concrete ready publication/alias isolation; and bounded
 reservation/retention with no post-claim allocation failure path. Until these
 are discharged by a separately scoped design/implementation, staging must not
@@ -258,6 +312,8 @@ flush, takeover and acknowledgement behavior is preserved.
 ## Source references
 
 [prepare]: ../../Shared/Audio/Kernel/Events/KernelCycle+Preparation.swift#L49-L106
+[candidate]: ../../Shared/Audio/Kernel/Events/KernelCycleCandidate.swift
+[candidate-tests]: ../../FluxKlangTests/RealtimeHandoffTests+KernelCycleCandidate.swift
 [cycle-init]: ../../Shared/Audio/Kernel/Events/KernelCycle.swift#L269-L336
 [ownership]: ../../Shared/Audio/Kernel/Events/NoteOwnership.swift#L70-L142
 [claim]: ../../Shared/Audio/Kernel/Events/NoteOwnership.swift#L180-L209
