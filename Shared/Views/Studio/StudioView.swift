@@ -485,9 +485,7 @@ private extension StudioView {
         )
     }
     func acceptPendingDraft() {
-        Task {
-            _ = await appModel.acceptPendingAssistantDraft()
-        }
+        discardPresentation.accept(using: appModel)
     }
     func discardPendingDraft() {
         discardPresentation.discard(using: appModel.assistant)
