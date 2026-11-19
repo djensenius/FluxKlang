@@ -13,6 +13,11 @@ takeover gap, or qualify any render deadline. Claim, retirement, flush watermark
 takeover release, acknowledgement and happens-before contracts are unchanged.
 There is no production render/transport activation here.
 
+The [inheritance-publication contract](transformation/kernel-cycle-inheritance-publication.md)
+keeps unbound staging outside the ready-cycle/report interface and records the
+remaining binding, publication and cancellation proof obligations (#843).
+It is a documentation prerequisite, not implemented overlap machinery.
+
 ## Algorithm and accounting
 
 1. Read the bounded carry through `event(at:)`, never its allocating `events`
