@@ -28,7 +28,9 @@ Every actual completion retains the number declared by its fragments.
 Count one still skips body decoding for the restricted kinds, preserving even
 unsupported encoding names in the parsed header. Other kinds acquire **no**
 count validation at this boundary. Successful content fields are unchanged.
-Coding occurs before chunking; Mcoded7 groups may still span fragments.
+The decoder assumes senders code the whole body before chunking, allowing
+Mcoded7 groups to span fragments. This assumption has not been verified against
+M2-102 or arbitrary senders.
 
 ## Unchanged and excluded
 
