@@ -26,6 +26,7 @@ extension HostAuthorityTests {
         func connectInvalidatesAPausedApply(reuseSession: Bool) async throws {
             let pause = OwnerApplyPause()
             let owner = try HostAuthorityOwner(host: Owner.host, checkpoint: { await pause.visit($0) })
+            await Owner.openRoots(owner)
             let session = UUID()
             await owner.connected(session: session)
             await pause.arm(.applyStarting)
@@ -46,6 +47,7 @@ extension HostAuthorityTests {
                     host: Owner.host, checkpoint: { await pause.visit($0) },
                     lifecycleQueued: { lossProgress.continuation.yield(()) }
                 )
+                await Owner.openRoots(owner)
                 _ = try await owner.grant(.host).get()
                 await owner.connected(session: UUID())
                 if initial != .free {
@@ -97,6 +99,7 @@ extension HostAuthorityTests {
         fileprivate func staleApplyCannotReleaseAReplacement(demo: Bool, initial: OwnerLeaseState) async throws {
             let pause = OwnerApplyPause()
             let owner = try HostAuthorityOwner(host: Owner.host, checkpoint: { await pause.visit($0) })
+            await Owner.openRoots(owner)
             _ = try await owner.grant(.host).get()
             let session = UUID()
             await owner.connected(session: session)
@@ -309,6 +312,7 @@ extension HostAuthorityTests {
                 host: Owner.host, checkpoint: { await pause.visit($0) },
                 lifecycleQueued: { pause.lifecycle.continuation.yield(.queued) }
             )
+            await Owner.openRoots(owner)
             _ = try await owner.grant(.host).get()
             await owner.connected(session: UUID())
             return (owner, pause)

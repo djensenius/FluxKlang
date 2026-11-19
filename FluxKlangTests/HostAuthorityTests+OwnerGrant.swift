@@ -161,6 +161,7 @@ extension HostAuthorityTests {
         @Test func revokeWaitsForADelayedGrantPublication() async throws {
             let pause = OwnerPublicationPause()
             let owner = try HostAuthorityOwner(host: Owner.host, publicationCheckpoint: { await pause.visit($0) })
+            await Owner.openRoots(owner)
             await owner.connected(session: UUID())
             _ = try await owner.beginApply(window: Owner.windowOne).get()
             let expected = HostAuthorityOwner.fingerprint(.host, revision: 1)

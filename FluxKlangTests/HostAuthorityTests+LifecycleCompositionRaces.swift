@@ -365,5 +365,35 @@ extension HostAuthorityTests {
             held.release.open()
             #expect(await held.replacement.value == .success(.connected(held.session)))
         }
+
+        @Test(.timeLimit(.minutes(1))) func earlierCloseKeepsLaterGeneration() async throws {
+            let held = try await LifecycleHeldTurn()
+            let (releaseFirst, releaseSecond) = (LifecycleGate(), LifecycleGate())
+            let firstDetach = held.lifecycle.detach(Bench.window)
+            let first = await held.queueHold(until: releaseFirst)
+            let secondDetach = held.lifecycle.detach(Bench.window)
+            await held.fence(firstDetach)
+            await held.fence(secondDetach)
+            held.release.open()
+            await firstDetach.wait()
+            await first.holding.wait()
+            #expect(await held.owner.closureGenerations == [Bench.window: 2])
+            // Submitted after detach 2: the generations it and detach 3 carry never restart.
+            let reopen = held.lifecycle.open(Bench.window)
+            let second = await held.queueHold(until: releaseSecond)
+            let thirdDetach = held.lifecycle.detach(Bench.window)
+            await held.fence(thirdDetach)
+            releaseFirst.open()
+            await reopen.wait()
+            await second.holding.wait()
+            // Detach 2's close did not release detach 3's fence, so the earlier open stayed stale.
+            #expect(await held.owner.closureGenerations == [Bench.window: 3])
+            #expect(await held.owner.beginApply(window: Bench.window) == .failure(.windowClosed))
+            releaseSecond.open()
+            await thirdDetach.wait()
+            _ = await first.task.value
+            _ = await second.task.value
+            #expect(await held.owner.closureGenerations.isEmpty && !held.lifecycle.isBusy)
+        }
     }
 }
