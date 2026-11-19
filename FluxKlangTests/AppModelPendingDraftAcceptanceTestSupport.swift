@@ -12,9 +12,12 @@ final class AppModelPendingDraftAcceptanceFixture {
     let forwarding: PendingPersistenceForwarder
     let coordinator: AssistantCoordinator
     let wing = WingController(transport: InertWingTransport())
+    let presentation = StudioDraftDiscardPresentation()
     private let resources: AssistantFixtureResources
     private var model: AppModel?
     private var acceptance: Task<StudioPatchMergeResult?, Never>?
+    private var cancellations: [@MainActor () -> Void] = []
+    private var joins: [@MainActor () async -> Void] = []
     private var closed = false
     private(set) var setupSavesJoined = false
 
@@ -38,7 +41,9 @@ final class AppModelPendingDraftAcceptanceFixture {
         }
     }
 
-    func prepare() async throws -> (AppModel, StudioPatchDraft) {
+    func prepare(
+        mode: StudioDraftApplicationMode = .append, seedGraph: Bool = false
+    ) async throws -> (AppModel, StudioPatchDraft) {
         try #require(model == nil && !closed)
         let settings = AssistantProviderSettings(
             defaults: try resources.defaults("provider"), credentials: MemoryAssistantCredentialStore())
@@ -64,6 +69,10 @@ final class AppModelPendingDraftAcceptanceFixture {
         let instrument = Equipment(name: "Acceptance fixture source", outputs: ["Out"])
         model.equipment.add(instrument)
         let environmentID = model.environments.addEnvironment(named: "Acceptance fixture environment")
+        if seedGraph {
+            let endpoint = StudioEndpoint(name: "Existing space", destination: .space)
+            model.environments.addStudioEndpointNode(endpoint, position: .zero)
+        }
         let home = StudioHomeConnections(inputs: [
             StudioInputConnection(connector: 1, equipmentID: instrument.id, outputPort: 0)
         ])
@@ -75,8 +84,48 @@ final class AppModelPendingDraftAcceptanceFixture {
         try #require(model.studioConnections.connections.home == home)
         try #require(model.studioConnections.connections.temporaryMoves.isEmpty)
         _ = await coordinator.perform(
+            .buildStudioDraft(.init(sourceInstrumentIDs: [instrument.id], applicationMode: mode)),
+            context: model.assistantToolContext())
+        let built = try #require(coordinator.pendingStudioDraft)
+        try requireReady(model, built)
+        return (model, built)
+    }
+
+    func requireReady(_ model: AppModel, _ draft: StudioPatchDraft) throws {
+        try #require(model.environments.active != nil && model.environments.activeID == draft.request.environmentID)
+        try #require(setupSavesJoined && !draft.hasErrors && draft.liveReferences == [])
+        try #require(model.wing === wing && wing.connection == .disconnected && wing.sessionID == nil)
+        try #require(!model.isDemo && wing.transportWriteCount == 0)
+        try Self.requireNoProductionEntries()
+    }
+
+    func start<Value: Sendable>(
+        _ operation: @escaping @MainActor @Sendable () async -> Value
+    ) throws -> Task<Value, Never> {
+        try #require(!closed)
+        let task = Task { await operation() }
+        cancellations.append { task.cancel() }
+        joins.append { _ = await task.value }
+        return task
+    }
+
+    func buildAgain(_ model: AppModel) async throws -> StudioPatchDraft {
+        let instrument = try #require(model.equipment.items.first)
+        _ = await coordinator.perform(
             .buildStudioDraft(.init(sourceInstrumentIDs: [instrument.id])), context: model.assistantToolContext())
-        return (model, try #require(coordinator.pendingStudioDraft))
+        let draft = try #require(coordinator.pendingStudioDraft)
+        try #require(!draft.hasErrors && draft.liveReferences == [])
+        return draft
+    }
+
+    func blockPendingParent() throws {
+        let parent = file.deletingLastPathComponent()
+        try FileManager.default.removeItem(at: parent)
+        try Data("owned acceptance blocker".utf8).write(to: parent)
+    }
+
+    func unblockPendingParent() throws {
+        try FileManager.default.removeItem(at: file.deletingLastPathComponent())
     }
 
     func startAcceptance() throws -> Task<StudioPatchMergeResult?, Never> {
@@ -99,14 +148,20 @@ final class AppModelPendingDraftAcceptanceFixture {
     private func finish() async {
         closed = true
         acceptance?.cancel()
+        for cancel in cancellations { cancel() }
+        presentation.disappear()
         model?.assistantChat.cancel()
         await forwarding.finish() // Release/disarm every gate, including failures before entry.
         _ = await acceptance?.value
-        // No view/presentation or generator stream is started by this API-only baseline.
+        for join in joins { await join() }
+        // All actual presentation tasks are retained by this owner, including throwing paths.
+        await presentation.awaitOwnedWorkSnapshot()
         await model?.assistantChat.awaitOwnedWorkSnapshot()
         await model?.awaitDomainScheduledSaveSnapshots()
         await model?.awaitSiriEntityIndexingSnapshot()
         acceptance = nil
+        cancellations.removeAll()
+        joins.removeAll()
         model = nil
         // Only now may AssistantFixtureResources delete defaults and owned filesystem resources.
     }
