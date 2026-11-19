@@ -8,7 +8,7 @@ struct StudioHostPermissionView: View {
             Label("Host permission", systemImage: "person.badge.key")
                 .font(.headline)
             Text("""
-            Host role is for the gated Studio path. Existing Apply and mixer controls are not yet governed by it.
+            Apply on a real WING needs the Host role, granted each launch. Demo Mode and mixer controls do not use it.
             """)
                 .font(.caption)
                 .foregroundStyle(.secondary)

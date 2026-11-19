@@ -225,3 +225,62 @@ final class HostWingLifecycle {
         return candidate.outcome
     }
 }
+
+/// Studio Apply's route to the WING (#62 AU8c-2; host-authority-sources.md decisions 2, 5, 6 and 8).
+/// Only Demo Mode keeps the ungated apply, and it never touches the owner. A real session applies only
+/// through the gated overload, on the session `beginApply` returned for the applying root window, with
+/// one production minter per apply. A refusal before the first mint sends nothing, and a refused mint
+/// never falls back to the ungated path.
+@MainActor
+enum StudioApplyRoute {
+    /// Why a real-session apply stopped before its first mint; nothing was sent.
+    enum Refusal: Error, Equatable, Sendable {
+        /// No host authority owner: only previews and tests build an `AppModel` without one.
+        case noOwner
+        case noWindow
+        /// No Host role was granted in this launch (decision 2).
+        case notGranted
+        case apply(HostAuthorityOwner.ApplyRefusal)
+        /// The owner's session is not the controller's.
+        case sessionMismatch
+
+        var details: String {
+            switch self {
+            case .noOwner: "Host authority is unavailable. Nothing was sent."
+            case .noWindow: "Apply needs an open window. Nothing was sent."
+            case .notGranted: "Grant Host role before applying to WING. Nothing was sent."
+            case .apply(.noSession): "WING is not connected. Nothing was sent."
+            case .apply(.otherWindowRenders): "Another window renders to WING; apply there. Nothing was sent."
+            case .apply(.windowClosed): "This window is not open. Nothing was sent."
+            case .apply(.authority): "The host refused this apply. Nothing was sent."
+            case .sessionMismatch: "The WING session changed. Nothing was sent."
+            }
+        }
+
+        /// Nothing was confirmed: the gated apply's failed verdict for its `expected` settings.
+        func verdict(_ expected: [WingSetting]) -> WingApplyVerification {
+            WingApplyVerification(state: .failed, settings: expected, confirmedCount: 0, details: details)
+        }
+    }
+
+    static func apply(_ settings: [WingSetting], safetySettings: [WingSetting], on wing: WingController,
+                      owner: HostAuthorityOwner?, window: WindowID?) async -> WingApplyVerification {
+        guard !wing.isDemo else { return await wing.applyAndVerify(settings, safetySettings: safetySettings) }
+        let expected = { wing.directApplyPlan(settings, safetySettings: safetySettings).expected }
+        guard let owner else { return Refusal.noOwner.verdict(expected()) }
+        guard let window else { return Refusal.noWindow.verdict(expected()) }
+        // A read-only check, so an ungranted tap claims no rendering for its window.
+        guard await owner.permission != nil else { return Refusal.notGranted.verdict(expected()) }
+        let session: UUID
+        switch await owner.beginApply(window: window) {
+        case .success(let begun): session = begun
+        case .failure(let refusal): return Refusal.apply(refusal).verdict(expected())
+        }
+        guard wing.sessionID == session else { return Refusal.sessionMismatch.verdict(expected()) }
+        let minter = WingApplyGrantMinter(
+            authority: owner.authority, project: owner.studio, window: window,
+            budget: wing.directApplyBudget(settings, safetySettings: safetySettings), provider: owner.provider
+        )
+        return await wing.applyAndVerify(settings, safetySettings: safetySettings, session: session, minting: minter)
+    }
+}

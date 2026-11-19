@@ -298,7 +298,7 @@ struct SectionDetail: View {
     private var content: some View {
         switch section {
         case .studio:
-            StudioView()
+            StudioView(window: window)
         case .workspace:
             PerformanceWorkspaceView(
                 session: appModel.performanceProjectSession, window: window, newProject: newProject

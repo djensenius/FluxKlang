@@ -3,13 +3,14 @@
 | Field | Value |
 |---|---|
 | Issue | Part of #62 (slice AU8 design); roadmap #48. #62 remains open |
-| Status | AU8 design archive plus AU7c1 planned lifecycle composition, the AU7c2 owner close fence, the AU7c3 detach-time fence, the AU7c4 closed-root list and the AU8c-1 open-window set with root `open` (§12); pure Debug/Release checked, hosted compilation pending |
+| Status | AU8 design archive plus AU7c1 planned lifecycle composition, the AU7c2 owner close fence, the AU7c3 detach-time fence, the AU7c4 closed-root list, the AU8c-1 open-window set with root `open` and the AU8c-2 gated real-session Studio Apply (§12); pure Debug/Release checked, hosted compilation pending |
 | Source baseline | Historical citations: `41f69372`; AU7c1 implementation base: `2165503ab27043999cda062c10ba9132a2085262` |
 | Scope | Authority input sources, original AU8a plan, and bounded planned replacement/session/detach composition |
 
 ## 1. Purpose and status
 
-The gated Studio apply exists in source but has no production inputs. `WingApplyGrantMinter` takes a
+The gated Studio apply exists in source but had no production inputs at the design baseline; since AU8c-2 (§12)
+real-session Studio Apply uses it. `WingApplyGrantMinter` takes a
 `HostAuthority`, a `ProjectID`, a `WindowID`, a ticket budget and a `Provider` that returns a
 `WingApplyAdmission` (intent and admission context) for every mint (`Shared/WING/WingApplyGrantMinter.swift:12-15`,
 `:20-45`). `HostCommandGate.admitDirect` then requires the admission's host epoch and permission to equal the
@@ -268,9 +269,9 @@ The user delegated these choices ("make your best assumption"); the coordinator 
 | AU7c2 | Worker | Owner-only close fence (§12): `windowClosed` fences in-flight applies for its window before waiting; `beginApply` refuses `.windowClosed` | No sequencer, root-lifetime or AppRootView change; no closed-window history |
 | AU7c3 | Worker | Detach-time fence (§12): the owner's lock-free `fenceApplies(for:)`, which `windowClosed` still calls first; `HostWingLifecycle.detach` sends it when submitted, while the detach itself keeps its FIFO turn; `Completion.fenced()` joins it | No queue-order change or early detach; no root lifetime, `windowOpened` or closed-window history; no AppRootView, AppModel or WingController change |
 | AU7c4 | Worker | Closed root (§12): the owner's `closedWindows` set, filled by `fenceApplies`/`windowClosed` and cleared by a lock-free `windowOpened`; `beginApply` and `staleness` refuse a closed root `.windowClosed` (`.noSession` first); `HostWingLifecycle.open(_:)` reopens on its FIFO turn unless the owner has fenced a later detach generation, and a detach's turn awaits its early fence | No production `windowOpened`/`open` caller (AU8c); never-opened windows are not refused; no AppRootView, AppModel or WingController change |
-| AU8d | Worker (follow-up, after AU7c) | Verified-reconnect signal: report from the WING path that a new session is connected and its state re-read, and feed it to the owner's verified-reconnect input | Until it lands, a drop leaves gated writes refused |
+| AU8d | Worker (follow-up, after AU7c) | Verified-reconnect signal: report from the WING path that a new session is connected and its state re-read, and feed it to the owner's verified-reconnect input | Until it lands, a drop leaves gated writes refused. Deferred: no grounded "state re-read succeeded" signal exists (`refreshAll` only sends queries) and nothing produces a drop; pairs with a future drop-detector slice |
 | AU8c-1 | Worker | Root `open` and the open-window set (§12): `AppRootView` calls `wingLifecycle.open` on every appear; the owner's strict `openWindows` replaces `closedWindows`, so `beginApply`/`staleness` refuse any window not open `.windowClosed` (`.noSession` first), including one never opened; a detach's close releases its window's generation entry unless a later detach's fence raised it; the sequencer's per-window `detachSubmissions` becomes one monotonic counter | Prerequisites AU8a, AU8b and AU7c are merged; AU8d is not an AU8c prerequisite, so the earlier AU8d → AU8c order is relaxed for this slice only. Ships `open` before any production `beginApply` caller, which keeps the AU8c invariant. No `beginApply` caller, `applyStudio`, `StudioView`, minter or `WingController` change; no automatic grant |
-| AU8c-2 | Worker | `applyStudio` calls the gated overload for real sessions; the ungated `applyAndVerify(_:safetySettings:)` stays only for Demo Mode; `StudioView` threads the root window; production minter | Needs AU8c-1 (root `open` already wired); must not ship without it |
+| AU8c-2 | Worker | `applyStudio` calls the gated overload for real sessions; the ungated `applyAndVerify(_:safetySettings:)` stays only for Demo Mode; `StudioView` threads the root window; production minter (§12) | Needs AU8c-1 (root `open` already wired); must not ship without it. The AU8d → AU8c relaxation extends to this slice: production calls no `dropped()`, so `.recovering` is unreachable and a drop cannot block Apply. Whichever slice adds the first production `dropped()` caller must ship AU8d with it |
 
 ## 9. AU8a test plan
 
@@ -318,7 +319,7 @@ network or UI.
 - No migration of the other direct WING write paths listed in `docs/transformation/baseline.md` (Dispatch gap).
 - No change to `HostAuthority`, the book, the gate or the minter.
 
-## 12. AU7c1 lifecycle composition, AU7c2 close fence, AU7c3 detach-time fence, AU7c4 closed root, AU8c-1 open roots
+## 12. AU7c1 lifecycle composition, AU7c2 close fence, AU7c3 detach-time fence, AU7c4 closed root, AU8c-1 open roots, AU8c-2 gated Apply
 
 Part of #62 and roadmap #48; both remain open. Source implementation follows the approved #779 plan.
 Approval was design/source feasibility only. The exact 71-input closure now compiles without missing dependencies.
@@ -382,8 +383,9 @@ PendingPreparation, offline processor/compiler/admission/ScratchArena, FaderMath
 CryptoKit identity and canonical audit/receipt sink. No shadow declarations or SwiftOSC dependency are allowed.
 
 AU7c1 introduces no beginApply, dropped, verifiedReconnect, completeRestore, production minter construction,
-lease acquisition, engine installation/retirement or recovery execution. Existing Apply/mixer remain ungated and
-their permission warnings remain true. AU8d and AU8c remain separate, including window-to-Apply wiring.
+lease acquisition, engine installation/retirement or recovery execution. Under AU7c1 Apply/mixer remained ungated
+and their permission warnings were true; AU8c-2 below gates real-session Apply, and the mixer stays ungated. AU8d
+and AU8c remain separate.
 AU7c2 (#792) fences close-before-paused-Apply ordering inside the owner only. `windowClosed(w)` marks every
 in-flight `beginApply(w)` before it waits for the lifecycle lock; each apply registers before its first suspension
 and unregisters on return, so the per-apply fence itself caches no closed-window history, permission or authority
@@ -442,8 +444,21 @@ detach `g'`, that detach's fence either landed before the release (the entry is 
 after it (recording `g'` > the open's generation, so its hop is refused), or after the open's hop, which is the
 fence race AU7c4 already accepts. Because the counter never restarts, a detach submitted after a release cannot reuse a
 generation an earlier open captured. An owner-nil sequencer only counts and serializes. Mirror-run `Owner`,
-`OwnerRaces` and `LifecycleComposition(Races)` tests cover this; `beginApply` still has no production caller (AU8c-2).
-Still open: window liveness beyond root appear/disappear, AU8c-2 and AU8d.
+`OwnerRaces` and `LifecycleComposition(Races)` tests cover this; `beginApply` had no production caller until AU8c-2.
+AU8c-2 (#876) routes Studio Apply. `AppRootView` passes `workspaceWindow` to `StudioView`, whose Listen calls
+`applyStudio(window:)`, which delegates to `StudioApplyRoute.apply` in `HostWingLifecycle.swift`. While `wing.isDemo`
+it calls the ungated `applyAndVerify(_:safetySettings:)` and never touches the owner (decision 5). Otherwise it sends
+nothing and returns a `.failed` verification (zero confirmed, a typed `Refusal` message) when the owner or window is
+missing, when the owner's live permission is `nil` (a read-only check before `beginApply`, so an ungranted tap
+claims no lease), when `beginApply(window:)` refuses, or when the owner's session differs from `wing.sessionID`.
+Otherwise it builds one `WingApplyGrantMinter` (owner authority, Studio project, the window, `directApplyBudget`
+of the same plan, the owner's provider) and calls the gated overload; a refused mint is that overload's `.failed`
+result and never falls back. A revoke between the check and the mint is refused by the mint. A session mismatch
+after `beginApply` leaves the window rendering, as any later refusal does. Real-session Apply therefore needs a
+Host-role grant each launch, the root window open, and that window to be the only one rendering; Demo Mode and the
+mixer are unchanged. Production still calls no `dropped()` or verified reconnect. Mirror-run `StudioApplyRouting`
+tests cover this; the Views/AppModel wiring needs hosted compilation.
+Still open: window liveness beyond root appear/disappear, and AU8d.
 Root disappearance is not native close qualification, and native close remains unqualified.
 WingController.disconnect cancels but does not join its tasks; awaited socket stop is not callback quiescence.
 Nothing here qualifies #191/G2 native reclamation.

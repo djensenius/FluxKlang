@@ -4,6 +4,7 @@ import SwiftUI
 struct StudioView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let window: WindowID
     @State private var isApplying = false
     @State private var applyVerification: WingApplyVerification?
     @State private var discardPresentation = StudioDraftDiscardPresentation()
@@ -390,7 +391,7 @@ struct StudioView: View {
     private func applyStudioPatch() {
         isApplying = true
         Task {
-            applyVerification = await appModel.applyStudio()
+            applyVerification = await appModel.applyStudio(window: window)
             isApplying = false
         }
     }
@@ -493,6 +494,6 @@ private extension StudioView {
 }
 
 #Preview {
-    NavigationStack { StudioView() }
+    NavigationStack { StudioView(window: WindowID(uuid: UUID())) }
         .environment(AppModel.preview())
 }

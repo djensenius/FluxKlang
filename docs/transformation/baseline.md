@@ -104,7 +104,7 @@ retarget it to neutral contracts; **replace** = a new subsystem supersedes it;
 
 | Location | What it is | Decision | Owner |
 |---|---|---|---|
-| `Shared/Views/App/AppModel+StudioApply.swift:4` | `applyStudio()` → `WingApplyVerification`. The full-patch Listen entry point (verified apply at line 17). | replace with host-authority activation | #62 |
+| `Shared/Views/App/AppModel+StudioApply.swift:5` | `applyStudio(window:)` → `WingApplyVerification`. The full-patch Listen entry point. Since AU8c-2 a real session goes through the gated verified apply (Host role, open root window, render lease, one minter per apply; see host-authority-sources.md §12); Demo Mode stays on the ungated one. | replace with host-authority activation | #62 |
 | `Shared/Views/Studio/StudioView.swift:300` | `.disabled(!appModel.isConnected …)`, a guard that exists only in the UI | replace before exposing activation to peers or automation | #62 |
 
 Where the gated apply's host epoch, permission, window and render lease will come from is defined in
