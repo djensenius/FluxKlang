@@ -9,6 +9,13 @@ private struct ResolvedDestination {
 }
 
 enum AssistantDraftReply {
+    static let unconfirmedSaveWarning = "The draft is ready to review, but its save was not confirmed. "
+        + "It may be unavailable after restarting."
+
+    static func acknowledgingSave(_ text: String, outcome: PendingStudioPatchMutationOutcome) -> String {
+        outcome == .writeCompleted ? text : text + "\n\n" + unconfirmedSaveWarning
+    }
+
     static func text(for draft: StudioPatchDraft) -> String {
         let summary = draft.logicalRoutingSummary.map(\.value).joined(separator: "; ")
         let subject = summary.isEmpty ? "a new Studio path" : summary

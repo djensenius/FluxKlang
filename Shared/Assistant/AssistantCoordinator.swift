@@ -1,6 +1,12 @@
 import Foundation
 import Observation
 
+enum PreparedRoutingCommitResult: Sendable, Equatable {
+    case notPublished
+    // The outcome belongs to this invocation's full-value snapshot, not the current file.
+    case staged(draft: StudioPatchDraft, storageOutcome: PendingStudioPatchMutationOutcome)
+}
+
 @MainActor
 @Observable
 final class PendingStudioPatchStorageAttempt {
@@ -158,12 +164,23 @@ final class AssistantCoordinator {
         }
     }
 
-    /// Natural-language preparation is all-or-nothing. The last synchronous guard and mutation share
-    /// the main actor; no await can admit a stale response or replace a newer pending review.
+    /// Compatibility: successful in-memory staging does not require successful storage.
     func commitPreparedRouting(
         _ draft: StudioPatchDraft, expectedPending: StudioPatchDraft?,
         preparedContext: AssistantToolContext, currentContext: AssistantToolContext
     ) async -> Bool {
+        if case .staged = await commitPreparedRoutingResult(
+            draft, expectedPending: expectedPending, preparedContext: preparedContext, currentContext: currentContext
+        ) { return true }
+        return false
+    }
+
+    /// Natural-language preparation is all-or-nothing. The last synchronous guard and mutation share
+    /// the main actor; no await can admit a stale response or replace a newer pending review.
+    func commitPreparedRoutingResult(
+        _ draft: StudioPatchDraft, expectedPending: StudioPatchDraft?,
+        preparedContext: AssistantToolContext, currentContext: AssistantToolContext
+    ) async -> PreparedRoutingCommitResult {
         guard !Task.isCancelled, !draft.hasErrors, pendingStudioDraft == expectedPending,
               preparedContext.activeEnvironmentID == currentContext.activeEnvironmentID,
               preparedContext.equipment == currentContext.equipment,
@@ -175,7 +192,7 @@ final class AssistantCoordinator {
               (draft.nameReferences ?? []).allSatisfy({ $0.isValid(in: currentContext) }),
               (draft.liveReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.liveWing) }),
               (draft.outputReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.effectiveConnections) })
-        else { return false }
+        else { return .notPublished }
         let rollback = settledStudioDraft
         let submissionID = UUID()
         routingSubmissionID = submissionID
@@ -183,14 +200,14 @@ final class AssistantCoordinator {
             if routingSubmissionID == submissionID { routingSubmissionID = nil }
         }
         pendingStudioDraft = draft
-        await persistPendingDraft()
+        let storageOutcome = await persistPendingDraft()
         if Task.isCancelled, routingSubmissionID == submissionID {
             pendingStudioDraft = rollback
             await persistPendingDraft()
         }
-        guard !Task.isCancelled, pendingStudioDraft == draft else { return false }
+        guard !Task.isCancelled, pendingStudioDraft == draft else { return .notPublished }
         settledStudioDraft = draft
-        return true
+        return .staged(draft: draft, storageOutcome: storageOutcome)
     }
 
     func discardPendingStudioDraft() async {
@@ -201,18 +218,25 @@ final class AssistantCoordinator {
         await persistPendingDraft()
     }
 
-    private func persistPendingDraft() async {
+    @discardableResult
+    private func persistPendingDraft() async -> PendingStudioPatchMutationOutcome {
         mutationsInFlight += 1
         defer { mutationsInFlight -= 1 }
-        var saved = pendingStudioDraft
+        let entrySnapshot = pendingStudioDraft
+        var saved = entrySnapshot
+        var entryOutcome: PendingStudioPatchMutationOutcome?
         while true {
             let attempt = PendingStudioPatchStorageAttempt(.mutation(snapshot: saved, outcome: nil))
             latestStorageAttempt = attempt
             let outcome = await draftStore.save(saved)
             attempt.complete(outcome)
-            guard outcome.completed, saved != pendingStudioDraft else { return }
+            // Retain the first result and replace it only for this invocation's same full-value snapshot.
+            if entryOutcome == nil || saved == entrySnapshot { entryOutcome = outcome }
+            guard outcome.completed, saved != pendingStudioDraft else { break }
             saved = pendingStudioDraft
         }
+        guard let entryOutcome else { preconditionFailure("Entry snapshot was not saved") }
+        return entryOutcome
     }
 
     func clearNavigation() {
