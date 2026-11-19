@@ -196,17 +196,18 @@ enum SiriDraftStudioAction {
             guard case .prepared(let draft) = preparation else {
                 return AssistantRoutingOwnership.clarification
             }
-            guard await model.assistant.commitPreparedRouting(
+            let committed = await model.assistant.commitPreparedRoutingResult(
                 draft, expectedPending: expectedPending, preparedContext: context,
-                currentContext: model.assistantToolContext()) else {
+                currentContext: model.assistantToolContext())
+            guard case .staged(let staged, let outcome) = committed else {
                 return AssistantRoutingOwnership.clarification
             }
-            guard !Task.isCancelled, model.assistant.pendingStudioDraft == draft else {
+            guard !Task.isCancelled, model.assistant.pendingStudioDraft == staged else {
                 return "Routing review was cancelled or changed; no WING changes were made."
             }
             _ = await model.assistant.perform(.openReview, context: model.assistantToolContext())
             model.section = .studio
-            return spokenSummary(for: draft)
+            return AssistantDraftReply.acknowledgingSave(spokenSummary(for: staged), outcome: outcome)
         } catch {
             return AssistantRoutingOwnership.clarification
         }
