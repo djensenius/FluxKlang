@@ -568,6 +568,10 @@ targets:
       - path: FluxKlangTests/MIDICIPropertyContentTests+Zlib.swift
       - path: FluxKlangTests/MIDICIPropertyChunkerTests.swift
       - path: FluxKlangTests/MIDICIPropertyChunkerTests+Seeded.swift
+      - path: FluxKlangTests/MIDICIPropertyChunkerTests+Body.swift
+      - path: FluxKlangTests/MIDICIPropertyChunkerTests+BodyBounds.swift
+      - path: FluxKlangTests/MIDICIPropertyChunkerTests+BodyCompatibility.swift
+      - path: FluxKlangTests/MIDICIPropertyChunkerTests+BodyOrder.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Classify.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Order.swift
