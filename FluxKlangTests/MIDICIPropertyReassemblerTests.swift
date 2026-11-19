@@ -51,10 +51,12 @@ struct MIDICIPropertyReassemblerTests {
     }
 
     static func expected(
-        _ data: [UInt8], request: UInt8 = 0x2A, source: UInt32 = sourceA, headerData: [UInt8] = statusHeader
+        _ data: [UInt8], chunkCount: UInt16, request: UInt8 = 0x2A, source: UInt32 = sourceA,
+        headerData: [UInt8] = statusHeader
     ) throws -> MIDICIPropertyReassembly {
         MIDICIPropertyReassembly(
-            kind: .getReply, header: try header(source: source), requestID: request, headerData: headerData,
+            kind: .getReply, header: try header(source: source), requestID: request, chunkCount: chunkCount,
+            headerData: headerData,
             propertyData: data)
     }
 
@@ -69,7 +71,7 @@ struct MIDICIPropertyReassemblerTests {
         #expect(sut.openCount == 1)
         // Changed-envelope success was intentionally retired in #838; +Envelope covers that exact regression.
         let done = try #require(try sut.accept(Self.chunk(3, of: 3, data: [0x04, 0x05])))
-        #expect(done == (try Self.expected([0x01, 0x02, 0x03, 0x04, 0x05])))
+        #expect(done == (try Self.expected([0x01, 0x02, 0x03, 0x04, 0x05], chunkCount: 3)))
         #expect(sut.openCount == 0)
     }
 
@@ -77,18 +79,18 @@ struct MIDICIPropertyReassemblerTests {
         var sut = try MIDICIPropertyReassembler.make(maximumOpenRequests: 1)
         let single = try #require(
             try sut.accept(Self.chunk(1, of: 1, data: [0x4F, 0x4B], headerData: Self.statusHeader)))
-        #expect(single == (try Self.expected([0x4F, 0x4B])))
+        #expect(single == (try Self.expected([0x4F, 0x4B], chunkCount: 1)))
         #expect(sut.openCount == 0)
         #expect(try sut.accept(Self.chunk(1, of: 2, data: [0x01], request: 0x01)) == nil)
         #expect(sut.openCount == 1)
         let full = try #require(try sut.accept(Self.chunk(1, of: 1, data: [0x02], headerData: Self.statusHeader)))
-        #expect(full == (try Self.expected([0x02])))
+        #expect(full == (try Self.expected([0x02], chunkCount: 1)))
         #expect(sut.openCount == 1)
         // A kind with no property data (Table 33) passes through like any single chunk.
         let inquiry = try #require(try sut.accept(
             Self.chunk(1, of: 1, headerData: Self.statusHeader, request: 0x05, kind: .getInquiry)))
         #expect(inquiry == MIDICIPropertyReassembly(
-            kind: .getInquiry, header: try Self.header(), requestID: 0x05, headerData: Self.statusHeader,
+            kind: .getInquiry, header: try Self.header(), requestID: 0x05, chunkCount: 1, headerData: Self.statusHeader,
             propertyData: []))
         #expect(sut.openCount == 1)
     }
@@ -169,10 +171,10 @@ struct MIDICIPropertyReassemblerTests {
         #expect(try sut.accept(Self.chunk(1, of: 2, data: [0x09], source: Self.sourceB)) == nil)
         #expect(sut.openCount == 2)
         let first = try #require(try sut.accept(Self.chunk(2, of: 2, data: [0x02])))
-        #expect(first == (try Self.expected([0x01, 0x02])))
+        #expect(first == (try Self.expected([0x01, 0x02], chunkCount: 2)))
         #expect(sut.openCount == 1)
         let second = try #require(try sut.accept(Self.chunk(2, of: 2, data: [0x08], source: Self.sourceB)))
-        #expect(second == (try Self.expected([0x09, 0x08], source: Self.sourceB, headerData: [])))
+        #expect(second == (try Self.expected([0x09, 0x08], chunkCount: 2, source: Self.sourceB, headerData: [])))
         #expect(sut.openCount == 0)
     }
 
@@ -214,9 +216,9 @@ struct MIDICIPropertyReassemblerTests {
         #expect(Self.refusal(&sut, try Self.chunk(1, of: 2, request: 0x03)) == .tooManyOpenRequests(limit: 2))
         #expect(sut.openCount == 2)
         let first = try #require(try sut.accept(Self.chunk(2, of: 2, data: [0x11], request: 0x01)))
-        #expect(first == (try Self.expected([0x01, 0x11], request: 0x01, headerData: [])))
+        #expect(first == (try Self.expected([0x01, 0x11], chunkCount: 2, request: 0x01, headerData: [])))
         let second = try #require(try sut.accept(Self.chunk(2, of: 2, data: [0x12], request: 0x02)))
-        #expect(second == (try Self.expected([0x02, 0x12], request: 0x02, headerData: [])))
+        #expect(second == (try Self.expected([0x02, 0x12], chunkCount: 2, request: 0x02, headerData: [])))
         #expect(sut.openCount == 0)
         #expect(Self.refusal(&sut, try Self.chunk(2, of: 2, request: 0x03)) == .noOpenRequest(chunkNumber: 2))
     }

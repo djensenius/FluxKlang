@@ -209,7 +209,8 @@ private struct PropertyChunkerTally {
         guard messages.count <= 256 else { return }
         let reassembly = try MIDICIPropertyChunkerTests.roundTrip(messages, limit: input.limit)
         #expect(reassembly == MIDICIPropertyReassembly(
-            kind: input.kind, header: input.header, requestID: input.requestID, headerData: input.headerData,
+            kind: input.kind, header: input.header, requestID: input.requestID, chunkCount: UInt16(messages.count),
+            headerData: input.headerData,
             propertyData: input.propertyData))
         roundTripped += 1
     }

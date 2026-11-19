@@ -12,8 +12,10 @@ enum MIDICIPropertyContentRefusal: Error, Equatable, Hashable, Sendable {
     /// 1. Property data in a kind without it (`MIDICIPropertyDataKind.hasNoPropertyData`: Get Inquiry and Set Reply);
     /// `count` is its length in bytes. Nothing was read.
     case propertyDataNotAllowed(kind: MIDICIPropertyDataKind, count: Int)
-    /// 2. `MIDICIPropertyHeader.parse(_:)` refused the header data.
+    /// 2. A completed count other than one for Get Inquiry or Set Reply (local receive-content policy).
+    case singleChunkRequired(kind: MIDICIPropertyDataKind, chunkCount: UInt16)
+    /// 3. `MIDICIPropertyHeader.parse(_:)` refused the header data.
     case header(MIDICIPropertyHeaderRefusal)
-    /// 3. `MIDICIPropertyHeader.decodeBody(_:)` refused the property data. Never for a kind without property data.
+    /// 4. `MIDICIPropertyHeader.decodeBody(_:)` refused the property data. Never for a kind without property data.
     case body(MIDICIPropertyBodyRefusal)
 }

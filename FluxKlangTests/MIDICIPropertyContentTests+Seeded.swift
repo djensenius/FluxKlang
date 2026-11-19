@@ -27,7 +27,7 @@ extension MIDICIPropertyContentTests {
         for _ in 0..<3_000 {
             tally.check(try PropertyContentInput.make(using: &random))
         }
-        #expect(tally.seen == ["propertyDataNotAllowed", "header", "body"], "\(tally.seen)")
+        #expect(tally.seen == ["propertyDataNotAllowed", "singleChunkRequired", "header", "body"], "\(tally.seen)")
         #expect(tally.decoded > 0)
         #expect(tally.skipped > 0)
     }
@@ -47,7 +47,7 @@ private struct PropertyContentSplitMix64: RandomNumberGenerator {
 }
 
 /// Hostile reassemblies: any kind, a valid header or a corrupt one, and property data that is empty, Mcoded7 (kept or
-/// corrupt) or random bytes.
+/// corrupt) or random bytes. Counts 0...3 are deliberately constructed boundary evidence, not reassembler output.
 private enum PropertyContentInput {
     static let alphabet: [UInt8] = [0x00, 0x20, 0x22, 0x3A, 0x41, 0x7B, 0x7D, 0x7F, 0x80, 0xFF]
     static let headers: [[UInt8]] = [
@@ -103,6 +103,7 @@ private enum PropertyContentInput {
         let headerData = try corrupt(try element(of: headers, using: &random), using: &random)
         return MIDICIPropertyReassembly(
             kind: kind, header: header, requestID: UInt8.random(in: 0...0x7F, using: &random),
+            chunkCount: UInt16.random(in: 0...3, using: &random),
             headerData: headerData, propertyData: try propertyData(using: &random))
     }
 }
@@ -116,6 +117,12 @@ private enum PropertyContentReference {
         let kind = input.kind
         if kind.hasNoPropertyData && !input.propertyData.isEmpty {
             return .failure(.propertyDataNotAllowed(kind: kind, count: input.propertyData.count))
+        }
+        // Independent kind list, rather than asking the content decoder or repeating its kind predicate.
+        switch (kind, input.chunkCount) {
+        case (.getInquiry, let count) where count != 1, (.setReply, let count) where count != 1:
+            return .failure(.singleChunkRequired(kind: kind, chunkCount: count))
+        default: break
         }
         let parsed: MIDICIPropertyHeader
         switch MIDICIPropertyContentTests.headerStage(input.headerData) {
@@ -147,6 +154,7 @@ private struct PropertyContentTally {
     static func name(of refusal: MIDICIPropertyContentRefusal) -> String {
         switch refusal {
         case .propertyDataNotAllowed: "propertyDataNotAllowed"
+        case .singleChunkRequired: "singleChunkRequired"
         case .header: "header"
         case .body: "body"
         }
@@ -164,6 +172,7 @@ private struct PropertyContentTally {
             #expect(content.requestID == input.requestID)
             if input.kind.hasNoPropertyData {
                 #expect(content.body.isEmpty)
+                #expect(input.chunkCount == 1)
                 skipped += 1
             } else {
                 decoded += 1

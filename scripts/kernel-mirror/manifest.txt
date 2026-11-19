@@ -24,6 +24,9 @@ source Shared/Store/ProductionAccessAudit.swift
 test FluxKlangTests/ProductionAccessScope.swift
 test FluxKlangTests/KernelRetirementCarryTests.swift
 test FluxKlangTests/KernelRetirementCarryTests+Capacity.swift
+test FluxKlangTests/KernelCycleFollowUpTests.swift
+test FluxKlangTests/KernelCycleFollowUpTests+AdmissionTable.swift
+test FluxKlangTests/KernelCycleFollowUpTests+WearOut.swift
 
 test FluxKlangTests/RealtimeHandoffTests.swift
 test FluxKlangTests/RealtimeHandoffTests+Capacity.swift

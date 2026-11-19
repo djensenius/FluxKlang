@@ -111,6 +111,8 @@ final class NoteOwnership: @unchecked Sendable {
 
     /// Why `claimForCycle(_:fresh:)` refused; nothing changed.
     enum CycleClaimRefusal: Error, Equatable, Sendable {
+        /// The snapshot belongs to a different ownership instance; no claim word or inheritance was touched.
+        case foreignOwnership
         /// A `.freshFanIn` cycle, but a cycle was already built over this ownership.
         case alreadyUsed
         /// The cycle last built over this ownership has not `retire()`d.
@@ -124,14 +126,24 @@ final class NoteOwnership: @unchecked Sendable {
     /// The claim word's state when `claimForCycle(fresh:from:)` began: what it compare-exchanges from, so the
     /// freshness check and the claim are one atomic step. Only `cycleClaimState()` makes one.
     struct CycleClaimState: Equatable, Sendable {
+        fileprivate let origin: NoteOwnership
         fileprivate let word: UInt64
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.origin === rhs.origin && lhs.word == rhs.word
+        }
 
         /// A cycle was claimed and has since retired: the word is nonzero and even.
         var hasRetiredCycle: Bool { word != 0 && word & 1 == 0 }
     }
 
     /// A held claim; `releaseCycleClaim` hands it back. Only `claimForCycle(fresh:from:)` makes one.
+    /// Both claim values retain their exact origin, not a reusable address. They remain copyable: callers must
+    /// still serialize same-owner release. Ownership stores neither value, so there is no retention cycle.
+    /// A cycle keeps its claim (and immutable inheritance) after retirement for report readers; retirement does
+    /// not clear this retain or the cycle's existing ownership retain. Final teardown remains control-only.
     struct CycleClaim: Equatable, Sendable {
+        fileprivate let origin: NoteOwnership
         fileprivate let held: UInt64
         /// What the claim's immediate predecessor dropped at retirement (its `releaseCycleClaim` loss; not
         /// cumulative), read after this claim's acquire; empty when no cycle retired over the ownership before.
@@ -139,6 +151,11 @@ final class NoteOwnership: @unchecked Sendable {
         /// The pending stateful events the claim's immediate predecessor recorded at retirement (not cumulative),
         /// read after this claim's acquire; empty when no cycle retired over the ownership before.
         let inheritedCarry: KernelRetirementCarry
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.origin === rhs.origin && lhs.held == rhs.held
+                && lhs.inherited == rhs.inherited && lhs.inheritedCarry == rhs.inheritedCarry
+        }
     }
 
     let scopeCount: Int
@@ -182,7 +199,7 @@ final class NoteOwnership: @unchecked Sendable {
     /// Control only, from `KernelCycle.init`, before it makes anything: the claim word now. Acquire pairs with
     /// `releaseCycleClaim`'s release, so a claim seen handed back follows the retiring cycle's tombstone writes.
     func cycleClaimState() -> CycleClaimState {
-        CycleClaimState(word: liveCycle.load(ordering: .acquiring))
+        CycleClaimState(origin: self, word: liveCycle.load(ordering: .acquiring))
     }
 
     /// Why a cycle could not claim from `state` (`fresh`: a `.freshFanIn` start), or `nil`.
@@ -200,26 +217,29 @@ final class NoteOwnership: @unchecked Sendable {
     /// out by 2^63 claims refuses every claim (`.alreadyUsed`) rather than wrap. The claim carries the predecessor's
     /// retirement loss, read only after the compare-exchange succeeded (acquire).
     func claimForCycle(fresh: Bool, from state: CycleClaimState) throws(CycleClaimRefusal) -> CycleClaim {
+        guard state.origin === self else { throw .foreignOwnership }
         if let refusal = Self.refusal(state.word, fresh: fresh) { throw refusal }
         let (claimed, current) = liveCycle.compareExchange(expected: state.word, desired: state.word &+ 1,
                                                            successOrdering: .acquiring, failureOrdering: .acquiring)
         guard claimed else { throw Self.refusal(current, fresh: fresh) ?? .claimRaced }
         let inherited = KernelRetirementLoss(noteOns: lostNoteOns, controls: lostControls, programs: lostPrograms,
                                              ramps: lostRamps, clockPulses: lostClockPulses)
-        return CycleClaim(held: state.word &+ 1, inherited: inherited, inheritedCarry: lostCarry)
+        return CycleClaim(origin: self, held: state.word &+ 1, inherited: inherited, inheritedCarry: lostCarry)
     }
 
     /// Render only: `releaseCycleClaim(_:loss:carry:)` with an empty carry, so it clears the carry as it replaces
     /// the loss.
     func releaseCycleClaim(_ claim: CycleClaim, loss: KernelRetirementLoss) {
+        guard claim.origin === self else { return }
         releaseCycleClaim(claim, loss: loss, carry: KernelRetirementCarry())
     }
 
     /// Render only, from `KernelCycle.retire()`, after its tombstone writes: while `claim` is still held, records
-    /// `loss` and `carry` for the next claim, then hands `claim` back (a stale or repeated release changes neither
-    /// the claim nor the recorded loss and carry). Release publishes those writes, `loss` and `carry` to the next
-    /// claim.
+    /// `loss` and `carry` for the next claim, then hands `claim` back (a foreign, stale or repeated release changes
+    /// neither the claim nor the recorded loss and carry). Release publishes those writes, `loss` and `carry` to
+    /// the next claim.
     func releaseCycleClaim(_ claim: CycleClaim, loss: KernelRetirementLoss, carry: KernelRetirementCarry) {
+        guard claim.origin === self else { return }
         // Only the holder can move an odd word, so a held claim stays held until the compare-exchange below.
         if liveCycle.load(ordering: .relaxed) == claim.held {
             lostNoteOns = loss.noteOns

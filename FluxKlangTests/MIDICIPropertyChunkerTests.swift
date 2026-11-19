@@ -241,7 +241,8 @@ struct MIDICIPropertyChunkerTests {
                         kind, header: header, requestID: 0x11, headerData: Self.status, propertyData: data, limit: 64)
                     #expect(chunks.count == chunkCount, "\(kind) \(dataCount)")
                     #expect(try Self.roundTrip(chunks, limit: 64) == MIDICIPropertyReassembly(
-                        kind: kind, header: header, requestID: 0x11, headerData: Self.status, propertyData: data))
+                        kind: kind, header: header, requestID: 0x11, chunkCount: UInt16(chunkCount),
+                        headerData: Self.status, propertyData: data))
                 }
             }
         }
@@ -256,6 +257,7 @@ struct MIDICIPropertyChunkerTests {
         let chunks = try Self.cut(headerData: Self.mcoded7Header, propertyData: coded, limit: 60)
         #expect(Self.propertySizes(chunks) == [10, 38, 38, 38, 38, 38, 38, 38, 17])
         let reassembly = try Self.roundTrip(chunks, limit: 60)
+        #expect(reassembly.chunkCount == 9)
         #expect(reassembly.propertyData == coded)
         let content = try MIDICIPropertyContent.decode(reassembly)
         #expect(content.propertyHeader == MIDICIPropertyHeader(encoding: .mcoded7))
@@ -310,7 +312,7 @@ struct MIDICIPropertyChunkerTests {
         #expect(Self.propertySizes(both) == [0, 1])
         #expect(try Self.payloadSizes(both, limit: 47) == [47, 23])
         #expect(try Self.roundTrip(both, limit: 47) == MIDICIPropertyReassembly(
-            kind: .getReply, header: MIDICIPropertyReassemblerTests.header(), requestID: 0x2A,
+            kind: .getReply, header: MIDICIPropertyReassemblerTests.header(), requestID: 0x2A, chunkCount: 2,
             headerData: header, propertyData: [0x41]))
         #expect(try Self.refusal(headerData: header, propertyData: [0x41], limit: 46)
             == .payloadLimitTooSmall(needed: 47, limit: 46))
