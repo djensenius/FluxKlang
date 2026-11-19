@@ -3,7 +3,8 @@
 //  FluxKlang
 //
 //  The production grant minter for a gated Studio apply (#62 AU7b). Built only
-//  from injected dependencies; nothing constructs it yet (AU7c wires it).
+//  from injected dependencies; `StudioApplyRoute.apply` constructs one per
+//  real-session apply (#62 AU8c-2).
 //
 
 /// The intent and admission context a Studio apply is admitted under, read fresh

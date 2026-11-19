@@ -24,6 +24,9 @@ not application, native UI or WING execution.
 
 ## 2. What existed at the design baseline
 
+This section records the code at the design baseline (`41f69372`). Each statement below, present tense included,
+describes that commit, not the current code. Section 12 records the current composition.
+
 - **No production owner.** No file under `Shared/`, `FluxKlang/` or `FluxKlangMac/` constructs `HostAuthority(`,
   `HostLiveState(`, `DeviceCapabilityDocument(`, `GenerationLedger(` or `WingApplyGrantMinter(`. `HostEpoch(` is
   built only from peer wire data (`Shared/Peer/Sync/PeerSyncSnapshot.swift:35`,
@@ -406,7 +409,7 @@ still waits behind earlier queued replacements, and queue order is unchanged. `C
 fence; `wait()` joins both. An apply for `w` already in flight when the fence lands is refused `.windowClosed`; one
 paused after its lease check may already have acquired or attached, and stays attached until the detach's turn. The
 fence is a task started at submission (a MainActor job, then one owner hop). An owner-nil sequencer's fence and detach
-are inert. Mirror-run `LifecycleComposition` tests cover this; `beginApply` still has no production caller.
+are inert. Mirror-run `LifecycleComposition` tests cover this; `beginApply` then had no production caller.
 AU7c4 (#804) keeps a closed root closed until it is reopened. The owner keeps `closedWindows`, a set of window
 identities only (no permission, authority or session): `fenceApplies(for: w)`, and so `windowClosed(w)`, inserts `w`,
 and the lock-free `windowOpened(w)` removes it. `beginApply(w)` refuses a closed `w` `.windowClosed` at entry, and every

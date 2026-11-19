@@ -105,7 +105,7 @@ retarget it to neutral contracts; **replace** = a new subsystem supersedes it;
 | Location | What it is | Decision | Owner |
 |---|---|---|---|
 | `Shared/Views/App/AppModel+StudioApply.swift:5` | `applyStudio(window:)` → `WingApplyVerification`. The full-patch Listen entry point. Since AU8c-2 a real session goes through the gated verified apply (Host role, open root window, render lease, one minter per apply; see host-authority-sources.md §12); Demo Mode stays on the ungated one. | replace with host-authority activation | #62 |
-| `Shared/Views/Studio/StudioView.swift:300` | `.disabled(!appModel.isConnected …)`, a guard that exists only in the UI | replace before exposing activation to peers or automation | #62 |
+| `Shared/Views/Studio/StudioView.swift:291` | `.disabled(!appModel.isConnected …)`, the UI guard. Since AU8c-2 a real session is also refused below the UI: `StudioApplyRoute.apply` (`Shared/Host/Runtime/HostWingLifecycle.swift:287`) sends nothing without an owner, a root window, a granted Host role, an admitted `beginApply` and a WING session that matches the controller's. Demo Mode keeps the ungated apply. | replace before exposing activation to peers or automation | #62 |
 
 Where the gated apply's host epoch, permission, window and render lease will come from is defined in
 [host-authority-sources.md](host-authority-sources.md) (#62 AU8, design only).
@@ -173,7 +173,7 @@ during #62 rather than treating this snapshot as final.
 | `Shared/WING/WingMixerWriteAuthorization.swift:35` | `WingMixerWriteAuthorization`, single-use mixer write authority | reuse | #76 / #62 |
 | `Shared/WING/WingController.swift:32` | `confirmedValues` incoming-evidence cache | reuse | #76 |
 | `Shared/WING/WingController.swift:443` | `ingest(_:)` incoming OSC | reuse | #76 |
-| `Shared/WING/WingController+Confirmed.swift:28` | `readFreshConfirmed(` | reuse | #76 |
+| `Shared/WING/WingController+Confirmed.swift:29` | `readFreshConfirmed(` | reuse | #76 |
 | `Shared/WING/WingController+VerifiedApply.swift:6` | `applyAndVerify(` bounded verified apply | reuse | #76 |
 
 ### Wiring and migration

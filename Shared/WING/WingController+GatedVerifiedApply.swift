@@ -24,9 +24,10 @@ extension WingController {
                                                                         remainingCount: plan.remaining.count))
     }
 
-    /// Grant-gated `applyAndVerify` (#62 AU6; no app callers yet). Same phases,
-    /// pacing and verdicts, but each send phase mints a fresh grant per chunk of at
-    /// most `HostAuthority.directSendBatchLimit` addresses, just before sending that
+    /// Grant-gated `applyAndVerify` (#62 AU6; real-session Studio Apply calls it
+    /// through `StudioApplyRoute.apply`, #62 AU8c-2). Same phases, pacing and
+    /// verdicts, but each send phase mints a fresh grant per chunk of at most
+    /// `HostAuthority.directSendBatchLimit` addresses, just before sending that
     /// chunk, and spends it before the next chunk mints or verification starts. A
     /// phase with nothing to send mints nothing. A refused mint sends nothing more
     /// in that phase or any later one, and the verdict is `.failed`. A WING session
