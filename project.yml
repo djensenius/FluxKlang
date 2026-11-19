@@ -557,6 +557,7 @@ targets:
       - path: FluxKlangTests/MIDICIPropertyBodyTests.swift
       - path: FluxKlangTests/MIDICIPropertyContentTests.swift
       - path: FluxKlangTests/MIDICIPropertyContentTests+Seeded.swift
+      - path: FluxKlangTests/MIDICIPropertyContentTests+ChunkCount.swift
       - path: FluxKlangTests/MIDICIPropertyChunkerTests.swift
       - path: FluxKlangTests/MIDICIPropertyChunkerTests+Seeded.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests.swift
@@ -972,6 +973,8 @@ targets:
       - path: FluxKlangTests/PendingStudioPatchPersistenceTests+Publication.swift
       - path: FluxKlangTests/PendingStudioPatchPersistenceTests+Commit.swift
       - path: FluxKlangTests/PendingStudioPatchPersistenceTests+Build.swift
+      - path: FluxKlangTests/PendingStudioPatchPersistenceTests+Validation.swift
+      - path: FluxKlangTests/PendingStudioPatchPersistenceTests+ValidationChat.swift
       - path: FluxKlangTests/PendingStudioPatchPersistenceTestSupport.swift
       - path: FluxKlangTests/AssistantFixtureAdoptionSupport.swift
       - path: FluxKlangTests/PerformanceWiringEditorTests.swift

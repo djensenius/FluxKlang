@@ -10,8 +10,11 @@
 //  Provenance: the Property Exchange specifications (M2-102-UM, the Common Rules, and M2-103-UM, the resources) were
 //  not read. That Get Inquiry and Set Reply carry no property data is `MIDICIPropertyDataKind.hasNoPropertyData`
 //  (M2-101-UM v1.2, Tables 33 and 36). Refusing such data on receive, which the codec and the reassembler keep, is
-//  this decoder's own fail-closed choice. The single-chunk half of Tables 33 and 36 is not checked: the reassembly
-//  does not keep the chunk count. Rules that depend on the kind for the header data (a resource in an inquiry, a
+//  this decoder's own fail-closed choice. #846 extends that local receive-content policy: those kinds must have
+//  a completed chunk count of one. This is compatibility tightening, not a normative receiver requirement;
+//  codec receive leniency and reassembler admission are unchanged. See
+//  `docs/transformation/midi-property-content-chunk-count.md`.
+//  Rules that depend on the kind for the header data (a resource in an inquiry, a
 //  status in a reply) are not checked. That a sender codes the whole body before cutting it into chunks is assumed,
 //  as `MIDICIPropertyBody` already does; it was not checked against M2-102.
 //
@@ -31,9 +34,11 @@ struct MIDICIPropertyContent: Equatable, Hashable, Sendable {
     /// Decodes a reassembled message. It refuses, in this order:
     /// 1. property data in a kind without it (Get Inquiry and Set Reply), as `propertyDataNotAllowed`, before reading
     ///    any byte;
-    /// 2. header data that `MIDICIPropertyHeader.parse(_:)` refuses, as `header` with that refusal unchanged (empty
+    /// 2. a chunk count other than one for those same kinds, as `singleChunkRequired`;
+    /// 3. header data that `MIDICIPropertyHeader.parse(_:)` refuses, as `header` with that refusal unchanged (empty
     ///    header data is `unexpectedEnd(offset: 0)`);
-    /// 3. property data that `MIDICIPropertyHeader.decodeBody(_:)` refuses, as `body` with that refusal unchanged.
+    /// 4. property data that `MIDICIPropertyHeader.decodeBody(_:)` refuses, as `body` with that refusal unchanged.
+    /// Other kinds acquire no count validation here, including for directly constructed reassemblies.
     ///
     /// The header data is parsed once and the property data is decoded once, after reassembly, so a Mcoded7 group may
     /// span chunks (assuming the body was coded before it was chunked; see the provenance above). A kind without
@@ -45,6 +50,9 @@ struct MIDICIPropertyContent: Equatable, Hashable, Sendable {
         let kind = reassembly.kind
         if kind.hasNoPropertyData && !reassembly.propertyData.isEmpty {
             throw .propertyDataNotAllowed(kind: kind, count: reassembly.propertyData.count)
+        }
+        if kind.hasNoPropertyData && reassembly.chunkCount != 1 {
+            throw .singleChunkRequired(kind: kind, chunkCount: reassembly.chunkCount)
         }
         let propertyHeader: MIDICIPropertyHeader
         do throws(MIDICIPropertyHeaderRefusal) {

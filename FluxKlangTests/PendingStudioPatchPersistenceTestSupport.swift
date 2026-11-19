@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 #if canImport(FluxKlangMac)
 @testable import FluxKlangMac
@@ -59,7 +60,7 @@ actor PendingPersistenceForwarder: PendingStudioPatchPersisting {
     let store: PendingStudioPatchStore
     private var gates: [Point: PendingPersistenceGate] = [:]
     private var closed = false
-    private var loads = 0
+    private(set) var loads = 0
     private(set) var snapshots: [StudioPatchDraft?] = []
 
     init(store: PendingStudioPatchStore) {
@@ -101,6 +102,27 @@ actor PendingPersistenceForwarder: PendingStudioPatchPersisting {
     }
 }
 
+// Bounded to this fixture's invocations. Register synchronously before stream() returns.
+final class PendingFallbackWork: Sendable {
+    private let tasks = Mutex<[Task<Void, Never>]>([])
+
+    func register(_ task: Task<Void, Never>) {
+        tasks.withLock { $0.append(task) }
+    }
+
+    func cancel() {
+        let snapshot = tasks.withLock { $0 }
+        for task in snapshot { task.cancel() }
+    }
+
+    // Call after consumers have joined: they can no longer create another producer.
+    func join() async {
+        let snapshot = tasks.withLock { $0 }
+        for task in snapshot { await task.value }
+        tasks.withLock { $0.removeAll() }
+    }
+}
+
 @MainActor
 final class PendingPersistenceFixture {
     let root: URL
@@ -109,6 +131,7 @@ final class PendingPersistenceFixture {
     let forwarding: PendingPersistenceForwarder
     let owner: AssistantCoordinator
     let context: AssistantToolContext
+    let fallbackWork = PendingFallbackWork()
     private var cancellations: [@MainActor () -> Void] = []
     private var joins: [@MainActor () async -> Void] = []
     private var closed = false
@@ -162,8 +185,16 @@ final class PendingPersistenceFixture {
     private func finish() async {
         closed = true
         for cancel in cancellations { cancel() }
+        fallbackWork.cancel()
         await forwarding.finish()
         for join in joins { await join() }
+        await fallbackWork.join()
+    }
+
+    func fallbackGenerator() -> AssistantFallbackGenerator {
+        AssistantFallbackGenerator(coordinator: owner, didStartProducer: { [fallbackWork] in
+            fallbackWork.register($0)
+        })
     }
 
     func draft(_ source: Int = 0) -> StudioPatchDraft {
@@ -237,7 +268,7 @@ extension PendingStudioPatchPersistenceTests {
         let request = AssistantGenerationRequest(
             question: question, recentMessages: [], summary: "", context: fixture.context)
         var reply = CollectedReply()
-        let generator = generator ?? AssistantFallbackGenerator(coordinator: fixture.owner)
+        let generator = generator ?? fixture.fallbackGenerator()
         do {
             for try await event in generator.stream(request) {
                 switch event {

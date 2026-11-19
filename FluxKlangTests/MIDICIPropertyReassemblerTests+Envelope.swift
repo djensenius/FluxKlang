@@ -50,7 +50,7 @@ extension MIDICIPropertyReassemblerTests {
                 #expect(sut.openCount == 1)
             } else {
                 #expect(done == MIDICIPropertyReassembly(
-                    kind: .getReply, header: header, requestID: 0x2A, headerData: Self.statusHeader,
+                    kind: .getReply, header: header, requestID: 0x2A, chunkCount: count, headerData: Self.statusHeader,
                     propertyData: (1...count).map { UInt8($0) }))
                 #expect(sut.openCount == 0)
             }
@@ -73,14 +73,14 @@ extension MIDICIPropertyReassemblerTests {
         #expect(sut.openCount == 1)
         #expect(Self.refusal(&sut, try Self.chunk(3, of: 3)) == .noOpenRequest(chunkNumber: 3))
         let unrelated = try #require(try sut.accept(Self.chunk(2, of: 2, data: [8], request: 1)))
-        #expect(unrelated == (try Self.expected([9, 8], request: 1, headerData: [])))
+        #expect(unrelated == (try Self.expected([9, 8], chunkCount: 2, request: 1, headerData: [])))
         #expect(sut.openCount == 0)
         // A fresh chunk 1 may select a new envelope; it cannot inherit the dropped prefix.
         #expect(try sut.accept(Self.withEnvelope(try Self.chunk(1, of: 2, data: [4]), received)) == nil)
         let restarted = try #require(try sut.accept(
             Self.withEnvelope(try Self.chunk(2, of: 2, data: [5]), received)))
         #expect(restarted == MIDICIPropertyReassembly(
-            kind: .getReply, header: received, requestID: 0x2A, headerData: [], propertyData: [4, 5]))
+            kind: .getReply, header: received, requestID: 0x2A, chunkCount: 2, headerData: [], propertyData: [4, 5]))
         #expect(sut.openCount == 0)
     }
 
@@ -139,7 +139,7 @@ extension MIDICIPropertyReassemblerTests {
             == .envelopeChanged(expected: expected, received: changed))
         #expect(sut.openCount == 1)
         let otherSource = try #require(try sut.accept(Self.chunk(2, of: 2, data: [8], source: Self.sourceB)))
-        #expect(otherSource == (try Self.expected([9, 8], source: Self.sourceB, headerData: [])))
+        #expect(otherSource == (try Self.expected([9, 8], chunkCount: 2, source: Self.sourceB, headerData: [])))
         #expect(sut.openCount == 0)
     }
 
@@ -165,7 +165,8 @@ extension MIDICIPropertyReassemblerTests {
                 #expect(done == nil)
             } else {
                 #expect(done == MIDICIPropertyReassembly(
-                    kind: .getReply, header: expected, requestID: 0x2A, headerData: [], propertyData: [1, 2, 3]))
+                    kind: .getReply, header: expected, requestID: 0x2A, chunkCount: 3,
+                    headerData: [], propertyData: [1, 2, 3]))
             }
         }
         #expect(sut.openCount == 0)
@@ -184,6 +185,7 @@ extension MIDICIPropertyReassemblerTests {
         #expect(chunks.allSatisfy { $0.header == header })
         let done = try MIDICIPropertyChunkerTests.roundTrip(chunks, limit: 60)
         #expect(done.header == header)
+        #expect(done.chunkCount == 9)
         #expect(done.propertyData == coded)
         let content = try MIDICIPropertyContent.decode(done)
         #expect(content.propertyHeader == MIDICIPropertyHeader(encoding: .mcoded7))
@@ -199,6 +201,8 @@ extension MIDICIPropertyReassemblerTests {
         #expect(done.header == first.header)
         #expect(done.kind == first.kind)
         #expect(done.requestID == first.chunk.requestID)
+        #expect(Int(done.chunkCount) == fragments.count)
+        #expect(done.chunkCount == first.chunk.chunkCount)
         #expect(done.headerData == first.chunk.headerData)
         #expect(done.propertyData == fragments.flatMap(\.chunk.propertyData))
         #expect(fragments.count == Int(first.chunk.chunkCount))

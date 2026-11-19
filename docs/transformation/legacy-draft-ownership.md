@@ -5,6 +5,40 @@ Source baseline: `17045692aaedac5abeb0f79c9893e8081436548d` (P14a #770).
 This document implements no exclusion, loader, migration admission or startup wiring.
 Current legacy editing, review, acceptance and discard remain unchanged.
 
+## P14b12 / #849 — revalidation save acknowledgement
+
+The actual fallback pending/draft query now consumes `validatePendingStudioDraftResult`,
+which retains this invocation's entry-snapshot-qualified persistence outcome. Legacy
+`perform(.validatePendingStudioDraft)` delegates once and preserves `.pendingDraft`
+and its in-memory-success meaning. No pending draft performs no storage IO.
+
+A still-published refreshed draft retains the existing text, cards and validation
+issues. Successful saving adds no durability claim. Unconfirmed saving appends the
+shared `AssistantDraftReply.acknowledgingSave` warning once, including for reviewable
+drafts with validation errors. An overtaken full-value snapshot reports the existing
+no-draft response without cards or warning; equal-value ABA remains publishable with
+its own historical outcome. Neither a later diagnostic/read nor a different catch-up
+snapshot supplies that outcome. The existing loop, latest same-snapshot outcome and
+failure-stops-catch-up behavior are unchanged.
+
+Revalidation still publishes before saving, does not acquire cancellation admission
+or rollback, and refreshes settled state only when its entry draft was settled.
+Prepared-commit restoration remains unchanged. Fallback/chat cancellation suppresses
+later output, not already-published validation or storage effects. An internal optional
+producer-start observer lets the persistence fixture retain and join the actual
+fallback task; it does not change scheduling, cancellation or production admission.
+Chat's own snapshot join still does not cover generator-internal work. Fixtures release
+gates and join consumers, actual producers and chat/history before deleting owned
+filesystem/defaults resources, including throwing and cancellation paths.
+
+The existing serialized canonical persistence suite gains validation extensions using
+real storage and forwarding gates. Focused evidence is retained as `files/p14b12-*`:
+old actual fallback/chat missing-warning red tests, exact-source Debug/Release,
+strict changed-Swift lint and canonical audit receipts. This is not native Apple,
+Siri, AppModel, provider/model, migration, restart durability or writer-exclusion
+qualification. #122/#48 remain open; coordinator-owned native registration and hosted
+Apple/Lint/Mac checks remain separate.
+
 ## Decision and activation limit
 
 A future **explicitly admitted** migration must terminally revoke both the old
