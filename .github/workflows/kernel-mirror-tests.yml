@@ -94,7 +94,9 @@ jobs:
       - name: Debug, all mirror suites
         run: |
           cd "$MIRROR"
-          FLUXKLANG_AUDIT_RUN_ID=$(uuidgen) swift test --disable-xctest 2>&1 | tee "$LOGS/debug.log"
+          FLUXKLANG_AUDIT_RUN_ID=$(uuidgen) swift test --disable-xctest \
+            --event-stream-output-path "$LOGS/debug.events.jsonl" --xunit-output "$LOGS/debug.xunit.xml" 2>&1 \
+            | tee "$LOGS/debug.log"
           n=$(bash "$GITHUB_WORKSPACE/scripts/kernel-mirror/check-log.sh" "$LOGS/debug.log" \
             'readmissionRenderSourcesHaveNoLockOrArrayToken()' \
             'carryPlanningSourcesHaveNoAllocationGrowthOrLockToken()' \
@@ -112,7 +114,8 @@ jobs:
         # FaultRaiseAllocationBounds probes zero allocations on the fault-chain raise paths they drive.
         run: |
           cd "$MIRROR"
-          FLUXKLANG_AUDIT_RUN_ID=$(uuidgen) swift test --disable-xctest -c release -Xswiftc -enable-testing 2>&1 \
+          FLUXKLANG_AUDIT_RUN_ID=$(uuidgen) swift test --disable-xctest -c release -Xswiftc -enable-testing \
+            --event-stream-output-path "$LOGS/release.events.jsonl" --xunit-output "$LOGS/release.xunit.xml" 2>&1 \
             | tee "$LOGS/release.log"
           n=$(bash "$GITHUB_WORKSPACE/scripts/kernel-mirror/check-log.sh" "$LOGS/release.log" \
             'readmissionRenderPathAllocatesNothing()' 'readmissionRenderSourcesHaveNoLockOrArrayToken()' \
@@ -127,7 +130,8 @@ jobs:
           for run in $(seq 1 "$TSAN_RUNS"); do
             echo "::group::TSan run $run/$TSAN_RUNS"
             status=0
-            FLUXKLANG_AUDIT_RUN_ID=$(uuidgen) swift test --disable-xctest --sanitize=thread --filter "$TSAN_FILTER" 2>&1 \
+            FLUXKLANG_AUDIT_RUN_ID=$(uuidgen) swift test --disable-xctest --sanitize=thread --filter "$TSAN_FILTER" \
+              --event-stream-output-path "$LOGS/tsan-$run.events.jsonl" --xunit-output "$LOGS/tsan-$run.xunit.xml" 2>&1 \
               | tee "$LOGS/tsan-$run.log" || status=$?
             echo "::endgroup::"
             [ "$status" -eq 0 ] || { echo "::error::TSan run $run/$TSAN_RUNS: swift test exited $status"; exit "$status"; }
@@ -138,6 +142,17 @@ jobs:
               || { echo "::error::TSan run $run/$TSAN_RUNS failed its log check (TSan runtime not active, or a report)"; exit 1; }
             echo "| TSan $run/$TSAN_RUNS | $n | TSan active (probe skipped); no ThreadSanitizer report |" >> "$GITHUB_STEP_SUMMARY"
           done
+
+      - name: Upload kernel mirror diagnostics
+        # Preserve available evidence even when swift test or check-log fails. Structured outputs
+        # are diagnostic only: never substitute them for the required console pass/skip checks.
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kernel-mirror-diagnostics-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kernel-mirror-logs/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Record failure in summary
         if: failure()
