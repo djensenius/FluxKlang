@@ -6,9 +6,21 @@ import Testing
 @testable import FluxKlang
 #endif
 
+// Exercise the legacy injection contract without fabricating file outcomes.
+private struct LegacyPendingDraftStore: PendingStudioPatchPersisting {
+    let forwarding: PendingPersistenceForwarder
+
+    func load() async -> PendingStudioPatchLoadOutcome { await forwarding.load() }
+    func save(_ draft: StudioPatchDraft?) async -> PendingStudioPatchMutationOutcome {
+        await forwarding.save(draft)
+    }
+}
+
 @MainActor
 final class AppModelPendingDraftAcceptanceFixture {
     let file: URL
+    let environmentFile: URL
+    let receiptGate = PendingPersistenceGate()
     let forwarding: PendingPersistenceForwarder
     let coordinator: AssistantCoordinator
     let wing = WingController(transport: InertWingTransport())
@@ -22,28 +34,34 @@ final class AppModelPendingDraftAcceptanceFixture {
     private var closed = false
     private(set) var setupSavesJoined = false
 
-    private init(resources: AssistantFixtureResources) {
+    private init(resources: AssistantFixtureResources, legacyStore: Bool) {
         self.resources = resources
         file = resources.root.appendingPathComponent("pending/draft.json")
+        environmentFile = resources.root.appendingPathComponent("domain/environments.json")
         let store = PendingStudioPatchStore(fileURL: file, directory: resources.root)
         forwarding = PendingPersistenceForwarder(store: store)
-        coordinator = AssistantCoordinator(draftStore: forwarding)
+        if legacyStore {
+            coordinator = AssistantCoordinator(draftStore: LegacyPendingDraftStore(forwarding: forwarding))
+        } else {
+            coordinator = AssistantCoordinator(draftStore: forwarding)
+        }
     }
 
     static func run(
+        legacyStore: Bool = false,
         _ body: @MainActor (AppModelPendingDraftAcceptanceFixture) async throws -> Void
     ) async throws {
         // Admission precedes even fixture/dependency construction; host startup needs launch flags too.
         try await withAssistantFixtureResources { resources in
             try requireNoProductionEntries()
-            let fixture = AppModelPendingDraftAcceptanceFixture(resources: resources)
+            let fixture = AppModelPendingDraftAcceptanceFixture(resources: resources, legacyStore: legacyStore)
             resources.onFinish { await fixture.finish() }
             try await body(fixture)
         }
     }
 
     func prepare(
-        mode: StudioDraftApplicationMode = .append, seedGraph: Bool = false
+        mode: StudioDraftApplicationMode = .append, seedGraph: Bool = false, recoverSavedDraft: Bool = false
     ) async throws -> (AppModel, StudioPatchDraft) {
         try #require(model == nil && !closed)
         let settings = AssistantProviderSettings(
@@ -57,7 +75,7 @@ final class AppModelPendingDraftAcceptanceFixture {
             wing: wing, wingLifecycle: HostWingLifecycle(owner: nil), hardware: hardware,
             launchControlXLStore: JSONFileStore(
                 directory: resources.root.appendingPathComponent("lcxl"), cloud: nil),
-            domainStore: JSONFileStore(directory: resources.root.appendingPathComponent("domain"), cloud: nil),
+            domainStore: JSONFileStore(directory: environmentFile.deletingLastPathComponent(), cloud: nil),
             assistantConversationStore: AssistantConversationStore(
                 local: LocalAssistantHistoryBackend(
                     directory: resources.root.appendingPathComponent("history"), legacyFileURL: nil), cloud: nil),
@@ -83,9 +101,14 @@ final class AppModelPendingDraftAcceptanceFixture {
         try #require(model.environments.active?.id == environmentID)
         try #require(model.studioConnections.connections.home == home)
         try #require(model.studioConnections.connections.temporaryMoves.isEmpty)
-        _ = await coordinator.perform(
+        // A separate store/coordinator writes the recovery fixture; the receiver has no token history.
+        let writer = recoverSavedDraft
+            ? AssistantCoordinator(draftStore: PendingStudioPatchStore(fileURL: file, directory: resources.root))
+            : coordinator
+        _ = await writer.perform(
             .buildStudioDraft(.init(sourceInstrumentIDs: [instrument.id], applicationMode: mode)),
             context: model.assistantToolContext())
+        if recoverSavedDraft { await coordinator.load() }
         let built = try #require(coordinator.pendingStudioDraft)
         try requireReady(model, built)
         return (model, built)
@@ -135,6 +158,28 @@ final class AppModelPendingDraftAcceptanceFixture {
         try FileManager.default.removeItem(at: file.deletingLastPathComponent())
     }
 
+    @discardableResult
+    func blockEnvironmentFile() throws -> URL {
+        try FileManager.default.removeItem(at: environmentFile)
+        try FileManager.default.createDirectory(at: environmentFile, withIntermediateDirectories: false)
+        let blocker = environmentFile.appendingPathComponent("blocker")
+        try Data("owned environment blocker".utf8).write(to: blocker)
+        return blocker
+    }
+
+    func readPendingDraft() throws -> StudioPatchDraft {
+        try JSONDecoder().decode(StudioPatchDraft.self, from: Data(contentsOf: file))
+    }
+
+    func readSavedEnvironment() throws -> RoutingEnvironment {
+        struct Envelope: Decodable {
+            let environments: [RoutingEnvironment]
+            let activeID: RoutingEnvironment.ID?
+        }
+        let saved = try JSONDecoder().decode(Envelope.self, from: Data(contentsOf: environmentFile))
+        return try #require(saved.environments.first { $0.id == saved.activeID })
+    }
+
     func startAcceptance() throws -> Task<StudioPatchMergeResult?, Never> {
         let model = try #require(model)
         try #require(!closed && acceptance == nil)
@@ -158,6 +203,7 @@ final class AppModelPendingDraftAcceptanceFixture {
         for cancel in cancellations { cancel() }
         presentation.disappear()
         model?.assistantChat.cancel()
+        await receiptGate.release()
         await forwarding.finish() // Release/disarm every gate, including failures before entry.
         _ = await acceptance?.value
         for join in joins { await join() }

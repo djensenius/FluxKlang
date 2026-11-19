@@ -1,6 +1,5 @@
 import CoreGraphics
 import SwiftUI
-
 struct StudioView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -25,23 +24,26 @@ struct StudioView: View {
             .navigationTitle("Studio")
             .toolbar { toolbar }
             .safeAreaInset(edge: .top) {
-                if appModel.assistant.pendingStudioDraft == nil, let warning = discardPresentation.warning {
+                if let warning = discardPresentation.warning,
+                   warning == .localWriteUnconfirmed || appModel.assistant.pendingStudioDraft == nil {
                     HStack {
                         Text(warning.message).fixedSize(horizontal: false, vertical: true)
                         Button("Dismiss", action: discardPresentation.dismiss)
                     }.padding().background(.regularMaterial).accessibilityIdentifier("studio.discardWarning")
                 }
             }
-            .onChange(of: appModel.assistant.pendingStudioDraft) { _, draft in
-                discardPresentation.pendingDraftChanged(draft)
+            .onChange(of: appModel.assistant.pendingPublicationID) {
+                discardPresentation.pendingDraftChanged(appModel.assistant.pendingStudioDraft)
             }
             .onDisappear { discardPresentation.disappear() }
             .sheet(isPresented: reviewPresented) {
                 if let draft = appModel.assistant.pendingStudioDraft {
-                    PendingStudioPatchReviewView(
-                        draft: draft,
-                        accept: acceptPendingDraft,
-                        discard: discardPendingDraft
+                    PendingStudioPatchReviewView(draft: draft,
+                        acceptanceBlocked: !appModel.assistant.canAcceptPendingDraft(
+                            hasActiveEnvironment: appModel.environments.active != nil),
+                        acceptanceUnknown: appModel.assistant.isPendingDraftAcceptanceUnknown,
+                        localWriteWarning: discardPresentation.localWriteWarning,
+                        accept: acceptPendingDraft, discard: discardPendingDraft
                     )
                     .task {
                         await appModel.refreshPendingAssistantDraftForReview()
@@ -492,7 +494,6 @@ private extension StudioView {
         discardPresentation.discard(using: appModel.assistant)
     }
 }
-
 #Preview {
     NavigationStack { StudioView(window: WindowID(uuid: UUID())) }
         .environment(AppModel.preview())

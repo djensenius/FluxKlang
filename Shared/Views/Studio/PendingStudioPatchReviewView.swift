@@ -36,6 +36,9 @@ struct PendingStudioPatchReviewView: View {
     @Environment(\.dismiss) private var dismiss
 
     let draft: StudioPatchDraft
+    let acceptanceBlocked: Bool
+    let acceptanceUnknown: Bool
+    let localWriteWarning: String?
     let accept: () -> Void
     let discard: () -> Void
 
@@ -43,6 +46,14 @@ struct PendingStudioPatchReviewView: View {
         NavigationStack {
             List {
                 Section("Safety") {
+                    if acceptanceUnknown && acceptanceBlocked {
+                        Text("A draft was already applied to this environment this session. "
+                             + "This saved draft may be the same one; create a new draft before accepting.")
+                    }
+                    if let localWriteWarning {
+                        Label(localWriteWarning, systemImage: "exclamationmark.triangle")
+                            .accessibilityIdentifier("studio.localWriteWarning")
+                    }
                     Text(draft.applicationMode == .replace
                         ? "Replace current Studio graph" : "Append to current Studio graph")
                         .font(.headline)
@@ -123,11 +134,11 @@ struct PendingStudioPatchReviewView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     if draft.applicationMode == .replace {
                         Button("Replace Studio", role: .destructive, action: accept)
-                            .disabled(draft.hasErrors)
+                            .disabled(draft.hasErrors || acceptanceBlocked)
                             .accessibilityIdentifier("assistant.pendingDraft.accept")
                     } else {
                         Button("Accept", action: accept)
-                            .disabled(draft.hasErrors)
+                            .disabled(draft.hasErrors || acceptanceBlocked)
                             .accessibilityIdentifier("assistant.pendingDraft.accept")
                     }
                 }

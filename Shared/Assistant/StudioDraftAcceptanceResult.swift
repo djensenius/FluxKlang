@@ -1,12 +1,19 @@
-/// Legacy in-memory merge acknowledgement, not an environment save or document commit.
+import Foundation
+
+/// In-memory merge acknowledgement. Local-write completion is not cloud durability or a document commit.
 /// Removal is this invocation's historical nil-snapshot outcome, not current disk state.
 enum StudioDraftAcceptanceResult: Sendable, Equatable {
     case notAccepted
     case accepted(merge: StudioPatchMergeResult, removalOutcome: PendingStudioPatchMutationOutcome)
+    case acceptedLocalWriteUnconfirmed(merge: StudioPatchMergeResult, retainedPublicationID: UUID?)
+    case acceptedWithoutRetirement(merge: StudioPatchMergeResult)
 
     var merge: StudioPatchMergeResult? {
-        guard case .accepted(let merge, _) = self else { return nil }
-        return merge
+        switch self {
+        case .notAccepted: nil
+        case .accepted(let merge, _), .acceptedLocalWriteUnconfirmed(let merge, _),
+             .acceptedWithoutRetirement(let merge): merge
+        }
     }
 
     var removalOutcome: PendingStudioPatchMutationOutcome? {

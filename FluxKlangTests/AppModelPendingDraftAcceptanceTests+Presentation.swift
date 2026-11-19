@@ -7,6 +7,37 @@ import Testing
 #endif
 
 extension AppModelPendingDraftAcceptanceTests {
+    @Test func acceptanceLocalWriteWarningStaysWithRetainedPublication() async throws {
+        try await AppModelPendingDraftAcceptanceFixture.run { fixture in
+            let (model, built) = try await fixture.prepare()
+            try fixture.blockEnvironmentFile()
+            model.assistant.navigationTarget = .reviewPendingDraft
+            let gate = await fixture.forwarding.hold(.afterSave(2))
+            let acceptance = fixture.presentation.accept(using: model)
+            try #require(await gate.waitForEntry())
+            let duplicate = fixture.presentation.accept(using: model)
+            await gate.release()
+            await acceptance.value
+            await duplicate.value
+            let retained = try #require(model.assistant.pendingStudioDraft)
+            #expect(model.assistant.navigationTarget == .reviewPendingDraft)
+            #expect(fixture.presentation.warning == .localWriteUnconfirmed)
+            #expect(try fixture.readPendingDraft() == retained)
+            #expect(await fixture.forwarding.snapshots == [built, retained])
+            await fixture.presentation.accept(using: model).value
+            #expect(fixture.presentation.warning == .localWriteUnconfirmed)
+            #expect(await fixture.forwarding.snapshots == [built, retained])
+
+            let context = model.assistantToolContext()
+            let replaced = await model.assistant.commitPreparedRouting(
+                retained, expectedPending: retained, preparedContext: context, currentContext: context)
+            try #require(replaced)
+            try #require(model.assistant.pendingStudioDraft == retained, "equal value, different publication")
+            #expect(fixture.presentation.warning == nil, "even before Studio receives onChange")
+            #expect(await fixture.forwarding.snapshots == [built, retained, retained])
+        }
+    }
+
     @Test(arguments: ["saved", "absent", "blocked"], [false, true])
     func acceptanceActualPresentation(storage: String, replace: Bool) async throws {
         try await AppModelPendingDraftAcceptanceFixture.run { fixture in
