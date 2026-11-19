@@ -8,13 +8,13 @@ final class KernelCycleCandidate {
     /// Only the designated binding initializer extracts this payload; no claim or ready cycle is stored here.
     struct Payload: ~Copyable {
         let parts: KernelCycleParts
-        let pulses: ClockPulseGate
         let blockCapacity: Int
         let perLaneQuota: Int
         let checked: KernelCyclePreparation
         let ackRequests: KernelAckRequests
         let reservation: KernelReadmissionReservation
         let block: KernelBlockBuffer
+        let execution: KernelCycleExecutionStorage
     }
 
     private enum State: ~Copyable {
@@ -30,11 +30,13 @@ final class KernelCycleCandidate {
         let checked = try KernelCycle.prepare(parts, blockCapacity: blockCapacity, perLaneQuota: perLaneQuota)
         guard let ackRequests = KernelAckRequests(faults: parts.faults, criticalScope: parts.events.criticalScope)
         else { throw .ackIdentitiesExhausted }
-        state = .pending(Payload(parts: parts, pulses: pulses, blockCapacity: blockCapacity,
+        state = .pending(Payload(parts: parts, blockCapacity: blockCapacity,
                                  perLaneQuota: perLaneQuota, checked: checked, ackRequests: ackRequests,
                                  reservation: KernelReadmissionReservation(
                                     capacity: min(KernelRetirementCarry.capacity, blockCapacity)),
-                                 block: KernelBlockBuffer(capacity: blockCapacity)))
+                                 block: KernelBlockBuffer(capacity: blockCapacity),
+                                 execution: KernelCycleExecutionStorage(parts: parts, deadline: checked.deadline,
+                                                                        pulses: pulses, ackRequests: ackRequests)))
     }
 
     /// Control only; absent after cancellation/extraction. No pre-ready report or backing access.

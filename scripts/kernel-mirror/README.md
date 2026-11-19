@@ -32,6 +32,15 @@ trait (`FluxKlangTests/ProductionAccessScope.swift`) records an issue without on
 `check-log.sh` checks each log and prints its test count for the step summary. Its
 `--expect-skipped <test> <reason>` option requires a named test to be skipped for that reason.
 
+For diagnostics, each hosted invocation also requests Swift Testing events with
+`--event-stream-output-path` and xUnit with `--xunit-output`. An `always()` upload retains
+the untrimmed merged stdout/stderr logs and available structured outputs for 14 days in
+`kernel-mirror-diagnostics-<run_attempt>`: `debug.{log,events.jsonl,xunit.xml}`,
+`release.{log,events.jsonl,xunit.xml}` and `tsan-<run>.{log,events.jsonl,xunit.xml}`.
+Failed or interrupted invocations may leave partial or missing outputs; later runs still
+do not execute after an earlier failure. These diagnostic files do not replace the
+required console pass/skip checks or establish a pass from a parent suite or run summary.
+
 ## What it does not prove
 
 - It tests the kernel as a **reference model**. It is not real-time certification: there is no

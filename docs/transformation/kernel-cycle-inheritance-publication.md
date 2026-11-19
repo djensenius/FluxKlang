@@ -13,12 +13,14 @@ staging, overlap, claim transfer or reclamation machinery. #715, #64, #190,
    claim state without claiming. [`KernelCycleCandidate`][candidate] captures these
    checks, parts, pulses and capacities, then creates acknowledgement requests
    and reserves three readmission backings (raw slots, head and pending-by-kind
-   counters) and constructs the private block buffer before claiming.
+   counters), constructs the private block buffer and prepares the execution
+   owner (watermark, decider, selected/default refusal table and telemetry
+   backing) before claiming.
    [`KernelCycle.init(binding:)`][cycle-init] consumes that candidate and calls
    `claimForCycle` before constructing the readmission object and initializing
-   its reserved slots. It adopts the same prepared block buffer after a successful
-   claim; the watermark, decider and telemetry counters are still allocated
-   after claiming.
+   its reserved slots. It adopts the same prepared block and execution owner
+   after a successful claim, without replacement component allocations. The
+   cycle supplies its own completed readmission to the decider during execution.
    The implementation order, not the older “last in init” claim comment, governs.
 2. [`NoteOwnership.claimForCycle`][claim] acquires exactly the observed claim
    word by compare-exchange. Only success reads inherited loss and carry.
@@ -281,14 +283,124 @@ The concrete consumer remains reference `renderReadmitsWhileControlPreparesAndPo
 / `prepareAndPoll`, not an activated application render path.
 
 This is only the partial control-only P5 reservation prerequisite, not T/P,
-asynchronous transfer or P5 completion. Readmission object/atomics, watermark,
-decider, telemetry and optional refusal table still allocate post-claim.
+asynchronous transfer or P5 completion. With the #867 source-stage change below,
+only inheritance-dependent readmission remains explicit component construction
+after claim; its object/atomics and Swift/SDK costs remain unqualified.
 Increased pending-candidate and empty-standalone storage (`R`, formerly
 `max(1, planned)` after planning), and unbounded aggregate candidate retention,
 are explicitly accepted. No global budget or allocation-free whole-bind claim.
 No realtime, deadline, quiescence or retirement/install-gap improvement is claimed.
-The original local Release individual-record loss remains UNKNOWN; #841/#769
+The original #856 local Release 184/122/13 discrepancy remains UNKNOWN; #841/#769
 deadline failures and unchanged diagnostic retries remain unresolved evidence.
+
+### Cohesive preclaim execution boundary (#867, source stage only)
+
+Baseline for this change: `66a8f4e60e68816fae5508917a6350a4591387e5` (#864).
+This section describes source placement and obligations, **not executed tests,
+independent approval, allocation measurements or runtime qualification**.
+
+[`KernelCycleExecutionStorage`][execution] is one noncopyable, non-Sendable
+owner, kept in the candidate's noncopyable payload and then in one ready
+cycle's private stored property. Its type is module-internal only to cross the
+candidate/cycle file boundary. Neither candidate nor cycle exposes the owner,
+its components or an owning pointer. Only the existing selected refusal-table
+API and value telemetry getters remain public within the module.
+
+The owner constructs the existing watermark and decider, selects the supplied
+refusal table by reference (or constructs its existing default counters), and
+initializes one private telemetry value with the just-issued acknowledgement
+identity. It holds the watermark/decider objects for their full lifetime; their
+existing destructors still own their backing. The owner's destructor frees its
+BitwiseCopyable telemetry backing. No teardown hook, new raw pointer API,
+capability, asynchronous custody or cleanup authority is added.
+
+Ordering and adoption trace:
+
+1. `KernelCycle.prepare` still checks shape, wiring and ownership in the same
+   order, retaining the exact originating ownership/snapshot. Held predecessors
+   refuse here; preparation still starts after retirement.
+2. Candidate initialization issues `KernelAckRequests` next, then prepares its
+   reservation, existing block and execution owner. The new work reads captured
+   policy/start/pulses/identity and immutable lane/scope/parameter dimensions.
+   It retains ownership, tombstones and ramps, but does not read their mutable
+   contents, drain events, take safety flags, inspect inheritance, count
+   refusals, raise faults or publish telemetry. The default table only allocates
+   existing `FanInRefusalCounter` values; it mints no caller identities/chains.
+3. `consumeForBinding` has exactly one call site, in `init(binding:)`. It removes
+   the payload and marks the candidate terminal **before** the single exact
+   claim CAS. Cancel/abandon destroys pending private storage on control.
+   Failed claim destroys extracted storage there too; no refresh, recovery,
+   retry or claim revocation occurs. Cancelled/consumed and all ownership
+   refusal outcomes retain their precedence.
+4. Successful claim acquires predecessor retirement and copies its inheritance.
+   The cycle adopts the same prepared block and moves the execution owner
+   intact. Its only remaining explicit component constructor is the unchanged
+   `KernelCarryReadmission(carry:reservation:)`. It initializes exact prefix
+   `I = N` within `R` and fixed report metadata, including empty/overflow-refused
+   plans. Swift object/atomic/metadata costs have not disappeared.
+5. The decider no longer stores readmission. Its sole `decide` caller passes
+   `(block: block, readmission: carryReadmission)` from the owning ready cycle.
+   Every merge/readmit/supersession uses that completed object. There is no
+   optional installation, placeholder report, unbound-ready object, second
+   binder or fallback. Takeover, flush, safety, acknowledgement and carry order
+   are unchanged.
+6. Only a fully initialized cycle returns to the caller. The existing
+   `prepareAndPoll` then publishes through test-only `CycleSlots` and polls as
+   before: retirement release -> exact claim acquire -> complete initialization
+   -> existing test publication/acquisition. Nothing adds pre-ready reporting.
+   Consumed candidates retain no execution owner and cannot reset telemetry,
+   gate/ramp offsets or takeover bits, revoke claims or affect a successor.
+   Render retirement and final control teardown keep their existing contracts.
+
+**Accepted pending-retention tradeoff, not a heap bound.** In addition to the
+already prepared block and readmission reservation:
+
+| Component | Existing dimensions now retained while pending |
+| --- | --- |
+| Watermark | `L` initialized `Bool` lane flags (`1...64` lanes), one `Int` flushing count, one `UInt64` append-refusal count. |
+| Decider ramp offsets | `P` initialized `Int64` offsets (`1...65,536` parameters): 8 bytes to **524,288 bytes (512 KiB)**. Shared ramp slots/values remain in `RampSlots`, not copied or read. |
+| Decider takeover | `S * 32` initialized `UInt64` words (`1...256` scopes; 16 channels * 128 notes/scope): 256 bytes to **65,536 bytes (64 KiB)**, plus one `Int` scope cursor. |
+| Decider gate | One initialized captured `ClockPulseGate` value; no separate gate identity. |
+| Default refusal table | `3 * L` initialized `FanInRefusalCounter` values plus one foreign counter (`3...192` lane counters). A supplied table is retained unchanged, not reset/copied. |
+| Telemetry | One initialized `KernelCycleTelemetry` value with this cycle's acknowledgement identity. |
+
+Object headers, ARC retention, allocator overhead, inline cycle atomics and
+Swift/SDK costs are additional and unmeasured here. Aggregate pending candidates
+remain unbounded. No global admission cap, complete operation allocation bound,
+allocation-free ready binding, shortened retirement gap, RT/deadline, app/host
+activation or iOS-runtime claim follows.
+
+[`CycleExecutionStorage` focused tests][execution-tests] exercise:
+
+- captured start/gate/quota/output/table and untouched queued events, notes,
+  active ramp, tombstone, safety request, fault state and prior telemetry;
+- fresh default versus supplied refusal-table identity and producer progress;
+- cancel/abandon retained-reference endpoints and terminal claim losers under
+  fresh/replacing starts on both sides of retirement;
+- consumed aliases and independent cancellation after execution progress,
+  takeover-bit suppression, continued ramp/gate/telemetry and successor state;
+- the owning cycle's empty/nonempty/overflow-refused readmission, immutable
+  initialized extent, partial/full delivery and loss resolution;
+- actual first/last lane, scope, note and ramp execution at minimum/maximum
+  dimensions, and ready/retired final control-release endpoints.
+
+These tests do not prove preclaim placement, absence of mutable reads, exclusive
+adoption or exact raw frees. Independent source review must check those separately.
+The existing candidate/reservation/follow-up, carry, ordering/ack/takeover,
+readmission and actual `renderReadmitsWhileControlPreparesAndPolls` tests are
+unchanged, as are allocation/source scans and FaultLatch authority tripwires.
+
+**Source-stage closure only:** changed-Swift strict lint is permitted; compilation,
+mirrors, native/Xcode/TSan/application/hardware/iOS execution is not. Coordinator
+must register the new test extension under the existing audited
+`RealtimeHandoffTests` root, add its canonical mirror test row and native target
+source row, and regenerate the project after the separately serialized persistence
+and MIDI registrations. Kernel source inclusion follows the existing source tree.
+Independent review and fresh shared-machine/atomic-lock authorization must precede
+canonical focused Debug/optimized Release evidence with the actual audit machinery.
+Later exact-head hosted Apple/lint/full-kernel Debug/Release/three-run TSan and
+native Mac gates remain mandatory. No source claim or receipt closes #190,
+#64/#48, #856's UNKNOWN discrepancy or #841/#769's unresolved deadline records.
 
 Before P, seal inherited loss, the full carry including `ownCount` and
 `droppedForCapacity`, plan refusal/count/invalid/cut/superseded/drop metadata,
@@ -373,6 +485,8 @@ flush, takeover and acknowledgement behavior is preserved.
 [prepare]: ../../Shared/Audio/Kernel/Events/KernelCycle+Preparation.swift#L49-L106
 [candidate]: ../../Shared/Audio/Kernel/Events/KernelCycleCandidate.swift
 [candidate-tests]: ../../FluxKlangTests/RealtimeHandoffTests+KernelCycleCandidate.swift
+[execution]: ../../Shared/Audio/Kernel/Events/KernelCycleExecutionStorage.swift
+[execution-tests]: ../../FluxKlangTests/RealtimeHandoffTests+KernelCycleExecutionStorage.swift
 [cycle-init]: ../../Shared/Audio/Kernel/Events/KernelCycle.swift#L269-L336
 [ownership]: ../../Shared/Audio/Kernel/Events/NoteOwnership.swift#L70-L142
 [claim]: ../../Shared/Audio/Kernel/Events/NoteOwnership.swift#L180-L209
