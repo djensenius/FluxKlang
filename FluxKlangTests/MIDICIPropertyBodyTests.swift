@@ -23,7 +23,7 @@ import Testing
 struct MIDICIPropertyBodyTests {
     typealias Refusal = MIDICIPropertyBodyRefusal
 
-    /// The two encodings the decoder decodes and two it refuses.
+    /// The three supported encodings and one unknown name.
     static let encodings: [MIDICIPropertyEncoding] = [.ascii, .mcoded7, .zlibMcoded7, .other("")]
 
     /// `{"foo": [1,2,3,4,5], "bar": [6,7,8,9,0]}` and a line feed, 41 bytes (`MIDICIMcoded7Tests`' text).
@@ -115,7 +115,7 @@ struct MIDICIPropertyBodyTests {
         let mcoded7Mismatch = mcoded7.firstIndex { $0 != 0xC1 }
         #expect(mcoded7.count == 229_376)
         #expect(mcoded7Mismatch == nil)
-        #expect(Self.outcome(atLimit, .zlibMcoded7) == .failure(.unsupportedEncoding(.zlibMcoded7)))
+        #expect(Self.outcome(atLimit, .zlibMcoded7) == .failure(.invalidCompressedData))
         #expect(Self.outcome(atLimit, .other("")) == .failure(.unsupportedEncoding(.other(""))))
 
         // One byte more is refused in every encoding; as Mcoded7 it would also end in a lone header byte.
@@ -154,13 +154,14 @@ struct MIDICIPropertyBodyTests {
         }
     }
 
-    @Test func zlibIsRecognisedButRefused() {
+    @Test func zlibIsRecognisedAndValidatesMcoded7BeforeCompression() {
         #expect(MIDICIPropertyEncoding(name: "zlib+Mcoded7") == .zlibMcoded7)
-        // Empty, valid Mcoded7, a lone header byte and high bytes: nothing is read.
-        let inputs: [[UInt8]] = [[], [0x40, 0x25], Self.jsonMcoded7, [0x00], [0x80], [0x00, 0xFF]]
-        for input in inputs {
-            #expect(Self.outcome(input, .zlibMcoded7) == .failure(.unsupportedEncoding(.zlibMcoded7)), "\(input)")
+        for input in [[], [0x40, 0x25], Self.jsonMcoded7] {
+            #expect(Self.outcome(input, .zlibMcoded7) == .failure(.invalidCompressedData), "\(input)")
         }
+        #expect(Self.outcome([0x00], .zlibMcoded7) == .failure(.truncatedGroup(offset: 0)))
+        #expect(Self.outcome([0x80], .zlibMcoded7) == .failure(.byteHigh(offset: 0)))
+        #expect(Self.outcome([0x00, 0xFF], .zlibMcoded7) == .failure(.byteHigh(offset: 1)))
     }
 
     @Test func anUnknownEncodingIsRefused() throws {
@@ -185,9 +186,9 @@ struct MIDICIPropertyBodyTests {
         for encoding in Self.encodings + [.other("x")] {
             #expect(Self.outcome(over, encoding) == .failure(.tooLong(count: 262_145, limit: 262_144)))
         }
-        // The encoding before the bytes: a high byte or a lone header byte in an unsupported encoding.
-        #expect(Self.outcome([0x80], .zlibMcoded7) == .failure(.unsupportedEncoding(.zlibMcoded7)))
-        #expect(Self.outcome([0x00], .zlibMcoded7) == .failure(.unsupportedEncoding(.zlibMcoded7)))
+        // Recognized compression validates Mcoded7; an unknown encoding still wins before the bytes.
+        #expect(Self.outcome([0x80], .zlibMcoded7) == .failure(.byteHigh(offset: 0)))
+        #expect(Self.outcome([0x00], .zlibMcoded7) == .failure(.truncatedGroup(offset: 0)))
         #expect(Self.outcome([0x80], .other("x")) == .failure(.unsupportedEncoding(.other("x"))))
         // A high byte before the truncation: nine bytes end in a lone header byte that is itself high.
         let highAtTheEnd: [UInt8] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80]
@@ -215,7 +216,7 @@ struct MIDICIPropertyBodyTests {
 
         let zlib = try MIDICIPropertyHeader.parse(Array(#"{"mutualEncoding":"zlib+Mcoded7"}"#.utf8))
         try #require(zlib.encoding == .zlibMcoded7)
-        #expect(throws: Refusal.unsupportedEncoding(.zlibMcoded7)) { try zlib.decodeBody([0x40, 0x25]) }
+        #expect(throws: Refusal.invalidCompressedData) { try zlib.decodeBody([0x40, 0x25]) }
         let other = MIDICIPropertyHeader(encoding: .other("gzip"))
         #expect(throws: Refusal.unsupportedEncoding(.other("gzip"))) { try other.decodeBody([]) }
     }
@@ -252,7 +253,9 @@ struct MIDICIPropertyBodyTests {
                 tally.check(input, encoding)
             }
         }
-        #expect(tally.seen == ["tooLong", "unsupportedEncoding", "byteHigh", "truncatedGroup"], "\(tally.seen)")
+        #expect(tally.seen == [
+            "tooLong", "unsupportedEncoding", "byteHigh", "truncatedGroup", "invalidCompressedData"
+        ], "\(tally.seen)")
         #expect(tally.asciiDecoded > 0)
         #expect(tally.mcoded7Decoded > 0)
     }
@@ -302,6 +305,8 @@ private struct PropertyBodyTally {
         case .unsupportedEncoding: "unsupportedEncoding"
         case .byteHigh: "byteHigh"
         case .truncatedGroup: "truncatedGroup"
+        case .decodedTooLong: "decodedTooLong"
+        case .invalidCompressedData: "invalidCompressedData"
         }
     }
 
@@ -323,10 +328,9 @@ private struct PropertyBodyTally {
         if case .failure(let refusal) = first {
             seen.insert(Self.name(of: refusal))
         }
-        let decodes = encoding == .ascii || encoding == .mcoded7
         if input.count > Self.limit {
             #expect(first == .failure(.tooLong(count: input.count, limit: Self.limit)))
-        } else if !decodes {
+        } else if case .other = encoding {
             #expect(first == .failure(.unsupportedEncoding(encoding)))
         } else if let high = input.firstIndex(where: { $0 >= 0x80 }) {
             #expect(first == .failure(.byteHigh(offset: high)))
@@ -335,6 +339,13 @@ private struct PropertyBodyTally {
             asciiDecoded += 1
         } else if input.count % 8 == 1 {
             #expect(first == .failure(.truncatedGroup(offset: input.count - 1)))
+        } else if encoding == .zlibMcoded7 {
+            // Retain compressed cases in the seeded oracle. Independent bounded uncompress2 entry point,
+            // not the body decoder's inflate helper, with the same whole-stream/trailing policy.
+            switch Self.reference(input) {
+            case .failure(let refusal): #expect(first == .failure(refusal))
+            case .success(let compressed): #expect(first == MIDICIPropertyBodyTests.zlibReference(compressed))
+            }
         } else {
             let decoded = try? first.get()
             #expect(decoded?.count == input.count - (input.count + 7) / 8)
