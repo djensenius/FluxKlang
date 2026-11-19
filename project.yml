@@ -549,6 +549,7 @@ targets:
       - path: FluxKlangTests/MIDICIMessageTests+PropertyData.swift
       - path: FluxKlangTests/MIDICIMessageTests+PropertyDataRules.swift
       - path: FluxKlangTests/MIDICIPropertyReassemblerTests.swift
+      - path: FluxKlangTests/MIDICIPropertyReassemblerTests+Envelope.swift
       - path: FluxKlangTests/MIDICIMessageTests+ProfileDetails.swift
       - path: FluxKlangTests/MIDICIMessageTests+ProfileDetailsRules.swift
       - path: FluxKlangTests/MIDICIMcoded7Tests.swift
@@ -959,6 +960,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmission.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionBounds.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionPlan.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleCarryPlanning.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleTakeoverGap.swift
       - path: FluxKlangTests/RealtimeHandoffTests+AckHandshakeModelState.swift
       - path: FluxKlangTests/RealtimeHandoffTests+AckHandshakeModel.swift
