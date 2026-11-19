@@ -109,11 +109,16 @@ final class AppModelPendingDraftAcceptanceFixture {
         return task
     }
 
-    func buildAgain(_ model: AppModel) async throws -> StudioPatchDraft {
+    func buildAgain(
+        _ model: AppModel, mode: StudioDraftApplicationMode = .append,
+        destination: StudioEndpointDestination = .finalMix
+    ) async throws -> StudioPatchDraft {
         // The seeded library's first device is not the fixture source wired into Home.
         try #require(model.equipment.item(instrument.id) == instrument)
         _ = await coordinator.perform(
-            .buildStudioDraft(.init(sourceInstrumentIDs: [instrument.id])), context: model.assistantToolContext())
+            .buildStudioDraft(.init(
+                sourceInstrumentIDs: [instrument.id], destination: destination, applicationMode: mode)),
+            context: model.assistantToolContext())
         let draft = try #require(coordinator.pendingStudioDraft)
         try #require(!draft.hasErrors && draft.liveReferences == [],
                      "Validation: \(draft.validation); live references: \(String(describing: draft.liveReferences))")
