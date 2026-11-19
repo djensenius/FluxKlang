@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "277e02af3bbe47e185f8cbbfea5bd036ee1b8bbf08360fa52fc6358c661b3be2",
+    "sha256": "6aa504ab3a5943cfbab1c68ef9f970d4743b4ec23ad913ceb37ab131af179ace",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -857,6 +857,7 @@
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmission.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionBounds.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionPlan.swift",
+        "FluxKlangTests/RealtimeHandoffTests+KernelCycleCarryPlanning.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleTakeoverGap.swift",
         "FluxKlangTests/RealtimeHandoffTests+AckHandshakeModelState.swift",
         "FluxKlangTests/RealtimeHandoffTests+AckHandshakeModel.swift",
@@ -866,7 +867,9 @@
         "FluxKlangTests/PerformanceDraftReviewTests.swift",
         "FluxKlangTests/PendingStudioPatchPersistenceTests.swift",
         "FluxKlangTests/PendingStudioPatchPersistenceTests+Publication.swift",
+        "FluxKlangTests/PendingStudioPatchPersistenceTests+Commit.swift",
         "FluxKlangTests/PendingStudioPatchPersistenceTestSupport.swift",
+        "FluxKlangTests/AssistantFixtureAdoptionSupport.swift",
         "FluxKlangTests/PerformanceWiringEditorTests.swift",
         "FluxKlangTests/WorkspaceNavigationTests.swift",
         "FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift",

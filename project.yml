@@ -959,6 +959,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmission.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionBounds.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionPlan.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleCarryPlanning.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleTakeoverGap.swift
       - path: FluxKlangTests/RealtimeHandoffTests+AckHandshakeModelState.swift
       - path: FluxKlangTests/RealtimeHandoffTests+AckHandshakeModel.swift
@@ -968,7 +969,9 @@ targets:
       - path: FluxKlangTests/PerformanceDraftReviewTests.swift
       - path: FluxKlangTests/PendingStudioPatchPersistenceTests.swift
       - path: FluxKlangTests/PendingStudioPatchPersistenceTests+Publication.swift
+      - path: FluxKlangTests/PendingStudioPatchPersistenceTests+Commit.swift
       - path: FluxKlangTests/PendingStudioPatchPersistenceTestSupport.swift
+      - path: FluxKlangTests/AssistantFixtureAdoptionSupport.swift
       - path: FluxKlangTests/PerformanceWiringEditorTests.swift
       - path: FluxKlangTests/WorkspaceNavigationTests.swift
       - path: FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift

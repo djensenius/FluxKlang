@@ -488,12 +488,17 @@ extension AssistantChatController {
                 else { throw CancellationError() }
                 try Task.checkCancellation()
                 guard activeResponseID == responseID else { throw CancellationError() }
-                let committed = await coordinator.commitPreparedRouting(
+                let committed = await coordinator.commitPreparedRoutingResult(
                     draft, expectedPending: expectedPending, preparedContext: context, currentContext: current)
                 guard !Task.isCancelled, activeResponseID == responseID else { throw CancellationError() }
-                apply(.text(committed ? AssistantDraftReply.text(for: draft) : AssistantRoutingOwnership.clarification),
-                      conversationID: conversationID, responseID: responseID)
-                if committed {
+                switch committed {
+                case .notPublished:
+                    apply(.text(AssistantRoutingOwnership.clarification),
+                          conversationID: conversationID, responseID: responseID)
+                case .staged(let draft, let outcome):
+                    apply(.text(AssistantDraftReply.acknowledgingSave(AssistantDraftReply.text(for: draft),
+                                                                   outcome: outcome)),
+                          conversationID: conversationID, responseID: responseID)
                     apply(.cards(Self.cards(for: draft)), conversationID: conversationID, responseID: responseID)
                 }
             }
