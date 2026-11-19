@@ -179,6 +179,12 @@ targets:
       # Platform-neutral helper shared with FluxKlangTests; it must not import an app module.
       - path: FluxKlangTests/TestSupport.swift
       - path: FluxKlangTests/AppPersistenceSelectionTests.swift
+      - path: FluxKlangTests/AppModelPendingDraftAcceptanceTests.swift
+      - path: FluxKlangTests/AppModelPendingDraftAcceptanceTests+Result.swift
+      - path: FluxKlangTests/AppModelPendingDraftAcceptanceTests+Presentation.swift
+      - path: FluxKlangTests/AppModelPendingDraftAcceptanceTests+Ordering.swift
+      - path: FluxKlangTests/AppModelPendingDraftAcceptanceTests+History.swift
+      - path: FluxKlangTests/AppModelPendingDraftAcceptanceTestSupport.swift
       - path: FluxKlangTests/AssistantBackendDraftStore.swift
       - path: FluxKlangTests/StartupHardwareIsolationTests.swift
       - path: FluxKlangTests/StartupHardwareLifecycleFixtures.swift
@@ -562,6 +568,10 @@ targets:
       - path: FluxKlangTests/MIDICIPropertyContentTests+Zlib.swift
       - path: FluxKlangTests/MIDICIPropertyChunkerTests.swift
       - path: FluxKlangTests/MIDICIPropertyChunkerTests+Seeded.swift
+      - path: FluxKlangTests/MIDICIPropertyChunkerTests+Body.swift
+      - path: FluxKlangTests/MIDICIPropertyChunkerTests+BodyBounds.swift
+      - path: FluxKlangTests/MIDICIPropertyChunkerTests+BodyCompatibility.swift
+      - path: FluxKlangTests/MIDICIPropertyChunkerTests+BodyOrder.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Classify.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Order.swift

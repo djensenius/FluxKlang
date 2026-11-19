@@ -1,7 +1,8 @@
 import Foundation
 import Observation
 
-/// View-local intent ordering only; this does not own the draft or storage lifetime.
+/// Accept, Replace and Discard share view-local ordering and task ownership.
+/// This does not own the draft or storage lifetime.
 @MainActor
 @Observable
 final class StudioDraftDiscardPresentation {
@@ -19,15 +20,31 @@ final class StudioDraftDiscardPresentation {
 
     @discardableResult
     func discard(using coordinator: AssistantCoordinator) -> Task<Void, Never> {
+        start(using: coordinator) {
+            await coordinator.discardPendingStudioDraftResult()
+        }
+    }
+
+    @discardableResult
+    func accept(using model: AppModel) -> Task<Void, Never> {
+        start(using: model.assistant) {
+            await model.acceptPendingAssistantDraftResult().removalOutcome
+        }
+    }
+
+    private func start(
+        using coordinator: AssistantCoordinator,
+        removal: @escaping @MainActor () async -> PendingStudioPatchMutationOutcome?
+    ) -> Task<Void, Never> {
         let invocation = UUID()
         latestInvocation = invocation
         warning = nil
         // Accepted storage work survives supersession and outer-view disappearance.
         let task = Task {
             defer { work[invocation] = nil }
-            let outcome = await coordinator.discardPendingStudioDraftResult()
+            let outcome = await removal()
             guard latestInvocation == invocation, coordinator.pendingStudioDraft == nil,
-                  !outcome.completed else { return }
+                  let outcome, !outcome.completed else { return }
             warning = .removalUnconfirmed
         }
         work[invocation] = task
