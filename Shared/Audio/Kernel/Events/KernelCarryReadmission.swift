@@ -1,5 +1,89 @@
 import Synchronization
 
+/// Inert diagnostics, not a lifetime identity: compare fingerprints only while the backing is live.
+struct KernelReadmissionStorageInfo: Equatable {
+    struct Fingerprint: Equatable {
+        private let slots: UInt
+        private let head: UInt
+        private let pendingByKind: UInt
+
+        fileprivate init(slots: UInt, head: UInt, pendingByKind: UInt) {
+            self.slots = slots
+            self.head = head
+            self.pendingByKind = pendingByKind
+        }
+    }
+
+    let fingerprint: Fingerprint
+    let reservedCapacity: Int
+    let initializedCount: Int
+}
+
+/// Sole, non-Sendable storage owner. Pending on control, then consumed into ready readmission.
+/// Raw slots have no fillers; consumption never changes the initialized prefix. No cleanup authority escapes.
+struct KernelReadmissionReservation: ~Copyable {
+    fileprivate struct Slot {
+        let event: KernelEvent
+        let weight: Int
+        var superseded = false
+    }
+
+    private let slots: UnsafeMutablePointer<Slot>
+    private let head: UnsafeMutablePointer<Int>
+    private let pendingByKind: UnsafeMutablePointer<Int>
+    private let capacity: Int
+    private var initializedCount = 0
+
+    init(capacity: Int) {
+        self.capacity = capacity
+        slots = .allocate(capacity: capacity)
+        head = .allocate(capacity: 1)
+        head.initialize(to: 0)
+        pendingByKind = .allocate(capacity: 3)
+        pendingByKind.initialize(repeating: 0, count: 3)
+    }
+
+    var storageInfo: KernelReadmissionStorageInfo {
+        KernelReadmissionStorageInfo(
+            fingerprint: .init(slots: UInt(bitPattern: slots), head: UInt(bitPattern: head),
+                               pendingByKind: UInt(bitPattern: pendingByKind)),
+            reservedCapacity: capacity, initializedCount: initializedCount)
+    }
+
+    /// Only readmission in this file can initialize, before storing the owner immutably (sealing I = N).
+    fileprivate mutating func initialize(_ plan: KernelCarryPlan) {
+        precondition(initializedCount == 0 && plan.count <= capacity)
+        while let entry = plan.entry(at: initializedCount) {
+            (slots + initializedCount).initialize(to: Slot(event: entry.event, weight: entry.weight))
+            initializedCount += 1
+            if let kind = KernelCarryReadmission.kind(entry.event.payload) { pendingByKind[kind] += 1 }
+        }
+    }
+
+    fileprivate subscript(index: Int) -> Slot {
+        get { slots[index] }
+        nonmutating set { slots[index] = newValue }
+    }
+
+    fileprivate var position: Int {
+        get { head.pointee }
+        nonmutating set { head.pointee = newValue }
+    }
+
+    fileprivate func pending(_ kind: Int) -> Int { pendingByKind[kind] }
+    fileprivate func leaveKind(_ kind: Int) { pendingByKind[kind] &-= 1 }
+
+    /// Final legal control teardown: exactly I, not R, pending count or remaining head distance.
+    deinit {
+        slots.deinitialize(count: initializedCount)
+        slots.deallocate()
+        head.deinitialize(count: 1)
+        head.deallocate()
+        pendingByKind.deinitialize(count: 3)
+        pendingByKind.deallocate()
+    }
+}
+
 // #364 E5c, slice KCR1: re-admits the carry a `.replacingCycle` replacement inherited (`KernelRetirementCarry`) into
 // its own emission. Control constructs it in `init` (object/slots allocate; the fixed planner does not); render only
 // drains the prepared slots (no allocation, no lock, at most `capacity` slots per block). Not RT-certified.
@@ -86,7 +170,7 @@ struct KernelCarryResolution: Sendable, Equatable {
 /// Accounting: a delivered slot, or one superseded by the replacement, resolves its weight; `resolved()` feeds
 /// `KernelCycle.unresolvedRetirementLoss`. A refused slot, a re-carried one and everything the plan dropped stay lost.
 ///
-/// Bounds: `init` allocates the slots; render reads and writes only them, a head index, three pending-by-kind counts
+/// Bounds: control reserves the slots; render reads/writes only them, a head index, three pending-by-kind counts
 /// and atomic counters (releasing adds): no allocation, no lock, no `Array`. Per block, `next`/`consumeNext` visit each
 /// slot at most once over the cycle's life (at most `capacity`, 256); `supersede(by:)` returns at once for a
 /// non-stateful event or a kind with no pending slot, and otherwise visits only pending slots up to the event's frame
@@ -95,11 +179,7 @@ struct KernelCarryResolution: Sendable, Equatable {
 /// for each pending slot of a kind the block holds scans the frame-ordered buffer from the end back to that slot's
 /// frame: at most `capacity × blockCapacity` comparisons (256 × 4,096), once per cycle.
 final class KernelCarryReadmission: @unchecked Sendable {
-    private struct Slot {
-        let event: KernelEvent
-        let weight: Int
-        var superseded = false
-    }
+    private typealias Slot = KernelReadmissionReservation.Slot
 
     /// Most events this replacement re-admits: `min(KernelRetirementCarry.capacity, blockCapacity)`.
     let capacity: Int
@@ -109,11 +189,9 @@ final class KernelCarryReadmission: @unchecked Sendable {
     private let plannerSuperseded: Int
     private let droppedAtRecord: Int
     private let planned: Int
-    private let slots: UnsafeMutablePointer<Slot>
-    /// The first pending slot; render only.
-    private let head: UnsafeMutablePointer<Int>
-    /// Pending (not consumed, superseded or re-carried) slots by kind: control, program, ramp; render only.
-    private let pendingByKind: UnsafeMutablePointer<Int>
+    private let slots: KernelReadmissionReservation
+    /// Any thread: sealed initialization extent, never render's pending count.
+    var storageInfo: KernelReadmissionStorageInfo { slots.storageInfo }
     private let pendingTotal: Atomic<Int>
     private let delivered = Atomic<Int>(0)
     private let supersededByReplacement = Atomic<Int>(0)
@@ -123,9 +201,15 @@ final class KernelCarryReadmission: @unchecked Sendable {
     private let resolvedPrograms = Atomic<Int>(0)
     private let resolvedRamps = Atomic<Int>(0)
 
-    /// Control only (allocates): plans `carry` for a cycle of `blockCapacity` (`1...KernelCycle.maximumBlockCapacity`).
-    init(carry: KernelRetirementCarry, blockCapacity: Int) {
-        capacity = min(KernelRetirementCarry.capacity, max(1, blockCapacity))
+    /// Control only (allocates). Compatibility path deliberately preserves the permissive capacity clamp.
+    convenience init(carry: KernelRetirementCarry, blockCapacity: Int) {
+        self.init(carry: carry, reservation: KernelReadmissionReservation(
+            capacity: min(KernelRetirementCarry.capacity, max(1, blockCapacity))))
+    }
+
+    /// Control only: consumes the preclaim backing; other object/atomic construction still occurs here.
+    init(carry: KernelRetirementCarry, reservation: consuming KernelReadmissionReservation) {
+        capacity = reservation.storageInfo.reservedCapacity
         let plan = KernelCarryPlan(carry: carry, capacity: capacity)
         planRefusal = plan.refusal
         invalidRamps = plan.invalidRamps
@@ -133,26 +217,9 @@ final class KernelCarryReadmission: @unchecked Sendable {
         plannerSuperseded = plan.superseded
         droppedAtRecord = plan.droppedAtRecord
         planned = plan.count
-        slots = .allocate(capacity: max(1, planned))
-        var index = 0
-        while let entry = plan.entry(at: index) {
-            (slots + index).initialize(to: Slot(event: entry.event, weight: entry.weight))
-            index += 1
-        }
-        head = .allocate(capacity: 1)
-        head.initialize(to: 0)
-        pendingByKind = .allocate(capacity: 3)
-        pendingByKind.initialize(repeating: 0, count: 3)
-        for index in 0..<planned { if let kind = Self.kind(slots[index].event.payload) { pendingByKind[kind] += 1 } }
+        reservation.initialize(plan)
+        slots = consume reservation
         pendingTotal = Atomic(planned)
-    }
-
-    /// Control-side teardown only.
-    deinit {
-        slots.deinitialize(count: planned)
-        slots.deallocate()
-        head.deallocate()
-        pendingByKind.deallocate()
     }
 
     /// Any thread: the preparation outcome and render's counts so far (see `KernelCarryReadmissionReport`).
@@ -177,9 +244,9 @@ final class KernelCarryReadmission: @unchecked Sendable {
     /// Render only: the next pending slot's event, skipping (and so dropping) slots already superseded; `nil` when
     /// none is pending.
     var next: KernelEvent? {
-        while head.pointee < planned {
-            if !slots[head.pointee].superseded { return slots[head.pointee].event }
-            head.pointee &+= 1
+        while slots.position < planned {
+            if !slots[slots.position].superseded { return slots[slots.position].event }
+            slots.position &+= 1
         }
         return nil
     }
@@ -188,8 +255,8 @@ final class KernelCarryReadmission: @unchecked Sendable {
     /// Skips superseded slots first (through `next`), so a direct call never counts a slot twice.
     func consumeNext(delivered wasDelivered: Bool) {
         guard next != nil else { return }
-        let slot = slots[head.pointee]
-        head.pointee &+= 1
+        let slot = slots[slots.position]
+        slots.position &+= 1
         leavePending(slot)
         if wasDelivered {
             delivered.add(1, ordering: .releasing)
@@ -202,8 +269,8 @@ final class KernelCarryReadmission: @unchecked Sendable {
     /// Render only, after the replacement's own lanes dispatched `event`: discards every pending slot for the same
     /// target at or before `event.frame` (see the type's ordering rule and Bounds).
     func supersede(by event: KernelEvent) {
-        guard let kind = Self.kind(event.payload), pendingByKind[kind] > 0 else { return }
-        var index = head.pointee
+        guard let kind = Self.kind(event.payload), slots.pending(kind) > 0 else { return }
+        var index = slots.position
         while index < planned, slots[index].event.frame <= event.frame {
             if !slots[index].superseded, Self.sameTarget(slots[index].event, event) { discard(index) }
             index &+= 1
@@ -218,13 +285,13 @@ final class KernelCarryReadmission: @unchecked Sendable {
     func retire(coveredBy block: KernelBlockBuffer, _ body: (KernelEvent) -> Void) {
         let ownKinds = pendingTotal.load(ordering: .relaxed) > 0 ? Self.statefulKinds(in: block) : 0
         while let event = next {
-            let index = head.pointee
+            let index = slots.position
             if event.payload.isCoalescible, let kind = Self.kind(event.payload), ownKinds & (1 << kind) != 0,
                Self.covered(event, by: block) {
                 discard(index)
                 continue
             }
-            head.pointee &+= 1
+            slots.position &+= 1
             leavePending(slots[index])
             recarried.add(1, ordering: .releasing)
             body(event)
@@ -240,7 +307,7 @@ final class KernelCarryReadmission: @unchecked Sendable {
     }
 
     private func leavePending(_ slot: Slot) {
-        if let kind = Self.kind(slot.event.payload) { pendingByKind[kind] &-= 1 }
+        if let kind = Self.kind(slot.event.payload) { slots.leaveKind(kind) }
         pendingTotal.subtract(1, ordering: .releasing)
     }
 
@@ -279,7 +346,7 @@ final class KernelCarryReadmission: @unchecked Sendable {
     }
 
     /// The pending-count index of a stateful payload (control 0, program 1, ramp 2); `nil` otherwise.
-    private static func kind(_ payload: KernelEventPayload) -> Int? {
+    fileprivate static func kind(_ payload: KernelEventPayload) -> Int? {
         switch payload {
         case .control: 0
         case .program: 1
