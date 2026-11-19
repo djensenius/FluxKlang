@@ -61,11 +61,17 @@ extension AppModel {
     /// Listen remains the only Studio routing hardware-write action.
     @discardableResult
     func acceptPendingAssistantDraft() async -> StudioPatchMergeResult? {
-        guard let original = assistant.pendingStudioDraft else { return nil }
+        await acceptPendingAssistantDraftResult().merge
+    }
+
+    /// Preserves legacy acceptance policy, including no-active-environment behavior.
+    /// Once merged, cancellation cannot undo acceptance or cancel its pending removal.
+    func acceptPendingAssistantDraftResult() async -> StudioDraftAcceptanceResult {
+        guard let original = assistant.pendingStudioDraft else { return .notAccepted }
         let controller = wing
         let refreshedReferences = await controller.refreshLiveReferences(original.liveReferences ?? [])
         guard refreshedReferences, !Task.isCancelled, wing === controller,
-              assistant.pendingStudioDraft == original else { return nil }
+              assistant.pendingStudioDraft == original else { return .notAccepted }
         let validationContext = assistantToolContext()
         let validation = await assistant.perform(
             .validatePendingStudioDraft,
@@ -87,7 +93,7 @@ extension AppModel {
                   $0.isValid(in: currentContext.effectiveConnections)
               }),
               (refreshed.liveReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.liveWing) })
-        else { return nil }
+        else { return .notAccepted }
         let result = StudioPatchDraftMerger.merge(
             refreshed,
             into: environments.activeStudioGraph,
@@ -96,8 +102,8 @@ extension AppModel {
             effects: environments.activeEffects
         )
         environments.replaceStudio(graph: result.graph, endpoints: result.endpoints)
-        await assistant.discardPendingStudioDraft()
-        return result
+        let removalOutcome = await assistant.discardPendingStudioDraftResult()
+        return .accepted(merge: result, removalOutcome: removalOutcome)
     }
 }
 
