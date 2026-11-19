@@ -952,6 +952,7 @@ targets:
       - path: FluxKlangTests/PluginEditorStateTests+Snapshot.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleCandidate.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReservation.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleFixtures.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCyclePreparationEdges.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleStress.swift
