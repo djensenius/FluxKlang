@@ -189,6 +189,94 @@ private struct EnvironmentPersistenceEnvelope: Codable, Sendable {
 
 extension EnvironmentSpatialTests {
     @MainActor
+    private func withReceiptStore(
+        _ body: (EnvironmentStore, URL) async throws -> Void
+    ) async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent("receipt-\(UUID().uuidString)")
+        let owner = EnvironmentStore(store: JSONFileStore(directory: directory, cloud: nil))
+        do {
+            try await body(owner, directory)
+        } catch {
+            await owner.awaitScheduledSavesSnapshot()
+            try? FileManager.default.removeItem(at: directory)
+            throw error
+        }
+        await owner.awaitScheduledSavesSnapshot()
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    @MainActor
+    @Test func studioReceiptWithoutActiveEnvironmentDoesNotWrite() async throws {
+        try await withReceiptStore { owner, directory in
+            let graph = StudioGraph(nodes: [StudioNode(kind: .instrument(UUID()), title: "Ignored")])
+            let receipt = owner.replaceStudioReportingLocalSave(graph: graph, endpoints: [])
+            owner.replaceStudio(graph: graph, endpoints: [])
+            #expect(await receipt.value == .noActiveEnvironment)
+            await owner.awaitScheduledSavesSnapshot()
+            #expect(owner.active == nil)
+            #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("environments.json").path))
+        }
+    }
+
+    @MainActor
+    @Test func studioReceiptReportsPersistedNormalizedSnapshotAndOrderedLaterSave() async throws {
+        try await withReceiptStore { owner, directory in
+            let id = owner.addEnvironment(named: "Receipt")
+            let endpoint = StudioEndpoint(name: "Desk", destination: .custom,
+                                          outputConnectors: [.init(index: 3)])
+            let duplicate = StudioEndpoint(name: "Duplicate", destination: .custom,
+                                           outputConnectors: [.init(index: 3)])
+            let first = StudioNode(kind: .endpoint(endpoint.id), title: "Desk")
+            let second = StudioNode(kind: .endpoint(duplicate.id), title: "Duplicate")
+            let receipt = owner.replaceStudioReportingLocalSave(
+                graph: StudioGraph(nodes: [first, second]), endpoints: [endpoint, duplicate])
+            #expect(owner.activeStudioGraph == StudioGraph(nodes: [first]))
+            #expect(await receipt.value == .localWriteCompleted)
+
+            let saved = try EnvironmentPersistenceEnvelope.read(from: directory)
+            #expect(saved.activeID == id)
+            #expect(saved.environments.count == 1)
+            #expect(saved.environments.first?.studioGraph == StudioGraph(nodes: [first]))
+            #expect(saved.environments.first?.studioEndpoints == [endpoint])
+
+            let intermediate = StudioGraph(nodes: [StudioNode(kind: .instrument(UUID()), title: "Intermediate")])
+            let later = StudioGraph(nodes: [StudioNode(kind: .instrument(UUID()), title: "Later")])
+            let intermediateReceipt = owner.replaceStudioReportingLocalSave(graph: intermediate, endpoints: [])
+            owner.replaceStudio(graph: later, endpoints: [])
+            await owner.awaitScheduledSavesSnapshot()
+            let final = try EnvironmentPersistenceEnvelope.read(from: directory)
+            #expect(final.environments.first?.studioGraph == later)
+            #expect(await intermediateReceipt.value == .localWriteCompleted)
+            #expect(await receipt.value == .localWriteCompleted)
+        }
+    }
+
+    @MainActor
+    @Test func studioReceiptFailureIsNotReplacedByLaterSuccess() async throws {
+        try await withReceiptStore { owner, directory in
+            owner.addEnvironment(named: "Receipt")
+            await owner.awaitScheduledSavesSnapshot()
+            let destination = directory.appendingPathComponent("environments.json")
+            try FileManager.default.removeItem(at: destination)
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+            try Data("block atomic replacement".utf8).write(to: destination.appendingPathComponent("blocker"))
+            let failedGraph = StudioGraph(nodes: [StudioNode(kind: .instrument(UUID()), title: "Failed")])
+            let failed = owner.replaceStudioReportingLocalSave(graph: failedGraph, endpoints: [])
+            #expect(await failed.value == .localWriteFailed)
+            #expect(owner.activeStudioGraph == failedGraph)
+
+            try FileManager.default.removeItem(at: destination)
+            let nextGraph = StudioGraph(nodes: [StudioNode(kind: .instrument(UUID()), title: "Saved")])
+            let succeeded = owner.replaceStudioReportingLocalSave(graph: nextGraph, endpoints: [])
+            succeeded.cancel()
+            #expect(await succeeded.value == .localWriteCompleted)
+            #expect(await failed.value == .localWriteFailed)
+            let saved = try EnvironmentPersistenceEnvelope.read(from: directory)
+            #expect(saved.environments.first?.studioGraph == nextGraph)
+        }
+    }
+
+    @MainActor
     @Test func legacyEffectsAndChainPersistThroughSnapshotCompletion() async throws {
         let directory = URL.temporaryDirectory.appendingPathComponent("environments-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
