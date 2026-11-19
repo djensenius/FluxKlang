@@ -77,12 +77,14 @@ struct MIDICIPropertyContentTests {
     }
 
     /// A reassembly built field by field, so it may hold what no chunk can: header data above 2,048 bytes, bytes of
-    /// 0x80 or more, or more than 16,383 bytes of property data.
+    /// 0x80 or more, or more than 16,383 bytes of property data. The caller supplies its synthetic declared count;
+    /// actual pipeline completions below always obtain their count from the fragments.
     static func reassembly(
-        _ kind: MIDICIPropertyDataKind = .getReply, headerData: [UInt8], propertyData: [UInt8] = []
+        _ kind: MIDICIPropertyDataKind = .getReply, chunkCount: UInt16, headerData: [UInt8], propertyData: [UInt8] = []
     ) throws -> MIDICIPropertyReassembly {
         MIDICIPropertyReassembly(
-            kind: kind, header: try MIDICIPropertyReassemblerTests.header(), requestID: 0x2A, headerData: headerData,
+            kind: kind, header: try MIDICIPropertyReassemblerTests.header(), requestID: 0x2A, chunkCount: chunkCount,
+            headerData: headerData,
             propertyData: propertyData)
     }
 
@@ -114,7 +116,9 @@ struct MIDICIPropertyContentTests {
         let stage = bodyStage(propertyData, encoding)
         #expect(stage.map(\.count) == .failure(expected), sourceLocation: sourceLocation)
         for kind in kinds where !kind.hasNoPropertyData {
-            let input = try reassembly(kind, headerData: headerData, propertyData: propertyData)
+            // Synthetic count sufficient for the byte length, including deliberately invalid body bytes.
+            let count = UInt16(max(1, (propertyData.count + 16_382) / 16_383))
+            let input = try reassembly(kind, chunkCount: count, headerData: headerData, propertyData: propertyData)
             #expect(refusal(input) == .body(expected), "\(kind)", sourceLocation: sourceLocation)
         }
     }
@@ -169,9 +173,11 @@ struct MIDICIPropertyContentTests {
         }
         // `40 25` is 0xA5 in Mcoded7 and two bytes in ASCII.
         let short: [UInt8] = [0x40, 0x25]
-        #expect(try MIDICIPropertyContent.decode(Self.reassembly(headerData: Self.mcoded7Header, propertyData: short))
+        #expect(try MIDICIPropertyContent.decode(
+            Self.reassembly(chunkCount: 1, headerData: Self.mcoded7Header, propertyData: short))
             .body == [0xA5])
-        #expect(try MIDICIPropertyContent.decode(Self.reassembly(headerData: Self.asciiHeader, propertyData: short))
+        #expect(try MIDICIPropertyContent.decode(
+            Self.reassembly(chunkCount: 1, headerData: Self.asciiHeader, propertyData: short))
             .body == short)
     }
 
@@ -187,6 +193,7 @@ struct MIDICIPropertyContentTests {
         ]
         let reassembly = try Self.reassemble(chunks)
         try #require(reassembly.propertyData == coded)
+        #expect(reassembly.chunkCount == 3)
         #expect(try MIDICIPropertyContent.decode(reassembly).body == MIDICIPropertyBodyTests.jsonText)
         // Each chunk decoded on its own is valid Mcoded7 too, but gives 4 + 17 + 19 = 40 other bytes.
         var perChunk: [UInt8] = []
@@ -239,16 +246,17 @@ struct MIDICIPropertyContentTests {
                 try MIDICIPropertyReassemblerTests.chunk(2, of: 2, data: [0x41], kind: kind)
             ]
             #expect(Self.refusal(try Self.reassemble(chunks)) == .propertyDataNotAllowed(kind: kind, count: 1))
-            // Not checked: the single chunk of Tables 33 and 36, since the reassembly keeps no chunk count.
+            // #846 intentionally tightens final content, while reassembly still accepts these empty chunks.
             let empty = [
                 try MIDICIPropertyReassemblerTests.chunk(1, of: 2, headerData: status, kind: kind),
                 try MIDICIPropertyReassemblerTests.chunk(2, of: 2, kind: kind)
             ]
-            #expect(try Self.outcome(Self.reassemble(empty)).get().body == [])
+            #expect(Self.refusal(try Self.reassemble(empty)) == .singleChunkRequired(kind: kind, chunkCount: 2))
             // More than one chunk can carry, at the body limit and one past it.
             for count in [0x4000, 262_144, 262_145] {
                 let data = [UInt8](repeating: 0x41, count: count)
-                let input = try Self.reassembly(kind, headerData: status, propertyData: data)
+                let chunks = UInt16((count + 16_382) / 16_383)
+                let input = try Self.reassembly(kind, chunkCount: chunks, headerData: status, propertyData: data)
                 #expect(Self.refusal(input) == .propertyDataNotAllowed(kind: kind, count: count))
             }
         }
@@ -273,7 +281,7 @@ struct MIDICIPropertyContentTests {
         for (headerData, refusal) in cases {
             try #require(Self.headerStage(headerData) == .failure(refusal))
             for kind in Self.kinds {
-                let input = try Self.reassembly(kind, headerData: headerData)
+                let input = try Self.reassembly(kind, chunkCount: 1, headerData: headerData)
                 #expect(Self.outcome(input) == .failure(.header(refusal)), "\(kind)")
             }
         }
@@ -298,7 +306,7 @@ struct MIDICIPropertyContentTests {
         for headerData in [ascii, Self.mcoded7Header, Self.zlibHeader, Self.gzipHeader] {
             try Self.expectBody(headerData, over, .tooLong(count: 262_145, limit: 262_144))
         }
-        let atLimit = try Self.reassembly(headerData: ascii, propertyData: Array(over.dropLast()))
+        let atLimit = try Self.reassembly(chunkCount: 17, headerData: ascii, propertyData: Array(over.dropLast()))
         #expect(try MIDICIPropertyContent.decode(atLimit).body.count == 262_144)
         // Through the reassembler: one full group across two chunks, then a lone header byte in the third.
         let chunks = [
@@ -315,21 +323,21 @@ struct MIDICIPropertyContentTests {
         let headerTooLong = Refusal.header(.tooLong(count: 2_049, limit: 2_048))
         for kind in Self.kinds where kind.hasNoPropertyData {
             // The kind rule first: the header data and the property data would each be `tooLong`.
-            let both = try Self.reassembly(kind, headerData: longHeader, propertyData: highOver)
+            let both = try Self.reassembly(kind, chunkCount: 17, headerData: longHeader, propertyData: highOver)
             #expect(Self.refusal(both) == .propertyDataNotAllowed(kind: kind, count: 262_145))
-            let oneByte = try Self.reassembly(kind, headerData: [], propertyData: [0x80])
+            let oneByte = try Self.reassembly(kind, chunkCount: 1, headerData: [], propertyData: [0x80])
             #expect(Self.refusal(oneByte) == .propertyDataNotAllowed(kind: kind, count: 1))
             // Without property data the header data is still parsed.
-            #expect(Self.refusal(try Self.reassembly(kind, headerData: longHeader)) == headerTooLong)
+            #expect(Self.refusal(try Self.reassembly(kind, chunkCount: 1, headerData: longHeader)) == headerTooLong)
         }
         for kind in Self.kinds where !kind.hasNoPropertyData {
             // The header before the body, which would be `tooLong`, `byteHigh` or `unsupportedEncoding`.
-            let both = try Self.reassembly(kind, headerData: longHeader, propertyData: highOver)
+            let both = try Self.reassembly(kind, chunkCount: 17, headerData: longHeader, propertyData: highOver)
             #expect(Self.refusal(both) == headerTooLong)
-            let empty = try Self.reassembly(kind, headerData: [], propertyData: [0x80])
+            let empty = try Self.reassembly(kind, chunkCount: 1, headerData: [], propertyData: [0x80])
             #expect(Self.refusal(empty) == .header(.unexpectedEnd(offset: 0)))
             // The body last.
-            let zlib = try Self.reassembly(kind, headerData: Self.zlibHeader, propertyData: [0x80])
+            let zlib = try Self.reassembly(kind, chunkCount: 1, headerData: Self.zlibHeader, propertyData: [0x80])
             #expect(Self.refusal(zlib) == .body(.unsupportedEncoding(.zlibMcoded7)))
         }
     }
@@ -346,7 +354,7 @@ struct MIDICIPropertyContentTests {
             for header in headers {
                 for requestID in requestIDs {
                     let input = MIDICIPropertyReassembly(
-                        kind: kind, header: header, requestID: requestID,
+                        kind: kind, header: header, requestID: requestID, chunkCount: 1,
                         headerData: MIDICIMessageTests.exchangeStatus200Header, propertyData: [])
                     #expect(try MIDICIPropertyContent.decode(input) == MIDICIPropertyContent(
                         kind: kind, header: header, requestID: requestID,
@@ -363,14 +371,14 @@ struct MIDICIPropertyContentTests {
         // Text that is not JSON and names a status and an encoding, with NUL and DEL, comes back as received.
         let text = Self.bytes(#"{"status":500,"mutualEncoding":"Mcoded7""#) + [0x00, 0x7F]
         let content = try MIDICIPropertyContent.decode(
-            Self.reassembly(.notify, headerData: headerData, propertyData: text))
+            Self.reassembly(.notify, chunkCount: 1, headerData: headerData, propertyData: text))
         #expect(content.propertyHeader == MIDICIPropertyHeader(
             resource: "ResourceList", unknownKeys: ["MutualEncoding", "alpha", "zeta"]))
         #expect(content.body == text)
         // A Mcoded7 body decodes to bytes that are not text at all (the 0x55 vector).
         let coded: [UInt8] = [0x55, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]
         let binary = try MIDICIPropertyContent.decode(
-            Self.reassembly(headerData: Self.mcoded7Header, propertyData: coded))
+            Self.reassembly(chunkCount: 1, headerData: Self.mcoded7Header, propertyData: coded))
         #expect(binary.propertyHeader == MIDICIPropertyHeader(encoding: .mcoded7))
         #expect(binary.body == [0x81, 0x02, 0x83, 0x04, 0x85, 0x06, 0x87])
     }
