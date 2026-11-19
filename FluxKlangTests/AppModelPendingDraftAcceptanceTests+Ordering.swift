@@ -24,6 +24,7 @@ extension AppModelPendingDraftAcceptanceTests {
             try #require(firstValidated.id == built.id && !firstValidated.hasErrors)
             try #require(firstValidated.request == built.request)
             try #require(firstValidated.liveReferences == [] && firstValidated.applicationMode == built.applicationMode)
+            try #require(firstValidated.applicationMode == (replaceFirst ? .replace : .append))
             let firstExpected = StudioPatchDraftMerger.merge(
                 firstValidated, into: initial.studioGraph, endpoints: initial.studioEndpoints,
                 equipment: model.equipment.items, effects: initial.effects)
@@ -58,6 +59,7 @@ extension AppModelPendingDraftAcceptanceTests {
             try #require(secondValidated.request == draft.request)
             try #require(secondValidated.liveReferences == []
                          && secondValidated.applicationMode == draft.applicationMode)
+            try #require(secondValidated.applicationMode == (replaceFirst ? .append : .replace))
             let secondExpected = StudioPatchDraftMerger.merge(
                 secondValidated, into: firstAccepted.studioGraph, endpoints: firstAccepted.studioEndpoints,
                 equipment: model.equipment.items, effects: firstAccepted.effects)
