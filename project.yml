@@ -180,6 +180,10 @@ targets:
       - path: FluxKlangTests/TestSupport.swift
       - path: FluxKlangTests/AppPersistenceSelectionTests.swift
       - path: FluxKlangTests/AppModelPendingDraftAcceptanceTests.swift
+      - path: FluxKlangTests/AppModelPendingDraftAcceptanceTests+Result.swift
+      - path: FluxKlangTests/AppModelPendingDraftAcceptanceTests+Presentation.swift
+      - path: FluxKlangTests/AppModelPendingDraftAcceptanceTests+Ordering.swift
+      - path: FluxKlangTests/AppModelPendingDraftAcceptanceTests+History.swift
       - path: FluxKlangTests/AppModelPendingDraftAcceptanceTestSupport.swift
       - path: FluxKlangTests/AssistantBackendDraftStore.swift
       - path: FluxKlangTests/StartupHardwareIsolationTests.swift
