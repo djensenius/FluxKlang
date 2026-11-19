@@ -320,7 +320,7 @@ final class KernelCycle: @unchecked Sendable {
         safety = parts.safety
         criticalScope = parts.events.criticalScope
         telemetryOutput = parts.telemetry
-        block = KernelBlockBuffer(capacity: blockCapacity)
+        block = payload.block // Adopt the preclaim component; the terminal candidate retains no payload.
         carryReadmission = KernelCarryReadmission(carry: ownershipClaim.inheritedCarry,
                                                   reservation: payload.reservation)
         watermark = KernelFlushWatermark(laneCount: parts.events.laneCount, armed: parts.start == .replacingCycle)

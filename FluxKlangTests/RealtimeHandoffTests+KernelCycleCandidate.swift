@@ -19,6 +19,76 @@ extension RealtimeHandoffTests {
     /// New one-shot API coverage, not a reproduction of a duplicate-adoption bug in the legacy constructor.
     /// Same-candidate aliases are used synchronously on control, never concurrently.
     struct CycleCandidate {
+        @Test(arguments: [1, 256, 4096])
+        func candidateBlockPreparationLeavesOwnershipAndQueuedEventsUntouched(capacity: Int) throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
+            let rig = try CycleRig()
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            let queued = cycleEvent(200, .control(channel: 0, controller: 7, value: 9))
+            #expect(rig.push(queued, token, caller: &caller!) == .ok)
+            _ = rig.cycle.retire()
+            let state = rig.ownership.cycleClaimState()
+            let parts = candidateParts(rig)
+            let prepared = try candidate(parts, capacity: capacity)
+            let cancelled = try candidate(parts, capacity: capacity)
+            #expect(cancelled.cancel())
+            weak var abandoned: KernelCycleCandidate?
+            do {
+                let privateCandidate = try candidate(parts, capacity: capacity)
+                abandoned = privateCandidate
+                withExtendedLifetime(privateCandidate) { #expect(abandoned != nil) }
+            }
+            #expect(abandoned == nil)
+            #expect(rig.ownership.cycleClaimState() == state)
+            let cycle = try KernelCycle(binding: prepared)
+            #expect(cycle.blockCapacity == capacity && cycle.bufferedCount == 0)
+            let empty = cycle.run(blockStart: 0, frames: 0) { _, _ in Issue.record("empty block emitted") }
+            #expect(empty.drained == 0 && empty.pending == 0)
+            let early = cycle.run(blockStart: 0, frames: 64) { _, _ in Issue.record("future event emitted") }
+            #expect(early.drained == 1 && early.pending == 1 && cycle.bufferedCount == 1)
+            var emitted: [KernelEvent] = []
+            let due = cycle.run(blockStart: 192, frames: 64) { event, _ in emitted.append(event) }
+            #expect(due.drained == 0 && due.pending == 0 && emitted == [queued])
+            _ = cycle.retire()
+        }
+
+        @Test(arguments: [1, 256, 4096])
+        func candidateConsumedCancellationAndDestructionPreserveBufferedEvent(capacity: Int) throws {
+            let role = try #require(RefusalCaller.prepare())
+            var caller: RefusalCallerToken? = try RefusalCalling.take(role)
+            defer { RefusalCalling.giveBack(role, &caller) }
+            let rig = try CycleRig()
+            let token = try RefusalCalling.claim(rig.events, &caller!)
+            _ = rig.cycle.retire()
+            let queued = cycleEvent(200, .program(channel: 0, program: 5, bank: 0))
+            #expect(rig.push(queued, token, caller: &caller!) == .ok)
+            weak var observed: KernelCycleCandidate?
+            let winner: KernelCycle
+            do {
+                let prepared = try candidate(candidateParts(rig), capacity: capacity)
+                let alias = prepared
+                observed = prepared
+                winner = try KernelCycle(binding: prepared)
+                #expect(winner.bufferedCount == 0)
+                #expect(winner.run(blockStart: 0, frames: 64) { _, _ in
+                    Issue.record("future event emitted")
+                }.pending == 1)
+                let state = rig.ownership.cycleClaimState()
+                #expect(!alias.cancel())
+                #expect(throws: KernelCycle.PreparationError.candidateConsumed) {
+                    _ = try KernelCycle(binding: alias)
+                }
+                #expect(winner.bufferedCount == 1 && rig.ownership.cycleClaimState() == state)
+            }
+            #expect(observed == nil && winner.bufferedCount == 1)
+            var emitted: [KernelEvent] = []
+            let due = winner.run(blockStart: 192, frames: 64) { event, _ in emitted.append(event) }
+            #expect(due.drained == 0 && due.pending == 0 && emitted == [queued])
+            _ = winner.retire()
+        }
+
         @Test func candidateCapturesPartsPulsesCapacitiesAndOwner() throws {
             let rig = try CycleRig()
             let owner = try NoteOwnership(scopes: 2)
@@ -133,13 +203,14 @@ extension RealtimeHandoffTests {
             _ = successor.retire()
         }
 
-        @Test func candidateReplacementLosersAreTerminalOnBothSidesOfRetirement() throws {
+        @Test(arguments: [1, 256, 4096])
+        func candidateReplacementLosersAreTerminalOnBothSidesOfRetirement(capacity: Int) throws {
             for retireBeforeBind in [false, true] {
                 let rig = try CycleRig()
                 _ = rig.cycle.retire()
                 let parts = candidateParts(rig)
-                let winnerCandidate = try candidate(parts)
-                let loser = try candidate(parts)
+                let winnerCandidate = try candidate(parts, capacity: capacity)
+                let loser = try candidate(parts, capacity: capacity)
                 let alias = loser
                 let winner = try KernelCycle(binding: winnerCandidate)
                 if retireBeforeBind { _ = winner.retire() }
@@ -219,7 +290,8 @@ extension RealtimeHandoffTests {
             _ = cycle.retire()
         }
 
-        @Test func candidatePendingCancelAndAbandonReleasePayloadOnControl() throws {
+        @Test(arguments: [1, 256, 4096])
+        func candidatePendingCancelAndAbandonReleasePayloadOnControl(capacity: Int) throws {
             for cancel in [false, true] {
                 weak var owner: NoteOwnership?
                 weak var slots: TelemetrySlots<KernelCycleTelemetry>?
@@ -234,7 +306,7 @@ extension RealtimeHandoffTests {
                     owner = rig.ownership
                     slots = output
                     table = parts.admissionRefusals
-                    prepared = try candidate(parts)
+                    prepared = try candidate(parts, capacity: capacity)
                 }
                 withExtendedLifetime(prepared) {
                     #expect(owner != nil && slots != nil && table != nil)
@@ -250,7 +322,8 @@ extension RealtimeHandoffTests {
             }
         }
 
-        @Test func candidateRefusedBindClearsPayloadEvenWhileTerminalAliasesLive() throws {
+        @Test(arguments: [1, 256, 4096])
+        func candidateRefusedBindClearsPayloadEvenWhileTerminalAliasesLive(capacity: Int) throws {
             weak var owner: NoteOwnership?
             weak var slots: TelemetrySlots<KernelCycleTelemetry>?
             var loser: KernelCycleCandidate?
@@ -262,8 +335,8 @@ extension RealtimeHandoffTests {
                 parts.telemetry = KernelCycleTelemetryOutput(slots: output, slot: 0, clockGeneration: 0)
                 slots = output
                 owner = rig.ownership
-                loser = try candidate(parts)
-                let winner = try KernelCycle(binding: candidate(parts))
+                loser = try candidate(parts, capacity: capacity)
+                let winner = try KernelCycle(binding: candidate(parts, capacity: capacity))
                 _ = winner.retire()
             }
             let alias = try #require(loser)
@@ -279,7 +352,8 @@ extension RealtimeHandoffTests {
             }
         }
 
-        @Test func candidateTerminalAliasesDoNotRetainCycleOrRevokeItsClaim() throws {
+        @Test(arguments: [1, 256, 4096])
+        func candidateTerminalAliasesDoNotRetainCycleOrRevokeItsClaim(capacity: Int) throws {
             weak var owner: NoteOwnership?
             weak var observedCycle: KernelCycle?
             var cycle: KernelCycle?
@@ -288,7 +362,7 @@ extension RealtimeHandoffTests {
                 let rig = try CycleRig()
                 _ = rig.cycle.retire()
                 owner = rig.ownership
-                prepared = try candidate(candidateParts(rig))
+                prepared = try candidate(candidateParts(rig), capacity: capacity)
                 cycle = try KernelCycle(binding: #require(prepared))
                 observedCycle = cycle
             }

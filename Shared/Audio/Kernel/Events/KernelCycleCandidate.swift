@@ -14,6 +14,7 @@ final class KernelCycleCandidate {
         let checked: KernelCyclePreparation
         let ackRequests: KernelAckRequests
         let reservation: KernelReadmissionReservation
+        let block: KernelBlockBuffer
     }
 
     private enum State: ~Copyable {
@@ -32,7 +33,8 @@ final class KernelCycleCandidate {
         state = .pending(Payload(parts: parts, pulses: pulses, blockCapacity: blockCapacity,
                                  perLaneQuota: perLaneQuota, checked: checked, ackRequests: ackRequests,
                                  reservation: KernelReadmissionReservation(
-                                    capacity: min(KernelRetirementCarry.capacity, blockCapacity))))
+                                    capacity: min(KernelRetirementCarry.capacity, blockCapacity)),
+                                 block: KernelBlockBuffer(capacity: blockCapacity)))
     }
 
     /// Control only; absent after cancellation/extraction. No pre-ready report or backing access.
