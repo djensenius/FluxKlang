@@ -5,7 +5,9 @@
 //  The process-wide owner of the gated WING apply's inputs (#62 AU8a,
 //  docs/transformation/host-authority-sources.md §3): the host epoch, the Studio
 //  project, the `HostAuthority`, the WING session, the render lease and the live
-//  permission. Kept out of `Shared/Host/Authority` (§4). Nothing calls it yet.
+//  permission. Kept out of `Shared/Host/Authority` (§4). `AppModel` injects
+//  `shared` into `HostWingLifecycle` (#62 AU7c1), which calls it, as do
+//  `StudioApplyRoute` (#62 AU8c-2) and `HostUserPermissionOwner` (#62 AU8b).
 //
 
 import Foundation
