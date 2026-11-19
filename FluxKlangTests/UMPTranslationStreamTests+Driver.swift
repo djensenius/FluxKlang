@@ -314,7 +314,7 @@ extension UMPTranslationStreamTests {
         #expect(fixture.sink.received == [try Self.batch(15)])
     }
 
-    @Test func aSystemRealTimeEventPassesThroughAndSysExHasNoStreamPath() async throws {
+    @Test func aSystemRealTimeEventAndCompleteSysExPassThroughInOrder() async throws {
         let fixture = Fixture()
         let group = try UMPGroup(0)
         try await fixture.driver.receive(.realTime(status: 0xF8), group: group, stream: Self.one, atNanoseconds: 0)
@@ -326,11 +326,11 @@ extension UMPTranslationStreamTests {
             Issue.record("expected a system item")
             return
         }
-        await #expect(throws: UMPTranslationStreamRefusal.translation(.notChannelVoice)) {
-            try await fixture.driver.receive(.sysEx(payload: [0x7E]), group: group, stream: Self.one,
-                                             atNanoseconds: 1)
-        }
-        #expect(fixture.sink.received.count == 1)
+        try await fixture.driver.receive(.sysEx(payload: [0x7E]), group: group, stream: Self.one,
+                                         atNanoseconds: 1)
+        let packet = try UMPSysEx7Packet(group: group, status: .complete, bytes: [0x7E])
+        #expect(fixture.sink.received == [batch, [.sysEx7(packet)]])
+        #expect(fixture.sink.streams == [Self.one, Self.one])
         #expect(fixture.timer.armCount == 0)
     }
 

@@ -132,6 +132,7 @@ final class PendingPersistenceFixture {
     let owner: AssistantCoordinator
     let context: AssistantToolContext
     let fallbackWork = PendingFallbackWork()
+    let discardPresentation = StudioDraftDiscardPresentation()
     private var cancellations: [@MainActor () -> Void] = []
     private var joins: [@MainActor () async -> Void] = []
     private var closed = false
@@ -189,6 +190,7 @@ final class PendingPersistenceFixture {
         await forwarding.finish()
         for join in joins { await join() }
         await fallbackWork.join()
+        await discardPresentation.awaitOwnedWorkSnapshot()
     }
 
     func fallbackGenerator() -> AssistantFallbackGenerator {

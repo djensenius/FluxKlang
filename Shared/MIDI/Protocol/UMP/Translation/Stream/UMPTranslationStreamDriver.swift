@@ -20,9 +20,9 @@ struct UMPTranslationStreamID: Hashable, Sendable {
 /// Control or I/O isolation only: the driver allocates and is an actor, so calling it from the audio render thread
 /// is not allowed, and a synchronous call from a render closure does not compile.
 ///
-/// Refusals are the stream's own (`UMPTranslationStreamRefusal`). A MIDI 1 event that is not a channel voice, System
-/// Common or System Real Time message has no stream path: `receive` refuses `.sysEx` with
-/// `.translation(.notChannelVoice)`.
+/// Refusals are the stream's own (`UMPTranslationStreamRefusal`). Complete SysEx payloads use the stream's bounded
+/// SysEx7 path: any held CC 6 and every packet reach the sink in one synchronous batch, without a translator reset.
+/// This is a software reference driver, not application MIDI-input adoption or hardware emission.
 ///
 /// A stream is kept, with its translator and telemetry, from its first message until `remove` or `stop`. A caller
 /// should `remove` an input stream when that input goes away, so memory and the deadline scan stay bounded by the live
@@ -107,8 +107,8 @@ actor UMPTranslationStreamDriver {
                 throw .translation(error)
             }
             items = try stream.receive(system: system, at: rawTime, admittedAt: admission)
-        case .sysEx:
-            throw .translation(.notChannelVoice)
+        case let .sysEx(payload):
+            items = try stream.receive(sysEx: payload, group: group, at: rawTime, admittedAt: admission)
         }
         streams[id] = stream
         lastReceived[id] = rawTime

@@ -68,6 +68,8 @@
 ///
 /// A refused call returns nothing and changes nothing.
 struct UMPTranslationStream: Equatable, Sendable {
+    /// Inclusive local policy for complete SysEx payloads, not a MIDI protocol limit.
+    static let maximumSysExPayloadBytes = 4_096
     /// How long a CC 6 is held before an idle flush.
     let timeout: UMPTranslationStreamTimeout
     /// The wrapped translator (read-only; for example `translator.heldDataEntry`).
@@ -163,6 +165,40 @@ struct UMPTranslationStream: Equatable, Sendable {
         next.lastAcceptedTime = admission
         self = next
         return flushed.map(UMPTranslationStreamItem.voice) + [.system(system)]
+    }
+
+    /// Forwards a complete SysEx payload without F0/F7 framing. Local policy: flush held CC 6 first, as for System
+    /// Common, without resetting bank, parameter or Data Entry state. All packets are returned together.
+    mutating func receive(
+        sysEx payload: [UInt8], group: UMPGroup, at time: UInt64
+    ) throws(UMPTranslationStreamRefusal) -> [UMPTranslationStreamItem] {
+        try receive(sysEx: payload, group: group, at: time, admittedAt: time)
+    }
+
+    /// The event/admission time roles are those of `receive(_:at:admittedAt:)`. Refusal precedence is payload size,
+    /// the existing packetizer's seven-bit validation, then admission time. Every check precedes state changes.
+    /// The bounded result contains at most 683 SysEx7 packets plus one held voice; no fragments are retained.
+    mutating func receive(
+        sysEx payload: [UInt8], group: UMPGroup, at time: UInt64, admittedAt admission: UInt64
+    ) throws(UMPTranslationStreamRefusal) -> [UMPTranslationStreamItem] {
+        guard payload.count <= Self.maximumSysExPayloadBytes else {
+            throw .sysExPayloadTooLarge(count: payload.count, limit: Self.maximumSysExPayloadBytes)
+        }
+        let packets: [UMPSysEx7Packet]
+        do throws(UMPRefusal) {
+            packets = try UMPSysEx7Packet.packets(group: group, payload: payload)
+        } catch {
+            throw .translation(error)
+        }
+        let admission = max(time, admission)
+        try admit(admission)
+        var next = self
+        var flushed = next.flushIfIdle(at: time)
+        flushed += next.translator.flushAll()
+        next.deadline = nil
+        next.lastAcceptedTime = admission
+        self = next
+        return flushed.map(UMPTranslationStreamItem.voice) + packets.map(UMPTranslationStreamItem.sysEx7)
     }
 
     /// Sends the held CC 6 if `time` has reached its deadline; otherwise returns `[]`.
