@@ -12,6 +12,17 @@ enum StudioDraftBuildResult: Sendable, Equatable {
     }
 }
 
+enum StudioDraftValidationResult: Sendable, Equatable {
+    case notPublished
+    // Historical outcome for this invocation's full-value snapshot, not current-file authority.
+    case staged(draft: StudioPatchDraft, storageOutcome: PendingStudioPatchMutationOutcome)
+
+    var draft: StudioPatchDraft? {
+        guard case .staged(let draft, _) = self else { return nil }
+        return draft
+    }
+}
+
 enum PreparedRoutingCommitResult: Sendable, Equatable {
     case notPublished
     // The outcome belongs to this invocation's full-value snapshot, not the current file.
@@ -121,34 +132,9 @@ final class AssistantCoordinator {
             let result = await buildStudioDraftResult(request, context: context)
             return .pendingDraft(result.draft)
         case .validatePendingStudioDraft:
-            guard let draft = pendingStudioDraft else { return .pendingDraft(nil) }
-            let wasSettled = settledStudioDraft == draft
-            var refreshed = StudioWiringAdvisor.revalidate(
-                draft,
-                equipment: context.equipment,
-                effects: context.effects,
-                connections: context.globalConnections,
-                currentGraph: context.graph,
-                currentEnvironmentID: context.activeEnvironmentID,
-                currentEndpoints: context.endpoints
-            )
-            refreshed.liveReferences = draft.liveReferences
-            if !(draft.liveReferences ?? []).allSatisfy({ $0.isValid(in: context.liveWing) }) {
-                refreshed.validation.append(StudioDraftValidationIssue(
-                    code: "live-alias-changed", severity: .error,
-                    message: "The WING session, label or saved input link used by this draft changed or is stale. "
-                        + "Relink and create a new draft before accepting."
-                ))
-            }
-            if !(draft.nameReferences ?? []).allSatisfy({ $0.isValid(in: context) }) {
-                refreshed.validation.append(StudioDraftValidationIssue(
-                    code: "routing-name-changed", severity: .error,
-                    message: "A routing name now resolves differently. Create a new draft before accepting."))
-            }
-            pendingStudioDraft = refreshed
-            if wasSettled { settledStudioDraft = refreshed }
-            await persistPendingDraft()
-            return .pendingDraft(pendingStudioDraft == refreshed ? refreshed : nil)
+            // Compatibility: validation remains reviewable in memory even if saving fails.
+            let result = await validatePendingStudioDraftResult(context: context)
+            return .pendingDraft(result.draft)
         case .openReview:
             guard pendingStudioDraft != nil else {
                 navigationTarget = nil
@@ -160,6 +146,39 @@ final class AssistantCoordinator {
             navigationTarget = .help(topic)
             return .help(FluxKlangHelpCatalog.entry(for: topic))
         }
+    }
+
+    /// Revalidation retains its existing cancellation and settled/unsettled semantics.
+    func validatePendingStudioDraftResult(context: AssistantToolContext) async -> StudioDraftValidationResult {
+        guard let draft = pendingStudioDraft else { return .notPublished }
+        let wasSettled = settledStudioDraft == draft
+        var refreshed = StudioWiringAdvisor.revalidate(
+            draft,
+            equipment: context.equipment,
+            effects: context.effects,
+            connections: context.globalConnections,
+            currentGraph: context.graph,
+            currentEnvironmentID: context.activeEnvironmentID,
+            currentEndpoints: context.endpoints
+        )
+        refreshed.liveReferences = draft.liveReferences
+        if !(draft.liveReferences ?? []).allSatisfy({ $0.isValid(in: context.liveWing) }) {
+            refreshed.validation.append(StudioDraftValidationIssue(
+                code: "live-alias-changed", severity: .error,
+                message: "The WING session, label or saved input link used by this draft changed or is stale. "
+                    + "Relink and create a new draft before accepting."
+            ))
+        }
+        if !(draft.nameReferences ?? []).allSatisfy({ $0.isValid(in: context) }) {
+            refreshed.validation.append(StudioDraftValidationIssue(
+                code: "routing-name-changed", severity: .error,
+                message: "A routing name now resolves differently. Create a new draft before accepting."))
+        }
+        pendingStudioDraft = refreshed
+        if wasSettled { settledStudioDraft = refreshed }
+        let storageOutcome = await persistPendingDraft()
+        guard pendingStudioDraft == refreshed else { return .notPublished }
+        return .staged(draft: refreshed, storageOutcome: storageOutcome)
     }
 
     /// Typed builds retain their existing admission/cancellation semantics, unlike prepared commits.

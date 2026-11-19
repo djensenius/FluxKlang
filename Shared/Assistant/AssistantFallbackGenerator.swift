@@ -2,6 +2,8 @@ import Foundation
 
 struct AssistantFallbackGenerator: AssistantGenerating {
     let coordinator: AssistantCoordinator
+    // Internal ownership seam: observe the actual producer, not merely its stream consumer.
+    var didStartProducer: (@Sendable (Task<Void, Never>) -> Void)?
 
     func availability() async -> AssistantModelAvailability {
         .unsupportedOS
@@ -25,6 +27,7 @@ struct AssistantFallbackGenerator: AssistantGenerating {
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
+            didStartProducer?(task)
         }
     }
 
@@ -67,12 +70,15 @@ struct AssistantFallbackGenerator: AssistantGenerating {
             return (text, [.conflicts(request.context.validationIssues.map(\.value))])
         }
         if normalized.contains("pending") || normalized.contains("draft") {
-            let result = await coordinator.perform(.validatePendingStudioDraft, context: request.context)
-            let text = try AssistantFallbackResponder.response(
+            let result = await coordinator.validatePendingStudioDraftResult(context: request.context)
+            var text = try AssistantFallbackResponder.response(
                 to: .live(request.question, requires: [.pendingDraft]),
-                groundedBy: [result]
+                groundedBy: [.pendingDraft(result.draft)]
             )
-            return (text, cards(for: Self.reportedDraft(in: result)))
+            if case .staged(_, let outcome) = result {
+                text = AssistantDraftReply.acknowledgingSave(text, outcome: outcome)
+            }
+            return (text, cards(for: result.draft))
         }
         if normalized.contains("wire") || normalized.contains("connect") || normalized.contains("patch") {
             let entry = FluxKlangHelpCatalog.entry(for: .studio)
@@ -92,12 +98,6 @@ struct AssistantFallbackGenerator: AssistantGenerating {
     private func helpTopic(in text: String) -> AssistantHelpTopic? {
         AssistantHelpTopic.allCases.first { text.contains($0.rawValue.lowercased()) }
             ?? (text.contains("help") ? .studio : nil)
-    }
-
-    /// Cards describe only the draft this result reports, never one a newer mutation left pending.
-    private static func reportedDraft(in result: AssistantToolResult) -> StudioPatchDraft? {
-        guard case .pendingDraft(let draft) = result else { return nil }
-        return draft
     }
 
     private func cards(for draft: StudioPatchDraft?) -> [AssistantCard] {
