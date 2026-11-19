@@ -19,7 +19,9 @@ struct KernelBlockEntry: Sendable, BitwiseCopyable {
 }
 
 /// A `KernelCycle`'s block buffer: `capacity` entries kept in `KernelBlockEntry.precedes` order, plus the merge
-/// scratch, all allocated in `init`. Render only after init; owned privately by one `KernelCycle`.
+/// scratch, all allocated in `init`. Privately prepared by the pending candidate, then adopted by one
+/// `KernelCycle` after its claim. Render only once bound; cancellation/claim loss frees only private storage.
+/// Entries and scratch remain BitwiseCopyable backing, not readmission's initialized-prefix representation.
 /// Reference model; not RT-certified.
 final class KernelBlockBuffer {
     let capacity: Int

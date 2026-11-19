@@ -13,11 +13,12 @@ staging, overlap, claim transfer or reclamation machinery. #715, #64, #190,
    claim state without claiming. [`KernelCycleCandidate`][candidate] captures these
    checks, parts, pulses and capacities, then creates acknowledgement requests
    and reserves three readmission backings (raw slots, head and pending-by-kind
-   counters) before claiming.
+   counters) and constructs the private block buffer before claiming.
    [`KernelCycle.init(binding:)`][cycle-init] consumes that candidate and calls
    `claimForCycle` before constructing the readmission object and initializing
-   its reserved slots, and before allocating the block buffer, watermark,
-   decider and telemetry counters.
+   its reserved slots. It adopts the same prepared block buffer after a successful
+   claim; the watermark, decider and telemetry counters are still allocated
+   after claiming.
    The implementation order, not the older “last in init” claim comment, governs.
 2. [`NoteOwnership.claimForCycle`][claim] acquires exactly the observed claim
    word by compare-exchange. Only success reads inherited loss and carry.
@@ -260,13 +261,34 @@ out-of-candidate-range values. Empty and overflow-refused plans remain ready wit
 `N = I = 0`; capacity cuts remain successful. Reports, inheritance and loss
 semantics are unchanged.
 
+The #862 slice also prepares the existing private `KernelBlockBuffer` after
+validation and acknowledgement issuance, before the sole ownership-claim CAS.
+Its object, event backing `[B]`, merge scratch `[B]` and used count `[1] = 0`
+belong to the pending move-only payload. The designated binding initializer is
+the sole terminal-extraction consumer and adopts that same block after claim,
+without constructing another block/backing; no payload remains in the candidate.
+Cancellation, abandonment and claim loss release only private storage; consumed
+aliases cannot reset or retain the winner's block. Exact-snapshot refusal,
+terminal losers and legacy construction remain unchanged.
+
+The block keeps its existing BitwiseCopyable entries/scratch and deallocation,
+not readmission's initialized-prefix invariant. Each pending candidate now
+retains another block object plus approximately `2 * B * entry stride + Int stride`
+backing, excluding allocator overhead. Candidate endpoint/lifecycle tests at
+1/256/4096 complement source proof of placement, sole extraction, alias freedom
+and cleanup; behavioral tests alone cannot prove allocation placement or frees.
+The concrete consumer remains reference `renderReadmitsWhileControlPreparesAndPolls`
+/ `prepareAndPoll`, not an activated application render path.
+
 This is only the partial control-only P5 reservation prerequisite, not T/P,
-asynchronous transfer or P5 completion. Exactly three allocations move preclaim;
-readmission object/atomics, cycle block/scratch, watermark, decider, telemetry and
-optional refusal table still allocate on their existing post-claim paths.
+asynchronous transfer or P5 completion. Readmission object/atomics, watermark,
+decider, telemetry and optional refusal table still allocate post-claim.
 Increased pending-candidate and empty-standalone storage (`R`, formerly
 `max(1, planned)` after planning), and unbounded aggregate candidate retention,
 are explicitly accepted. No global budget or allocation-free whole-bind claim.
+No realtime, deadline, quiescence or retirement/install-gap improvement is claimed.
+The original local Release individual-record loss remains UNKNOWN; #841/#769
+deadline failures and unchanged diagnostic retries remain unresolved evidence.
 
 Before P, seal inherited loss, the full carry including `ownCount` and
 `droppedForCapacity`, plan refusal/count/invalid/cut/superseded/drop metadata,
