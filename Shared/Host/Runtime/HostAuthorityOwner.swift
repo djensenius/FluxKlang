@@ -55,14 +55,16 @@ actor HostAuthorityOwner {
     private(set) var grantRevision: UInt64
     private var sessionVersion = UUID()
     /// In-flight `beginApply` calls only, each removed on return: its window and whether that
-    /// window closed meanwhile. Closed-window identity across calls lives in `closedWindows`.
+    /// window closed meanwhile. Window identity across calls lives in `openWindows`.
     private var applies: [UUID: (window: WindowID, closed: Bool)] = [:]
-    /// Window identities closed or fenced and not reopened since (AU7c4); no permission or authority.
-    private var closedWindows: Set<WindowID> = []
-    /// Per window, the highest sequencer detach generation fenced; a lower-generation open is stale.
-    /// Generations come from the one `HostWingLifecycle`; no second sequencer may share a `WindowID`.
-    /// Unbounded like `closedWindows` until AU8c's open-window set.
-    private var closureGenerations: [WindowID: UInt64] = [:]
+    /// Windows opened and not closed or fenced since (AU8c-1); no permission or authority. Any other
+    /// window, including one never opened, is closed, so a closed window needs no entry.
+    private(set) var openWindows: Set<WindowID> = []
+    /// Per window, the highest sequencer detach generation fenced and not yet released by a close; a
+    /// lower-generation open is stale. Generations come from the one `HostWingLifecycle`'s monotonic
+    /// counter; no second sequencer may share a `WindowID`. Only windows with a fenced detach still
+    /// before its close have an entry.
+    private(set) var closureGenerations: [WindowID: UInt64] = [:]
     private var lifecycleBusy = false
     private var lifecycleWaiters: [CheckedContinuation<Void, Never>] = []
     /// Internal, init-only test seam; production never suspends at these checkpoints.
@@ -155,9 +157,9 @@ actor HostAuthorityOwner {
     /// `window`'s apply gesture: acquires a free lease, keeps its own, or attaches to an
     /// unattached one; another rendering window refuses it (decision 6). Returns the session.
     /// A loss or a close of `window` while it is in flight refuses it, the loss first; so does a
-    /// closed `window` until `windowOpened` reopens it.
+    /// `window` that is not open, until `windowOpened` (re)opens it.
     func beginApply(window: WindowID) async -> Result<UUID, ApplyRefusal> {
-        guard let session, !closedWindows.contains(window) else {
+        guard let session, openWindows.contains(window) else {
             return .failure(session == nil ? .noSession : .windowClosed)
         }
         let version = sessionVersion
@@ -192,32 +194,36 @@ actor HostAuthorityOwner {
         guard version == sessionVersion else { return .noSession }
         guard let entry = applies[apply] else { return nil }
         // Defence in depth: any close or fence after registration also flags the entry, so the set never decides.
-        return entry.closed || closedWindows.contains(entry.window) ? .windowClosed : nil
+        return entry.closed || !openWindows.contains(entry.window) ? .windowClosed : nil
     }
 
     /// Marks `window`'s in-flight applies closed, so each is refused at its next recheck, and closes
     /// `window` until a `windowOpened` of at least `generation`. Takes no lock. A queued detach sends
     /// this before its turn with its submission generation; 0 raises no recorded generation.
     func fenceApplies(for window: WindowID, generation: UInt64) {
-        closedWindows.insert(window)
-        closureGenerations[window] = max(closureGenerations[window, default: 0], generation)
+        openWindows.remove(window)
+        if generation > closureGenerations[window, default: 0] { closureGenerations[window] = generation }
         for (id, apply) in applies where apply.window == window { applies[id]?.closed = true }
     }
 
     /// The root of `window` (re)appeared: later applies may render again. Takes no lock; the sequencer
     /// FIFO orders it after a queued detach. Applies fenced in an earlier lifetime stay refused.
     /// `generation` is the open's view of detach submissions: a stale open, whose hop lands after a
-    /// later detach's fence, leaves `window` closed. Checked and removed in one actor job.
+    /// later detach's fence, leaves `window` closed. Checked and inserted in one actor job.
     func windowOpened(_ window: WindowID, generation: UInt64) {
         guard generation >= closureGenerations[window, default: 0] else { return }
-        closedWindows.remove(window)
+        openWindows.insert(window)
     }
 
     /// Window close: a rendering window detaches, dropping its tickets; the lease stays held.
     /// Before any wait it fences `window`'s in-flight applies, which are then refused; this close
     /// then detaches whatever one holding the lock attached. `window` stays closed until reopened.
-    func windowClosed(_ window: WindowID) async {
+    /// `generation` is the closing detach's (0 outside the sequencer). Every open submitted before that
+    /// detach ran on an earlier turn and any later one carries at least `generation`, so its entry is
+    /// released unless a later detach's fence already raised it; that detach's close releases it.
+    func windowClosed(_ window: WindowID, generation: UInt64 = 0) async {
         fenceApplies(for: window, generation: 0)
+        if closureGenerations[window, default: 0] <= generation { closureGenerations[window] = nil }
         await lockLifecycle()
         defer { unlockLifecycle() }
         _ = await opened.value

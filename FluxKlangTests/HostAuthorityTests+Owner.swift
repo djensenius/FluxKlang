@@ -140,9 +140,52 @@ extension HostAuthorityTests {
             await owner.fenceApplies(for: Owner.windowOne, generation: 1)
             #expect(await owner.beginApply(window: Owner.windowOne) == .failure(.windowClosed))
             #expect(await owner.authority.snapshot().lease == nil)
-            // Liveness of a never-opened window is not claimed: it is simply not closed.
+            // The fence closes only its own window.
             #expect(await owner.beginApply(window: Owner.windowTwo) == .success(session))
             #expect(await owner.authority.snapshot().lease?.windows == [Owner.windowTwo])
+        }
+
+        @Test func neverOpenedWindowIsRefused() async throws {
+            let owner = try HostAuthorityOwner(host: Owner.host)
+            let never = WindowID(validated: "win.never")
+            #expect(await owner.beginApply(window: never) == .failure(.noSession))
+            await owner.connected(session: UUID())
+            #expect(await owner.beginApply(window: never) == .failure(.windowClosed))
+            #expect(await owner.authority.snapshot().lease == nil)
+            // Closing it, or opening it with a stale generation, leaves no state behind.
+            await owner.windowClosed(never)
+            await owner.fenceApplies(for: never, generation: 1)
+            await owner.windowOpened(never, generation: 0)
+            await owner.windowClosed(never, generation: 1)
+            #expect(await owner.openWindows.isEmpty)
+            #expect(await owner.closureGenerations.isEmpty)
+            #expect(await owner.beginApply(window: never) == .failure(.windowClosed))
+        }
+
+        @Test func closeReleasesOnlyItsOwnGeneration() async throws {
+            let owner = try await Owner.applying()
+            let session = try #require(await owner.session)
+            for generation in UInt64(1)...3 {
+                await owner.fenceApplies(for: Owner.windowOne, generation: generation)
+                #expect(await owner.closureGenerations == [Owner.windowOne: generation])
+                await owner.windowClosed(Owner.windowOne, generation: generation)
+                #expect(await owner.closureGenerations.isEmpty)
+                #expect(await owner.openWindows == [Owner.windowTwo])
+                await owner.windowOpened(Owner.windowOne, generation: generation)
+                #expect(await owner.beginApply(window: Owner.windowOne) == .success(session))
+            }
+            // A later detach's fence that lands before an earlier close survives that close.
+            await owner.fenceApplies(for: Owner.windowOne, generation: 4)
+            await owner.fenceApplies(for: Owner.windowOne, generation: 5)
+            await owner.windowClosed(Owner.windowOne, generation: 4)
+            #expect(await owner.closureGenerations == [Owner.windowOne: 5])
+            await owner.windowOpened(Owner.windowOne, generation: 4)
+            #expect(await owner.beginApply(window: Owner.windowOne) == .failure(.windowClosed))
+            await owner.windowClosed(Owner.windowOne, generation: 5)
+            #expect(await owner.closureGenerations.isEmpty)
+            #expect(await owner.beginApply(window: Owner.windowOne) == .failure(.windowClosed))
+            await owner.windowOpened(Owner.windowOne, generation: 5)
+            #expect(await owner.beginApply(window: Owner.windowOne) == .success(session))
         }
     }
 }
@@ -153,9 +196,10 @@ enum OwnerBench {
     static let windowOne = WindowID(validated: "win.one")
     static let windowTwo = WindowID(validated: "win.two")
 
-    /// A fresh owner; `granted` first grants the Host role (§9).
+    /// A fresh owner whose roots `windowOne` and `windowTwo` are open; `granted` first grants the Host role (§9).
     static func owner(granted: Bool = true) async throws -> HostAuthorityOwner {
         let owner = try HostAuthorityOwner(host: host)
+        await openRoots(owner)
         if granted { _ = try await owner.grant(.host).get() }
         return owner
     }
@@ -166,6 +210,11 @@ enum OwnerBench {
         await owner.connected(session: UUID())
         _ = try await owner.beginApply(window: window).get()
         return owner
+    }
+
+    /// Both bench roots appeared: the owner refuses applies on a window that is not open (AU8c-1).
+    static func openRoots(_ owner: HostAuthorityOwner) async {
+        for window in [windowOne, windowTwo] { await owner.windowOpened(window, generation: 0) }
     }
 
     /// Admits the owner's current provider admission for `window`.

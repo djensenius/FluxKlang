@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Issue | Part of #62 (slice AU8 design); roadmap #48. #62 remains open |
-| Status | AU8 design archive plus AU7c1 planned lifecycle composition, the AU7c2 owner close fence, the AU7c3 detach-time fence and the AU7c4 closed-root list (§12); pure Debug/Release checked, hosted compilation pending |
+| Status | AU8 design archive plus AU7c1 planned lifecycle composition, the AU7c2 owner close fence, the AU7c3 detach-time fence, the AU7c4 closed-root list and the AU8c-1 open-window set with root `open` (§12); pure Debug/Release checked, hosted compilation pending |
 | Source baseline | Historical citations: `41f69372`; AU7c1 implementation base: `2165503ab27043999cda062c10ba9132a2085262` |
 | Scope | Authority input sources, original AU8a plan, and bounded planned replacement/session/detach composition |
 
@@ -269,7 +269,8 @@ The user delegated these choices ("make your best assumption"); the coordinator 
 | AU7c3 | Worker | Detach-time fence (§12): the owner's lock-free `fenceApplies(for:)`, which `windowClosed` still calls first; `HostWingLifecycle.detach` sends it when submitted, while the detach itself keeps its FIFO turn; `Completion.fenced()` joins it | No queue-order change or early detach; no root lifetime, `windowOpened` or closed-window history; no AppRootView, AppModel or WingController change |
 | AU7c4 | Worker | Closed root (§12): the owner's `closedWindows` set, filled by `fenceApplies`/`windowClosed` and cleared by a lock-free `windowOpened`; `beginApply` and `staleness` refuse a closed root `.windowClosed` (`.noSession` first); `HostWingLifecycle.open(_:)` reopens on its FIFO turn unless the owner has fenced a later detach generation, and a detach's turn awaits its early fence | No production `windowOpened`/`open` caller (AU8c); never-opened windows are not refused; no AppRootView, AppModel or WingController change |
 | AU8d | Worker (follow-up, after AU7c) | Verified-reconnect signal: report from the WING path that a new session is connected and its state re-read, and feed it to the owner's verified-reconnect input | Until it lands, a drop leaves gated writes refused |
-| AU8c | Worker | `applyStudio` calls the gated overload for real sessions; the ungated `applyAndVerify(_:safetySettings:)` stays only for Demo Mode | Needs AU8a, AU8b and AU7c; must wire `open` on root appear in the same slice as any production `beginApply` caller; the planned open-window set bounds `closedWindows`, the owner's per-window generation map and the sequencer's `detachSubmissions` |
+| AU8c-1 | Worker | Root `open` and the open-window set (§12): `AppRootView` calls `wingLifecycle.open` on every appear; the owner's strict `openWindows` replaces `closedWindows`, so `beginApply`/`staleness` refuse any window not open `.windowClosed` (`.noSession` first), including one never opened; a detach's close releases its window's generation entry unless a later detach's fence raised it; the sequencer's per-window `detachSubmissions` becomes one monotonic counter | Prerequisites AU8a, AU8b and AU7c are merged; AU8d is not an AU8c prerequisite, so the earlier AU8d → AU8c order is relaxed for this slice only. Ships `open` before any production `beginApply` caller, which keeps the AU8c invariant. No `beginApply` caller, `applyStudio`, `StudioView`, minter or `WingController` change; no automatic grant |
+| AU8c-2 | Worker | `applyStudio` calls the gated overload for real sessions; the ungated `applyAndVerify(_:safetySettings:)` stays only for Demo Mode; `StudioView` threads the root window; production minter | Needs AU8c-1 (root `open` already wired); must not ship without it |
 
 ## 9. AU8a test plan
 
@@ -317,7 +318,7 @@ network or UI.
 - No migration of the other direct WING write paths listed in `docs/transformation/baseline.md` (Dispatch gap).
 - No change to `HostAuthority`, the book, the gate or the minter.
 
-## 12. AU7c1 planned lifecycle composition, AU7c2 owner close fence, AU7c3 detach-time fence and AU7c4 closed root
+## 12. AU7c1 lifecycle composition, AU7c2 close fence, AU7c3 detach-time fence, AU7c4 closed root, AU8c-1 open roots
 
 Part of #62 and roadmap #48; both remain open. Source implementation follows the approved #779 plan.
 Approval was design/source feasibility only. The exact 71-input closure now compiles without missing dependencies.
@@ -416,13 +417,33 @@ reaches the owner before the open's hop does (actor jobs need not run in submiss
 submitted after that detach reopens `w`. Generations come from the one `HostWingLifecycle` (`AppModel.shared`): a
 second sequencer or a direct owner caller must not share a `WindowID` with it. There is no separate MainActor
 check: until a later detach's fence lands, `w` races it like any apply races an in-flight fence (the fence flags
-in-flight applies, and the detach's turn detaches `w`). Like `closedWindows`,
-the owner's generation map is unbounded until AU8c's open-window set. A detach's turn awaits its early
+in-flight applies, and the detach's turn detaches `w`). Under AU7c4 alone, `closedWindows`, the owner's generation
+map and the per-window `detachSubmissions` were never pruned; AU8c-1 below bounds them. A detach's turn awaits its early
 fence before `windowClosed`, so a late fence cannot re-close a root reopened after it; no test pins this ordering (it
 would need a production hook to delay the fence task). Mirror-run `Owner`, `OwnerRaces` and
-`LifecycleComposition(Races)` tests cover this. A window that was never closed is not refused: liveness of unknown or
-never-opened windows is not claimed (a strict open-window list is deferred to AU8c). Still open: production
-root-lifetime wiring (`onAppear`/`open`, with AU8c under hosted compilation), window liveness, and AU8c/AU8d.
+`LifecycleComposition(Races)` tests cover this. Under AU7c4 a window that was never closed was not refused; AU8c-1
+refuses it.
+AU8c-1 (#874) wires root `open` and replaces `closedWindows` with a strict open-window set. `AppRootView.onAppear`
+submits `wingLifecycle.open(workspaceWindow)` before its other appear work, so first appear and every reappear reopen
+the retained `WindowID` on its FIFO turn; `onDisappear` still submits `detach`. The owner's `openWindows` holds window
+identities only: `windowOpened` inserts `w` (unless stale), and `fenceApplies`, and so `windowClosed`, removes it.
+`beginApply(w)` refuses any `w` not in the set `.windowClosed`, never-opened included, and `staleness` too (`.noSession`
+first). A closed window therefore needs no entry. The sequencer's per-window `detachSubmissions` map is now one
+counter of detach submissions across all windows, never reset: a detach fences and closes with its new value, and an
+`open` captures the value at submission. The owner's `closureGenerations` keeps, per window, the highest fenced
+generation (generation 0 records nothing), and `windowClosed(w, generation: g)` releases the entry, in the same actor
+job as its fence, when it is at most `g`; an entry a later detach's fence raised stays until that detach's own close
+releases it. So after a detach's turn with no later detach pending, the owner keeps nothing for `w`, and the
+sequencer keeps nothing per window; across open/detach cycles the state stays bounded by the open roots and the
+detaches still queued. Pruning cannot let a stale open reopen `w`: an open is stale only if a detach of `w` was
+submitted after it. Every open submitted before the releasing detach ran on an earlier FIFO turn, and an open's turn
+awaits its owner hop, so none is still pending. An open submitted after it carries at least `g`. If it precedes a later
+detach `g'`, that detach's fence either landed before the release (the entry is `g'`, which is not released) or lands
+after it (recording `g'` > the open's generation, so its hop is refused), or after the open's hop, which is the
+fence race AU7c4 already accepts. Because the counter never restarts, a detach submitted after a release cannot reuse a
+generation an earlier open captured. An owner-nil sequencer only counts and serializes. Mirror-run `Owner`,
+`OwnerRaces` and `LifecycleComposition(Races)` tests cover this; `beginApply` still has no production caller (AU8c-2).
+Still open: window liveness beyond root appear/disappear, AU8c-2 and AU8d.
 Root disappearance is not native close qualification, and native close remains unqualified.
 WingController.disconnect cancels but does not join its tasks; awaited socket stop is not callback quiescence.
 Nothing here qualifies #191/G2 native reclamation.

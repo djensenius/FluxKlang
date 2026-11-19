@@ -272,6 +272,7 @@ extension HostAuthorityTests {
         @Test(.timeLimit(.minutes(1))) func queuedDetachDoesNotFenceAnotherWindow() async throws {
             let held = try await LifecycleHeldTurn()
             let other = WindowID(validated: "win.other")
+            await held.owner.windowOpened(other, generation: 0)
             guard let apply = await held.pausedApply(other, at: .applyStarting) else { return }
             let completion = held.lifecycle.detach(Bench.window)
             await held.fence(completion)
@@ -298,6 +299,54 @@ extension HostAuthorityTests {
             await held.lifecycle.open(Bench.window).wait()
             #expect(await held.owner.beginApply(window: Bench.window) == .success(held.session))
             #expect(await held.owner.authority.snapshot().lease?.windows == [Bench.window])
+        }
+
+        @Test func openDetachCyclesReleaseWindowState() async throws {
+            let owner = try await Bench.owner()
+            let session = UUID()
+            await owner.connected(session: session)
+            let lifecycle = Lifecycle(owner: owner)
+            #expect(await owner.beginApply(window: Bench.window) == .failure(.windowClosed))
+            let others = (0..<3).map { _ in WindowID(uuid: UUID()) }
+            for window in [Bench.window, Bench.window] + others {
+                await lifecycle.open(window).wait()
+                #expect(await owner.openWindows == [window])
+                #expect(await owner.beginApply(window: window) == .success(session))
+                await lifecycle.detach(window).wait()
+                // Closed with no lifecycle work left: refused, and the owner keeps nothing for it.
+                #expect(await owner.beginApply(window: window) == .failure(.windowClosed))
+                #expect(await owner.openWindows.isEmpty)
+                #expect(await owner.closureGenerations.isEmpty)
+            }
+            #expect(!lifecycle.isBusy)
+        }
+
+        @Test(.timeLimit(.minutes(1))) func staleOpenAfterPruningCannotReopen() async throws {
+            let held = try await LifecycleHeldTurn()
+            held.release.open()
+            #expect(await held.replacement.value == .success(.connected(held.session)))
+            await held.lifecycle.detach(Bench.window).wait()
+            #expect(await held.owner.closureGenerations.isEmpty)
+            let (releaseFirst, releaseSecond) = (LifecycleGate(), LifecycleGate())
+            let first = await held.queueHold(until: releaseFirst)
+            let reopen = held.lifecycle.open(Bench.window)
+            let second = await held.queueHold(until: releaseSecond)
+            let detach = held.lifecycle.detach(Bench.window)
+            await held.fence(detach)
+            #expect(await held.owner.closureGenerations == [Bench.window: 2])
+            releaseFirst.open()
+            await reopen.wait()
+            await second.holding.wait()
+            // The open was submitted before the later detach, whose fence landed first: the root stays closed.
+            #expect(await held.owner.beginApply(window: Bench.window) == .failure(.windowClosed))
+            releaseSecond.open()
+            _ = await first.task.value
+            _ = await second.task.value
+            await detach.wait()
+            #expect(await held.owner.closureGenerations.isEmpty)
+            // Reopening after pruning works.
+            await held.lifecycle.open(Bench.window).wait()
+            #expect(await held.owner.beginApply(window: Bench.window) == .success(held.session))
         }
 
         @Test func historicalSuccessNeverAuthorizesAndMinterReadsFreshPermission() async throws {

@@ -35,6 +35,8 @@ struct AppRootView: View {
         // switches trigger that is unverified (W512d prerequisite).
         .environment(packageInspection)
         .onAppear {
+            // First appear and reappear reopen the retained WindowID on its lifecycle FIFO turn.
+            appModel.wingLifecycle.open(workspaceWindow)
             if packageInspection == nil {
                 packageInspection = PerformancePackageInspectionWindow(
                     owner: appModel.packageInspections, window: workspaceWindow

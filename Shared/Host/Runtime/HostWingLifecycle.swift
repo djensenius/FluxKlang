@@ -99,8 +99,9 @@ final class HostWingLifecycle {
     private(set) var lastReplacementOutcome: Outcome?
     @ObservationIgnored private var reserved = false
     @ObservationIgnored private var waiting: [Turn] = []
-    /// Per-window count of submitted detaches: the generation a detach fences and an `open` reopens.
-    @ObservationIgnored private var detachSubmissions: [WindowID: UInt64] = [:]
+    /// Count of submitted detaches across all windows, never reset: the generation a detach fences and
+    /// closes with and an `open` reopens with. A scalar, so it holds no per-window state.
+    @ObservationIgnored private var detachSubmissions: UInt64 = 0
 
     init(owner: HostAuthorityOwner? = nil) {
         self.owner = owner
@@ -134,14 +135,14 @@ final class HostWingLifecycle {
     @discardableResult
     func detach(_ window: WindowID) -> Completion {
         let owner = owner
-        detachSubmissions[window, default: 0] &+= 1
-        let generation = detachSubmissions[window, default: 0]
+        detachSubmissions += 1
+        let generation = detachSubmissions
         let fence = Task { if let owner { await owner.fenceApplies(for: window, generation: generation) } }
         let turn = reserve()
         return Completion(fence: fence, task: Task {
             await turn.wait()
             await fence.value
-            await owner?.windowClosed(window)
+            await owner?.windowClosed(window, generation: generation)
             handoff()
         })
     }
@@ -152,10 +153,11 @@ final class HostWingLifecycle {
     @discardableResult
     func open(_ window: WindowID) -> Completion {
         let owner = owner
-        let submitted = detachSubmissions[window, default: 0]
+        let submitted = detachSubmissions
         let turn = reserve()
         return Completion(fence: Task {}, task: Task {
             await turn.wait()
+            // Awaited before handoff: a later detach's close may prune only after this open has landed.
             await owner?.windowOpened(window, generation: submitted)
             handoff()
         })

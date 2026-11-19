@@ -153,8 +153,9 @@ final class LifecycleApplyPause {
     }
 }
 
-/// A granted owner and a lifecycle whose replacement has published `session`, then holds the FIFO
-/// turn in `finish` until `release` opens. Every wait ends on success or on the failure it would hide.
+/// A granted owner and a lifecycle that opened `LifecycleOwnerBench.window`, whose replacement has published
+/// `session`, then holds the FIFO turn in `finish` until `release` opens. Every wait ends on success or on
+/// the failure it would hide.
 @MainActor
 struct LifecycleHeldTurn {
     struct Unheld: Error {}
@@ -173,6 +174,7 @@ struct LifecycleHeldTurn {
         _ = try await owner.opened.value.get()
         _ = try await owner.grant(.host).get()
         let lifecycle = HostWingLifecycle(owner: owner)
+        await lifecycle.open(LifecycleOwnerBench.window).wait()
         let probe = LifecycleProbe()
         let replacement = Task {
             await lifecycle.replace {
@@ -192,6 +194,25 @@ struct LifecycleHeldTurn {
             Issue.record("replacement \(holding ?? "") before holding the turn")
             throw Unheld()
         }
+    }
+
+    /// Queues a replacement that republishes `session`, then holds its turn in `finish` until `release`
+    /// opens. Returns once it is queued, with a gate that opens once it holds.
+    func queueHold(until release: LifecycleGate) async
+        -> (holding: LifecycleGate, task: Task<HostWingLifecycle.Outcome, Never>) {
+        let (lifecycle, session, probe) = (lifecycle, session, LifecycleProbe())
+        let (queued, holding) = (LifecycleGate(), LifecycleGate())
+        let task = Task {
+            queued.open()
+            return await lifecycle.replace {
+                probe.operation(.success(.connected(session)), hooks: .init(finish: {
+                    holding.open()
+                    await release.wait()
+                }))
+            }
+        }
+        await queued.wait()
+        return (holding, task)
     }
 
     /// Returns once `window`'s apply is suspended at `point`; nil, recording an issue, if it completed first.
