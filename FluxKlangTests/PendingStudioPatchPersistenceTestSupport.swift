@@ -180,6 +180,15 @@ final class PendingPersistenceFixture {
         return try #require(owner.pendingStudioDraft)
     }
 
+    func buildRequest(_ source: Int = 0) throws -> StudioWiringRequest {
+        try #require(context.equipment.indices.contains(source))
+        return StudioWiringRequest(sourceInstrumentIDs: [context.equipment[source].id])
+    }
+
+    func buildResult(_ request: StudioWiringRequest) async -> StudioDraftBuildResult {
+        await owner.buildStudioDraftResult(request, context: context)
+    }
+
     func commit(_ draft: StudioPatchDraft) async -> Bool {
         await owner.commitPreparedRouting(
             draft, expectedPending: owner.pendingStudioDraft, preparedContext: context, currentContext: context)

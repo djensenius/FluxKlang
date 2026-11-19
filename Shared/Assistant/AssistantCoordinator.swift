@@ -1,6 +1,17 @@
 import Foundation
 import Observation
 
+enum StudioDraftBuildResult: Sendable, Equatable {
+    case notPublished
+    // Historical outcome for this invocation's full-value snapshot, not current-file authority.
+    case staged(draft: StudioPatchDraft, storageOutcome: PendingStudioPatchMutationOutcome)
+
+    var draft: StudioPatchDraft? {
+        guard case .staged(let draft, _) = self else { return nil }
+        return draft
+    }
+}
+
 enum PreparedRoutingCommitResult: Sendable, Equatable {
     case notPublished
     // The outcome belongs to this invocation's full-value snapshot, not the current file.
@@ -106,22 +117,9 @@ final class AssistantCoordinator {
         case .inspectStudioGraph:
             return .studioGraph(context.graph)
         case .buildStudioDraft(let request):
-            var draft = StudioWiringAdvisor.build(
-                request: request,
-                equipment: context.equipment,
-                effects: context.effects,
-                connections: context.globalConnections,
-                currentGraph: context.graph,
-                environmentID: context.activeEnvironmentID
-            )
-            draft.liveReferences = request.liveReferences
-            draft.outputReferences = request.outputReferences
-            pendingStudioDraft = draft
-            settledStudioDraft = draft
-            routingSubmissionID = nil
-            await persistPendingDraft()
-            // A discard, newer draft or commit during the save owns the pending draft; never report it as ours.
-            return .pendingDraft(pendingStudioDraft == draft ? draft : nil)
+            // Compatibility: pendingDraft still means in-memory success, even if saving fails.
+            let result = await buildStudioDraftResult(request, context: context)
+            return .pendingDraft(result.draft)
         case .validatePendingStudioDraft:
             guard let draft = pendingStudioDraft else { return .pendingDraft(nil) }
             let wasSettled = settledStudioDraft == draft
@@ -162,6 +160,29 @@ final class AssistantCoordinator {
             navigationTarget = .help(topic)
             return .help(FluxKlangHelpCatalog.entry(for: topic))
         }
+    }
+
+    /// Typed builds retain their existing admission/cancellation semantics, unlike prepared commits.
+    func buildStudioDraftResult(
+        _ request: StudioWiringRequest, context: AssistantToolContext
+    ) async -> StudioDraftBuildResult {
+        var draft = StudioWiringAdvisor.build(
+            request: request,
+            equipment: context.equipment,
+            effects: context.effects,
+            connections: context.globalConnections,
+            currentGraph: context.graph,
+            environmentID: context.activeEnvironmentID
+        )
+        draft.liveReferences = request.liveReferences
+        draft.outputReferences = request.outputReferences
+        pendingStudioDraft = draft
+        settledStudioDraft = draft
+        routingSubmissionID = nil
+        let storageOutcome = await persistPendingDraft()
+        // A discard, newer draft or commit during the save owns the pending draft; never report it as ours.
+        guard pendingStudioDraft == draft else { return .notPublished }
+        return .staged(draft: draft, storageOutcome: storageOutcome)
     }
 
     /// Compatibility: successful in-memory staging does not require successful storage.
