@@ -959,6 +959,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmission.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionBounds.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionPlan.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleCarryPlanning.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleTakeoverGap.swift
       - path: FluxKlangTests/RealtimeHandoffTests+AckHandshakeModelState.swift
       - path: FluxKlangTests/RealtimeHandoffTests+AckHandshakeModel.swift

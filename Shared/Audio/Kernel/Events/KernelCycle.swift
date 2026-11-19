@@ -170,9 +170,10 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
 /// with (`KernelCycleParts.safety`, normally the predecessor's, reused): preparation checks only its scope count, so a
 /// request on any other instance, even a same-sized one, never reaches the replacement; nothing drains the fan-in, so a
 /// lane can fill and refuse pushes (a refused `noteOff` latches the critical scope). The gap stays: overlapping it
-/// needs a render-side hand-off compare-exchange with a staged-but-unclaimed claim state, an allocation-free carry plan
-/// on render, and the inherited loss and carry published after construction (a control API change); and no production
-/// render path exists yet.
+/// needs a render-side hand-off compare-exchange with a staged-but-unclaimed claim state and inherited loss and carry
+/// published after construction (a control API change). #837 supplies only the fixed, allocation-free carry planner
+/// and result reads; object/slot construction still allocates on control. No concurrent replanning or overlap is
+/// enabled, no render deadline is qualified, and no production render path exists yet.
 ///
 /// Acknowledgement contract. Control acknowledges a critical fault only after render has reported a silenced
 /// (`.scopeFaulted`) cycle that began after control's `observe`; that cycle armed the watermark. An earlier

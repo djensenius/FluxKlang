@@ -16,6 +16,11 @@ package has a `FluxKlang` library and a `FluxKlangTests` test target, so the cop
    allocations on the fault-chain raise paths they drive (chain token primitives and the contended
    fallback, SysEx abort and overflow, retire backlog and contended retire, critical refusal and
    contended critical refusal).
+   `carryPlanningAndConsumptionAllocateNothing()` must also **pass, not skip**: actual canonical
+   `KernelCarryPlan` construction and fixed-result reads into preallocated sinks must count **zero**,
+   with a positive control and separate warm-up (not equality to an allocating baseline). The planner/helper
+   source scan must pass in Debug and Release. Object/slot construction is deliberately outside this
+   guarantee; see [storage and work bounds](../../docs/kernel-carry-plan.md).
 3. **Thread Sanitizer**: `--sanitize=thread --filter 'RealtimeHandoffTests.*(Cycle|Stress)'`, three
    times. It fails on a nonzero exit or any `WARNING: ThreadSanitizer` line. Each run must also
    report `readmissionRenderPathAllocatesNothing()` as skipped with its Thread Sanitizer reason. The
