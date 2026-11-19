@@ -425,3 +425,37 @@ Not covered: typed build/validate/discard failure presentation, post-acceptance 
 failure presentation, automatic retries, native authorization, durability, writer
 exclusion across coordinators/stores/processes, startup/archive/schema changes or
 migration activation. Earlier replies and card-id matching retain their existing limits.
+
+## P14b11 / #840 — typed wiring replies acknowledge their own save
+
+Part of #122 and #48; both remain open. `buildStudioDraftResult` returns `notPublished`
+or its staged full-value draft and the existing persistence invocation's entry-snapshot
+outcome. `perform(.buildStudioDraft)` delegates once and retains the legacy
+`pendingDraft` shape and in-memory-success meaning, including unconfirmed saves.
+Typed admission still permits validation errors and cancelled tasks; unlike prepared
+commit, cancellation does not reject or restore a typed build. No new identity or
+publication gate is introduced.
+
+The existing Wiring Draft form's `createWiringDraft` chat path and typed Build Studio
+Draft Siri action consume that detailed result. Successful saves preserve the existing
+text, cards and review navigation. An unconfirmed still-published draft adds the shared
+P14b10 warning exactly once while retaining staging and reviewability. Overtaken,
+nonmatching work keeps the existing no-draft text, no cards and no Siri review navigation,
+without a ready-to-review warning. Natural-language consumers and persistence are unchanged.
+
+Acknowledgement never borrows a latest diagnostic, subsequent read or another invocation.
+Full-value equality still allows equal-value ABA: a restored equal draft can publish
+the original build's historical failure even after another invocation saved it successfully.
+Different-snapshot catch-up cannot replace the entry outcome; a later same-snapshot
+outcome within the build's own persistence invocation can. Failure still stops catch-up.
+
+The existing serialized audited persistence root adds real-store typed-entry and actual
+chat coverage, using forwarding gates and joining owned chat/history tasks before cleanup.
+The focused exact-source mirror includes prior prepared-commit and chat-ownership
+regressions. Siri/AppModel execution is excluded; strict lint is not Apple type-checking
+or runtime qualification. Coordinator registration, independent review and exact-head
+hosted Apple/Lint/Mac observation remain required.
+
+Not covered: validate/discard warnings, post-acceptance deletion presentation, retry,
+durability/current-file authority, writer exclusion, startup/archive/schema/migration
+activation, hardware/provider/cloud access, native Siri or iOS qualification.
