@@ -3,7 +3,57 @@
 **P14b1 / #773 — design/evidence prerequisite for #122 / #48.**
 Source baseline: `17045692aaedac5abeb0f79c9893e8081436548d` (P14a #770).
 This document implements no exclusion, loader, migration admission or startup wiring.
-Current legacy editing, review, acceptance and discard remain unchanged.
+The inventory below describes that baseline; later acknowledgement slices are noted separately.
+
+## #872 — active-environment Studio acceptance
+
+Accept and Replace acknowledge the in-memory semantic graph merge. When there is an
+active environment, AppModel waits for the exact ordered local-write receipt from
+`EnvironmentStore.replaceStudioReportingLocalSave` (#883). Only a completed local
+write permits retirement, and only if the accepted publication and full validated
+snapshot are still current. The check and in-memory clear share one MainActor turn,
+before awaiting the historical nil-entry removal outcome. This is neither a document
+commit nor evidence of fsync, cloud durability, or current disk state.
+
+An unconfirmed write neither rolls back the graph nor removes the pending draft.
+Studio warns that its in-memory change was not confirmed saved locally and that the
+draft was kept; the warning is scoped to the retained publication and is visible
+inside an open review as well as in Studio. The historical removal warning remains
+separate. Logical acceptance, retirement identity and historical prepared-commit
+success are independent. Revalidation retains the logical acceptance record and
+publication identity; typed/prepared publications create fresh records even for equal
+values. Prepared cancellation restores the settled publication and acceptance record.
+An equal-value ABA prepared completion still reports its historical success, but
+cannot promote its old publication into settled state.
+
+Each tagged pending save registers a unique token and its logical acceptance record
+before suspension. `PendingStudioPatchProvenancePersisting` associates that token with
+the actual successful file mutation; completion order never selects the load record.
+Catch-up writes tag the logical record of the snapshot they actually submit. A load
+always creates a fresh retirement identity, but shares the logical record identified
+by the actual store observation. Thus both prevalidation and validation writes of one
+logical draft become accepted together, while a fresh equal prepared save stays fresh.
+These records last only for this coordinator's lifetime and are not persisted.
+
+Missing/unrecognized provenance is explicitly unknown, not evidence of prior graph
+application. Ordinary recovery from a new store/coordinator or legacy injected store
+is admitted when this coordinator has not applied a draft to that environment this
+session. Admission retains the recovered publication's identity through validation;
+only that exact publication and snapshot can retire after its successful save receipt.
+Once a draft is applied to an active environment, unknown reloads for that environment
+are conservatively blocked for this coordinator's remaining lifetime, even after
+discard/absence. Review explains that a draft was already applied this session and the
+saved draft may be the same one. Other environments are unaffected. Revalidation does
+not launder unknown into fresh; known-provenance fresh publications remain admissible,
+including equal values. No-active-environment acceptance does not set this application
+guard and still permits unknown records. There is no durable acceptance ledger or
+cross-session duplicate-application guarantee in this slice.
+If the receipt is consumed while a replacement is current or the accepted snapshot
+no longer matches, the invocation does not retire it and never retries retirement.
+Cancellation after merge does not stop receipt consumption or conditional removal.
+No-active-environment acceptance still returns the legacy merge and proceeds directly
+to removal without a save receipt. No automatic retry, startup/migration change, or
+console write is introduced.
 
 ## #884 — instance-local pending-slot provenance
 
@@ -11,8 +61,8 @@ The opt-in store refinement associates a caller-supplied UUID with the bytes of 
 successful tagged write in the same actor turn as the file mutation. A load returns
 its actual outcome and that token only when its decoded bytes still match. Forwarders
 must return the store's observation, not reconstruct it from submission or completion
-order. Legacy APIs and on-disk JSON remain unchanged; no coordinator or AppModel
-behavior is wired to this metadata.
+order. Legacy APIs and on-disk JSON remain unchanged. #872 above now consumes this
+metadata in the coordinator; the prerequisite alone introduced no AppModel behavior.
 
 The single in-memory slot is forgotten on untagged successful writes, confirmed
 deletion or absence, mismatched/malformed reads, read failures and unconfirmed

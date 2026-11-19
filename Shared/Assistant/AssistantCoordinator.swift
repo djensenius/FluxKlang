@@ -59,15 +59,58 @@ final class PendingStudioPatchStorageAttempt {
 @MainActor
 @Observable
 final class AssistantCoordinator {
+    fileprivate enum AcceptanceState { case fresh, accepted, unknown }
+
+    @MainActor
+    @Observable
+    fileprivate final class Acceptance {
+        var state: AcceptanceState
+
+        init(_ state: AcceptanceState = .fresh) { self.state = state }
+    }
+
+    @MainActor
+    private struct Publication {
+        var draft: StudioPatchDraft
+        let id = UUID()
+        let acceptance: Acceptance
+
+        init(draft: StudioPatchDraft, acceptance: Acceptance = Acceptance()) {
+            self.draft = draft
+            self.acceptance = acceptance
+        }
+    }
+
     private let draftStore: any PendingStudioPatchPersisting
-    private var settledStudioDraft: StudioPatchDraft?
+    // Tokens are registered before suspension; only the actual store associates one with file bytes.
+    // Result delivery order and equal draft values cannot establish which logical draft a load observed.
+    @ObservationIgnored private var savedAcceptances: [UUID: Acceptance] = [:]
+    // Unknown provenance is ambiguous only after graph application in this coordinator's session.
+    private var appliedEnvironmentIDs: Set<RoutingEnvironment.ID> = []
+    private var settledPublication: Publication?
+    private var pendingPublication: Publication?
     private var routingSubmissionID: UUID?
     // Pending-draft persistence calls in flight; overlapping mutations each hold one count.
     private var mutationsInFlight = 0
 
     // Latest submitted invocation, not latest completion or current persisted state.
     private(set) var latestStorageAttempt: PendingStudioPatchStorageAttempt?
-    private(set) var pendingStudioDraft: StudioPatchDraft?
+    var pendingStudioDraft: StudioPatchDraft? { pendingPublication?.draft }
+    var pendingPublicationID: UUID? { pendingPublication?.id }
+    var isPendingDraftAccepted: Bool { pendingPublication?.acceptance.state == .accepted }
+    var isPendingDraftAcceptanceUnknown: Bool { pendingPublication?.acceptance.state == .unknown }
+
+    func canAcceptPendingDraft(hasActiveEnvironment: Bool) -> Bool {
+        guard let publication = pendingPublication else { return false }
+        switch publication.acceptance.state {
+        case .fresh: return true
+        case .accepted: return false
+        case .unknown:
+            guard hasActiveEnvironment, let environmentID = publication.draft.request.environmentID else { return true }
+            return !appliedEnvironmentIDs.contains(environmentID)
+        }
+    }
+
     var navigationTarget: AssistantNavigationTarget? {
         didSet {
             if navigationTarget == .reviewPendingDraft, pendingStudioDraft == nil {
@@ -85,16 +128,24 @@ final class AssistantCoordinator {
         latestStorageAttempt = attempt
         // A read that starts during a mutation can return disk older than the pending draft.
         let quiescent = mutationsInFlight == 0
-        let outcome = await draftStore.load()
+        let observation: PendingStudioPatchLoadObservation
+        if let store = draftStore as? any PendingStudioPatchProvenancePersisting {
+            observation = await store.loadWithProvenance()
+        } else {
+            observation = .init(outcome: await draftStore.load(), provenance: nil)
+        }
+        let outcome = observation.outcome
         attempt.complete(outcome)
         // A superseded load, or one started during a mutation, records its own outcome but never publishes.
         guard latestStorageAttempt === attempt, quiescent else { return }
         switch outcome {
-        case .loaded(let draft): pendingStudioDraft = draft
-        case .absent: pendingStudioDraft = nil
+        case .loaded(let draft):
+            let acceptance = observation.provenance.flatMap { savedAcceptances[$0] } ?? Acceptance(.unknown)
+            pendingPublication = Publication(draft: draft, acceptance: acceptance)
+        case .absent: pendingPublication = nil
         case .malformedOrUnsupported, .readFailed: return
         }
-        settledStudioDraft = pendingStudioDraft
+        settledPublication = pendingPublication
         routingSubmissionID = nil
     }
 
@@ -151,7 +202,7 @@ final class AssistantCoordinator {
     /// Revalidation retains its existing cancellation and settled/unsettled semantics.
     func validatePendingStudioDraftResult(context: AssistantToolContext) async -> StudioDraftValidationResult {
         guard let draft = pendingStudioDraft else { return .notPublished }
-        let wasSettled = settledStudioDraft == draft
+        let wasSettled = settledPublication?.id == pendingPublication?.id
         var refreshed = StudioWiringAdvisor.revalidate(
             draft,
             equipment: context.equipment,
@@ -174,8 +225,8 @@ final class AssistantCoordinator {
                 code: "routing-name-changed", severity: .error,
                 message: "A routing name now resolves differently. Create a new draft before accepting."))
         }
-        pendingStudioDraft = refreshed
-        if wasSettled { settledStudioDraft = refreshed }
+        pendingPublication?.draft = refreshed
+        if wasSettled { settledPublication = pendingPublication }
         let storageOutcome = await persistPendingDraft()
         guard pendingStudioDraft == refreshed else { return .notPublished }
         return .staged(draft: refreshed, storageOutcome: storageOutcome)
@@ -195,8 +246,8 @@ final class AssistantCoordinator {
         )
         draft.liveReferences = request.liveReferences
         draft.outputReferences = request.outputReferences
-        pendingStudioDraft = draft
-        settledStudioDraft = draft
+        pendingPublication = Publication(draft: draft)
+        settledPublication = pendingPublication
         routingSubmissionID = nil
         let storageOutcome = await persistPendingDraft()
         // A discard, newer draft or commit during the save owns the pending draft; never report it as ours.
@@ -233,20 +284,22 @@ final class AssistantCoordinator {
               (draft.liveReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.liveWing) }),
               (draft.outputReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.effectiveConnections) })
         else { return .notPublished }
-        let rollback = settledStudioDraft
+        let rollback = settledPublication
         let submissionID = UUID()
         routingSubmissionID = submissionID
         defer {
             if routingSubmissionID == submissionID { routingSubmissionID = nil }
         }
-        pendingStudioDraft = draft
+        let publication = Publication(draft: draft)
+        pendingPublication = publication
         let storageOutcome = await persistPendingDraft()
         if Task.isCancelled, routingSubmissionID == submissionID {
-            pendingStudioDraft = rollback
+            pendingPublication = rollback
             await persistPendingDraft()
         }
         guard !Task.isCancelled, pendingStudioDraft == draft else { return .notPublished }
-        settledStudioDraft = draft
+        // Historical equal-value ABA success is not permission to promote this old publication.
+        if pendingPublication?.id == publication.id { settledPublication = pendingPublication }
         return .staged(draft: draft, storageOutcome: storageOutcome)
     }
 
@@ -256,11 +309,38 @@ final class AssistantCoordinator {
 
     /// Historical nil-snapshot outcome, not a guarantee about the current saved draft.
     func discardPendingStudioDraftResult() async -> PendingStudioPatchMutationOutcome {
-        pendingStudioDraft = nil
-        settledStudioDraft = nil
+        clearPendingDraft()
+        return await persistPendingDraft()
+    }
+
+    func markPendingDraftAccepted(
+        publicationID: UUID, snapshot: StudioPatchDraft, hasActiveEnvironment: Bool
+    ) -> Bool {
+        guard let publication = pendingPublication, publication.id == publicationID,
+              publication.draft == snapshot,
+              canAcceptPendingDraft(hasActiveEnvironment: hasActiveEnvironment) else { return false }
+        publication.acceptance.state = .accepted
+        if hasActiveEnvironment, let environmentID = snapshot.request.environmentID {
+            appliedEnvironmentIDs.insert(environmentID)
+        }
+        return true
+    }
+
+    /// Check and clear in one main-actor turn before awaiting the legacy removal path.
+    func retireAcceptedDraft(
+        publicationID: UUID, snapshot: StudioPatchDraft
+    ) async -> PendingStudioPatchMutationOutcome? {
+        guard pendingPublicationID == publicationID, pendingStudioDraft == snapshot,
+              isPendingDraftAccepted else { return nil }
+        clearPendingDraft()
+        return await persistPendingDraft()
+    }
+
+    private func clearPendingDraft() {
+        pendingPublication = nil
+        settledPublication = nil
         routingSubmissionID = nil
         navigationTarget = nil
-        return await persistPendingDraft()
     }
 
     @discardableResult
@@ -269,16 +349,25 @@ final class AssistantCoordinator {
         defer { mutationsInFlight -= 1 }
         let entrySnapshot = pendingStudioDraft
         var saved = entrySnapshot
+        var acceptance = pendingPublication?.acceptance
         var entryOutcome: PendingStudioPatchMutationOutcome?
         while true {
             let attempt = PendingStudioPatchStorageAttempt(.mutation(snapshot: saved, outcome: nil))
             latestStorageAttempt = attempt
-            let outcome = await draftStore.save(saved)
+            let outcome: PendingStudioPatchMutationOutcome
+            if let store = draftStore as? any PendingStudioPatchProvenancePersisting {
+                let provenance = UUID()
+                savedAcceptances[provenance] = acceptance
+                outcome = await store.save(saved, provenance: provenance)
+            } else {
+                outcome = await draftStore.save(saved)
+            }
             attempt.complete(outcome)
             // Retain the first result and replace it only for this invocation's same full-value snapshot.
             if entryOutcome == nil || saved == entrySnapshot { entryOutcome = outcome }
             guard outcome.completed, saved != pendingStudioDraft else { break }
             saved = pendingStudioDraft
+            acceptance = pendingPublication?.acceptance
         }
         guard let entryOutcome else { preconditionFailure("Entry snapshot was not saved") }
         return entryOutcome

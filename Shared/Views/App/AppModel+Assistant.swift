@@ -65,13 +65,22 @@ extension AppModel {
     }
 
     /// Preserves legacy acceptance policy, including no-active-environment behavior.
-    /// Once merged, cancellation cannot undo acceptance or cancel its pending removal.
-    func acceptPendingAssistantDraftResult() async -> StudioDraftAcceptanceResult {
-        guard let original = assistant.pendingStudioDraft else { return .notAccepted }
+    /// Once merged, cancellation cannot undo acceptance or stop local-save acknowledgement.
+    /// The optional observer lets tests hold receipt consumption without substituting storage.
+    func acceptPendingAssistantDraftResult(
+        beforeAwaitingLocalSave: (@MainActor () async -> Void)? = nil
+    ) async -> StudioDraftAcceptanceResult {
+        guard let original = assistant.pendingStudioDraft, let publicationID = assistant.pendingPublicationID,
+              assistant.canAcceptPendingDraft(hasActiveEnvironment: environments.active != nil) else {
+            return .notAccepted
+        }
         let controller = wing
         let refreshedReferences = await controller.refreshLiveReferences(original.liveReferences ?? [])
         guard refreshedReferences, !Task.isCancelled, wing === controller,
-              assistant.pendingStudioDraft == original else { return .notAccepted }
+              assistant.pendingPublicationID == publicationID, assistant.pendingStudioDraft == original,
+              assistant.canAcceptPendingDraft(hasActiveEnvironment: environments.active != nil) else {
+            return .notAccepted
+        }
         let validationContext = assistantToolContext()
         let validation = await assistant.perform(
             .validatePendingStudioDraft,
@@ -92,7 +101,9 @@ extension AppModel {
               (refreshed.outputReferences ?? []).allSatisfy({
                   $0.isValid(in: currentContext.effectiveConnections)
               }),
-              (refreshed.liveReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.liveWing) })
+              (refreshed.liveReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.liveWing) }),
+              assistant.markPendingDraftAccepted(
+                  publicationID: publicationID, snapshot: refreshed, hasActiveEnvironment: environments.active != nil)
         else { return .notAccepted }
         let result = StudioPatchDraftMerger.merge(
             refreshed,
@@ -101,8 +112,22 @@ extension AppModel {
             equipment: equipment.items,
             effects: environments.activeEffects
         )
-        environments.replaceStudio(graph: result.graph, endpoints: result.endpoints)
-        let removalOutcome = await assistant.discardPendingStudioDraftResult()
+        guard environments.active != nil else {
+            environments.replaceStudio(graph: result.graph, endpoints: result.endpoints)
+            let removalOutcome = await assistant.discardPendingStudioDraftResult()
+            return .accepted(merge: result, removalOutcome: removalOutcome)
+        }
+        let receipt = environments.replaceStudioReportingLocalSave(graph: result.graph, endpoints: result.endpoints)
+        if let beforeAwaitingLocalSave { await beforeAwaitingLocalSave() }
+        guard await receipt.value == .localWriteCompleted else {
+            let retainedID = assistant.pendingPublicationID == publicationID ? publicationID : nil
+            return .acceptedLocalWriteUnconfirmed(merge: result, retainedPublicationID: retainedID)
+        }
+        guard let removalOutcome = await assistant.retireAcceptedDraft(
+            publicationID: publicationID, snapshot: refreshed
+        ) else {
+            return .acceptedWithoutRetirement(merge: result)
+        }
         return .accepted(merge: result, removalOutcome: removalOutcome)
     }
 }

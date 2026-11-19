@@ -7,6 +7,180 @@ import Testing
 #endif
 
 extension AppModelPendingDraftAcceptanceTests {
+    @Test(arguments: [false, true])
+    func acceptanceLoadUsesActualEqualWriteOrder(acceptedWritesLast: Bool) async throws {
+        try await AppModelPendingDraftAcceptanceFixture.run { fixture in
+            let (model, built) = try await fixture.prepare(mode: .replace, seedGraph: true)
+            let validationContext = model.assistantToolContext()
+            try fixture.blockEnvironmentFile()
+            let first = await model.acceptPendingAssistantDraftResult()
+            guard case .acceptedLocalWriteUnconfirmed = first else {
+                Issue.record("Expected an accepted replacement retained after a failed local write")
+                return
+            }
+            let accepted = try #require(model.assistant.pendingStudioDraft)
+            let acceptedID = try #require(model.assistant.pendingPublicationID)
+            let held = await fixture.forwarding.hold(acceptedWritesLast ? .beforeSave(3) : .afterSave(3))
+            let older = try fixture.start {
+                await model.assistant.validatePendingStudioDraftResult(context: validationContext)
+            }
+            try #require(await held.waitForEntry())
+            try #require(model.assistant.pendingStudioDraft == accepted, "require equal snapshots, not just equal ids")
+            let olderAttempt = try #require(model.assistant.latestStorageAttempt)
+            let context = model.assistantToolContext()
+            let prepared = await model.assistant.commitPreparedRoutingResult(
+                accepted, expectedPending: accepted, preparedContext: context, currentContext: context)
+            try #require(prepared == .staged(draft: accepted, storageOutcome: .writeCompleted))
+            let preparedID = try #require(model.assistant.pendingPublicationID)
+            try #require(preparedID != acceptedID && !model.assistant.isPendingDraftAccepted)
+            let latest = try #require(model.assistant.latestStorageAttempt)
+            await held.release()
+            #expect(await older.value == .staged(draft: accepted, storageOutcome: .writeCompleted))
+            #expect(model.assistant.latestStorageAttempt === latest && latest !== olderAttempt)
+            #expect(try fixture.readPendingDraft() == accepted)
+            #expect(await fixture.forwarding.snapshots == [built, accepted, accepted, accepted])
+
+            // Same values and same result delivery order in both cases; only actual mutation order differs.
+            await model.assistant.load()
+            #expect(model.assistant.pendingPublicationID != preparedID)
+            #expect(model.assistant.isPendingDraftAccepted == acceptedWritesLast)
+            #expect(!model.assistant.isPendingDraftAcceptanceUnknown)
+            #expect(model.assistant.canAcceptPendingDraft(hasActiveEnvironment: true) == !acceptedWritesLast)
+            if acceptedWritesLast {
+                let graph = model.environments.activeStudioGraph
+                #expect(await model.acceptPendingAssistantDraftResult() == .notAccepted)
+                #expect(model.environments.activeStudioGraph == graph)
+                #expect(await fixture.forwarding.snapshots.count == 4)
+            } else {
+                // Fresh equal prepared save -> load -> accept must not inherit the older acceptance.
+                try FileManager.default.removeItem(at: fixture.environmentFile)
+                let second = await model.acceptPendingAssistantDraftResult()
+                let merge = try #require(second.merge)
+                #expect(second == .accepted(merge: merge, removalOutcome: .deleteCompleted))
+                #expect(try fixture.readSavedEnvironment().studioGraph == merge.graph)
+                #expect(model.assistant.pendingStudioDraft == nil)
+                #expect(await fixture.forwarding.snapshots.count == 6)
+            }
+        }
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func acceptanceReceiptNeverRetiresReplacement(equalValue: Bool, cancelled: Bool) async throws {
+        try await AppModelPendingDraftAcceptanceFixture.run { fixture in
+            let (model, built) = try await fixture.prepare()
+            let id = try #require(model.assistant.pendingPublicationID)
+            let task = try fixture.start {
+                await model.acceptPendingAssistantDraftResult(beforeAwaitingLocalSave: fixture.receiptGate.enter)
+            }
+            try #require(await fixture.receiptGate.waitForEntry())
+            let accepted = try #require(model.assistant.pendingStudioDraft)
+            let graph = model.environments.activeStudioGraph
+            try #require(!graph.nodes.isEmpty && model.assistant.isPendingDraftAccepted)
+            #expect(try fixture.readPendingDraft() == accepted)
+            let replacement: StudioPatchDraft
+            if equalValue {
+                // A fresh publication from disk, even though its bytes describe the exact accepted snapshot.
+                await model.assistant.load()
+                replacement = accepted
+            } else {
+                replacement = try await fixture.buildAgain(model, destination: .space)
+                try #require(replacement != accepted)
+            }
+            try #require(model.assistant.pendingStudioDraft == replacement)
+            try #require(model.assistant.pendingPublicationID != id)
+            #expect(model.assistant.isPendingDraftAccepted == equalValue)
+            if equalValue {
+                #expect(await model.acceptPendingAssistantDraftResult() == .notAccepted)
+            }
+            if cancelled { task.cancel() }
+            await fixture.receiptGate.release()
+            let result = await task.value
+            let merge = try #require(result.merge)
+            #expect(result == .acceptedWithoutRetirement(merge: merge))
+            #expect(merge.graph == graph && model.environments.activeStudioGraph == graph)
+            #expect(try fixture.readSavedEnvironment().studioGraph == graph)
+            #expect(model.assistant.pendingStudioDraft == replacement)
+            #expect(try fixture.readPendingDraft() == replacement)
+            let snapshots: [StudioPatchDraft?] = equalValue ? [built, accepted] : [built, accepted, replacement]
+            #expect(await fixture.forwarding.snapshots == snapshots)
+        }
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func acceptanceCancellationAfterMutationJoinsOwnedSave(blocked: Bool, cancelBeforeSaveStarts: Bool) async throws {
+        try await AppModelPendingDraftAcceptanceFixture.run { fixture in
+            let (model, built) = try await fixture.prepare()
+            if blocked { try fixture.blockEnvironmentFile() }
+            let id = try #require(model.assistant.pendingPublicationID)
+            let task = try fixture.start {
+                await model.acceptPendingAssistantDraftResult {
+                    // This actor turn has mutated the graph but has not yielded to the owned save yet.
+                    if cancelBeforeSaveStarts { withUnsafeCurrentTask { $0?.cancel() } }
+                    await fixture.receiptGate.enter()
+                }
+            }
+            try #require(await fixture.receiptGate.waitForEntry())
+            let accepted = try #require(model.assistant.pendingStudioDraft)
+            let graph = model.environments.activeStudioGraph
+            try #require(!graph.nodes.isEmpty && model.assistant.isPendingDraftAccepted)
+            #expect(model.assistant.pendingPublicationID == id)
+            #expect(try fixture.readPendingDraft() == accepted)
+            #expect(await model.acceptPendingAssistantDraftResult() == .notAccepted)
+            #expect(await fixture.forwarding.snapshots == [built, accepted])
+            task.cancel()
+            await fixture.receiptGate.release()
+            let result = await task.value
+            let merge = try #require(result.merge)
+            #expect(merge.graph == graph && model.environments.activeStudioGraph == graph)
+            if blocked {
+                #expect(result == .acceptedLocalWriteUnconfirmed(merge: merge, retainedPublicationID: id))
+                #expect(model.assistant.pendingStudioDraft == accepted)
+                #expect(try fixture.readPendingDraft() == accepted)
+                #expect(await fixture.forwarding.snapshots == [built, accepted])
+            } else {
+                #expect(result == .accepted(merge: merge, removalOutcome: .deleteCompleted))
+                #expect(model.assistant.pendingStudioDraft == nil)
+                #expect(try fixture.readSavedEnvironment().studioGraph == graph)
+                #expect(!FileManager.default.fileExists(atPath: fixture.file.path))
+                #expect(await fixture.forwarding.snapshots == [built, accepted, nil])
+            }
+        }
+    }
+
+    @Test func acceptanceDoesNotRetryRetirementAfterPreparedRollback() async throws {
+        try await AppModelPendingDraftAcceptanceFixture.run { fixture in
+            let (model, built) = try await fixture.prepare()
+            let id = try #require(model.assistant.pendingPublicationID)
+            let acceptance = try fixture.start {
+                await model.acceptPendingAssistantDraftResult(beforeAwaitingLocalSave: fixture.receiptGate.enter)
+            }
+            try #require(await fixture.receiptGate.waitForEntry())
+            let accepted = try #require(model.assistant.pendingStudioDraft)
+            let context = model.assistantToolContext()
+            let gate = await fixture.forwarding.hold(.afterSave(3))
+            let replacement = try fixture.start {
+                await model.assistant.commitPreparedRouting(
+                    accepted, expectedPending: accepted, preparedContext: context, currentContext: context)
+            }
+            try #require(await gate.waitForEntry())
+            try #require(model.assistant.pendingPublicationID != id && !model.assistant.isPendingDraftAccepted)
+            await fixture.receiptGate.release()
+            let result = await acceptance.value
+            let merge = try #require(result.merge)
+            try #require(result == .acceptedWithoutRetirement(merge: merge))
+
+            replacement.cancel()
+            await gate.release()
+            #expect(await replacement.value == false)
+            #expect(model.assistant.pendingPublicationID == id)
+            #expect(model.assistant.isPendingDraftAccepted && model.assistant.pendingStudioDraft == accepted)
+            #expect(await model.acceptPendingAssistantDraftResult() == .notAccepted)
+            #expect(try fixture.readPendingDraft() == accepted)
+            #expect(try fixture.readSavedEnvironment().studioGraph == merge.graph)
+            #expect(await fixture.forwarding.snapshots == [built, accepted, accepted, accepted])
+        }
+    }
+
     @Test(arguments: [false, true], [false, true])
     func acceptanceThenOppositeAcceptanceReverseCompletion(replaceFirst: Bool, olderFails: Bool) async throws {
         try await AppModelPendingDraftAcceptanceFixture.run { fixture in
