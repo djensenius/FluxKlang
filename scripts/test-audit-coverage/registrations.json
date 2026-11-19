@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "444c588c43106a59ffbea41fe3bea2f1f7f6c2b746ab7f6e0484bd75ffc866e6",
+    "sha256": "b3fa93081a5e16c31f19e541468fb67cc963bccb15414c1544560b3ef0159679",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -453,9 +453,11 @@
         "FluxKlangTests/MIDICIMcoded7Tests.swift",
         "FluxKlangTests/MIDICIPropertyHeaderTests.swift",
         "FluxKlangTests/MIDICIPropertyBodyTests.swift",
+        "FluxKlangTests/MIDICIPropertyBodyTests+Zlib.swift",
         "FluxKlangTests/MIDICIPropertyContentTests.swift",
         "FluxKlangTests/MIDICIPropertyContentTests+Seeded.swift",
         "FluxKlangTests/MIDICIPropertyContentTests+ChunkCount.swift",
+        "FluxKlangTests/MIDICIPropertyContentTests+Zlib.swift",
         "FluxKlangTests/MIDICIPropertyChunkerTests.swift",
         "FluxKlangTests/MIDICIPropertyChunkerTests+Seeded.swift",
         "FluxKlangTests/PeerEndpointPolicyTests.swift",
@@ -850,6 +852,7 @@
         "FluxKlangTests/PluginEditorStateTests+Snapshot.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleCandidate.swift",
+        "FluxKlangTests/RealtimeHandoffTests+KernelCycleReservation.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleFixtures.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCyclePreparationEdges.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleStress.swift",
