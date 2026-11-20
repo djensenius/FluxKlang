@@ -17,6 +17,51 @@ struct RoutingBoundaryTests {
 }
 
 extension RoutingBoundaryTests {
+    @Test func planCorrespondenceRejectsDisconnectedOutputOffsetsAndWrongRole() throws {
+        var documents = Fixtures.documents()
+        documents.graph.edges = []
+        try Fixtures.appendEndpoint(to: &documents, input: false, suffix: "second")
+        let plan = try Fixtures.compile(documents)
+        #expect(plan.terms.isEmpty && plan.rows.allSatisfy { $0.termCount == 0 })
+        var outputs = plan.layout.outputs
+        let firstIndex = try #require(outputs.indices.first)
+        let secondIndex = try #require(outputs.indices.dropFirst().first)
+        let first = outputs[firstIndex]
+        let second = outputs[secondIndex]
+        outputs[secondIndex] = AudioRoutingEndpoint(
+            node: second.node, port: second.port, role: second.role, channels: second.channels,
+            firstChannel: first.firstChannel
+        )
+        let overlapping = outputs
+        outputs = plan.layout.outputs
+        outputs[secondIndex] = AudioRoutingEndpoint(
+            node: second.node, port: second.port, role: second.role, channels: second.channels,
+            firstChannel: second.firstChannel + second.channels
+        )
+        let outOfRange = outputs
+        outputs = plan.layout.outputs
+        outputs[secondIndex] = AudioRoutingEndpoint(
+            node: second.node, port: second.port, role: first.role, channels: second.channels,
+            firstChannel: second.firstChannel
+        )
+        let wrongRole = outputs
+
+        func replacingOutputs(_ endpoints: [AudioRoutingEndpoint]) throws -> PreparedAudioRoutingPlan {
+            let layout = AudioRoutingLayout(
+                graph: plan.layout.graph, revision: plan.layout.revision, maxFrames: plan.layout.maxFrames,
+                inputs: plan.layout.inputs, outputs: endpoints,
+                inputSampleCount: plan.layout.inputSampleCount, outputSampleCount: plan.layout.outputSampleCount,
+                peakCount: plan.layout.peakCount
+            )
+            return try Fixtures.replacingPlan(plan, in: documents, layout: layout)
+        }
+        for malformed in [overlapping, outOfRange, wrongRole] {
+            #expect(throws: AudioRoutingPreparationError.unsupported) {
+                try Fixtures.validatePlan(replacingOutputs(malformed), in: documents)
+            }
+        }
+    }
+
     @Test func planCorrespondenceRejectsInvalidInputOffsetsAndExtraOutputRows() throws {
         var documents = Fixtures.documents()
         documents.graph.nodes.removeAll { $0.kind == .roleOutput }
