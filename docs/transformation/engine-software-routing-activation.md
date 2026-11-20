@@ -136,6 +136,89 @@ not that samples have run or output was nonzero. Preparation proves neither
 lease/context freshness at commit, successful samples, physical deallocation
 nor the remaining byte/lifetime obligations.
 
+### 3.1 Proposed executable correspondence proof (#887)
+
+This is a proposed proof obligation, not a descriptor or verifier implemented
+by the current compiler or offline processor. Admission checks the selected
+context and supported topology; compilation creates endpoints, rows and terms
+and its explicit component coverage check compares only the **count** of input
+endpoints, output endpoints and optional mute against the node count. The
+offline processor executes that lowered plan on supplied buffers. Neither the
+count nor a separately appended node-ID set proves that each node corresponds
+to its actual executable component.
+
+For the same admitted graph ID/revision and candidate node identities, derive
+evidence **as lowering creates the components**, tied to the actual plan and
+its geometry rather than a second description of intended nodes. Conceptually
+there must be a bijection between candidate nodes and executable components:
+exactly one component of the correct kind and identity per node, and no
+component without a candidate node. The proof must also account for all
+applicable endpoint channels, rows, term occurrences and scratch regions of
+those components: none omitted, assigned twice to different components, or
+left as extra executable work. Shared source channels may legitimately feed
+multiple rows, and repeated source terms in a row are legitimate occurrences;
+neither is a duplicate node/component assignment. No particular descriptor
+layout or new operation is prescribed.
+
+Use checked half-open ranges within the actual plan bounds, including empty
+ranges, and verify the following correspondence:
+
+| Candidate | Identity and executable coverage |
+|---|---|
+| Role input | Match node, role and graph **output** port, direction and width to its input endpoint. Its unique channel interval matches the owned input slab and the staged-input scratch channels at the plan's fixed frame stride; all channels participate in staging and finite-value validation, whether consumed or not. |
+| Role output | Match node, role and graph **input** port, direction and width to its output endpoint. Its unique channel interval matches the owned output slab, peak entries, output scratch channels and exactly one output row per channel. Each row corresponds to that destination channel's admitted incoming edge or its absence. |
+| Optional constant mute | Match node, input and output ports, width and constant mute value to the actual mute component. Cover one input materialization row per channel, its input and result scratch channels, and the mute operation over every channel, including when true or unconsumed. No mute component is permitted if no mute node was admitted. |
+
+These processing duties apply to active frames when the corresponding stage is
+reached without an earlier refusal. The existing zero-frame path bypasses
+staging, mute materialization and output computation.
+
+For example, with frame stride `F`, total input/output channels `I`/`O` and
+mute width `C` (zero when absent), the current lowering reserves input scratch
+`[0, I*F)`, mute input `[I*F, (I+C)*F)`, mute result
+`[(I+C)*F, (I+2C)*F)`, output scratch `[(I+2C)*F, (I+2C+O)*F)`
+and `O` peak scratch entries thereafter. Endpoint channel intervals partition
+their respective input or output channels; multiplying their bounds by `F`
+gives their full fixed-stride slab ranges, including padding. Output rows and
+peak entries follow output channel indices; mute rows follow mute channel
+indices. The proof checks these ranges against actual counts and offsets, with
+checked arithmetic, disjoint component destinations and no gaps or overlaps
+where a partition is required. Reserved padding is not a claim that the
+processor initializes or processes inactive frames. Empty intervals are valid;
+the compiler's minimum scratch allocation for an empty plan is not an extra
+node or executable component.
+
+Each row's checked term interval must be within the actual ordered term array;
+the mute rows followed by output rows account for all term **occurrences**
+without gaps or overlapping ownership. For an absent edge the row has no terms
+and produces silence. Otherwise its identity/copy or conversion/sum behavior
+and ordered source channel offsets must match the admitted edge and conversion,
+including empty conversion rows and repeated indices (an admitted conversion
+still has at least one nonempty row). Source references must
+resolve to the correct staged input or mute-result channel and stay in the
+corresponding scratch range for active frames. This preserves existing lowering
+and evaluator behavior, not a claim that the processor independently verifies
+the proposed correspondence.
+
+Symbolically, for equal-width `input A -> mute M -> output B`, the proof links
+`A` to its input endpoint/staging, `M` to its ports, materialization rows and
+mute operation, and `B` to its output endpoint/rows/peaks; each row's terms
+refer to the appropriate preceding source. With disconnected `A`, `M` and
+`B`, all three components still exist: `A` is staged and validated, `M` has
+empty-input rows and executes, and `B` has silent rows. A mute-only graph has
+mute work despite empty external geometry; a graph with no nodes has no
+components, rows, terms or addressable output/peak geometry. These are
+coverage cases, not evidence of installation or sample execution.
+
+Refuse proposed coverage if, for candidate inputs `A` and `B`, two input
+components are reported but one actually belongs to `C` instead of `B`, even
+if counts and an appended `{A, B}` set match. Also refuse if both
+correspondences claim the same actual component for `A`, leaving `B` uncovered,
+even when two records and valid-looking ranges are supplied. Likewise, a
+correct node ID with another node's port, channel range, row or terms is not
+correspondence. These refusals concern the proposed proof; they do not assert
+that today's count check detects such adversarial evidence.
+
 ## 4. Installation and outcome semantics
 
 All installation checks precede any target-state change: exact identity and
@@ -205,6 +288,15 @@ disconnected input validation, output silence and mute materialization/operation
 and empty output/peak geometry. An installed flag, node sets, zero-frame-only
 processing or caller-buffer evaluation is not installation evidence. Occupied
 replacement evidence must wait for the separate decision in section 5.
+
+Future compiler-coverage fixtures should inspect the actual lowered components
+and ranges for connected, disconnected, mute-only and empty graphs, including
+empty conversion rows and repeated terms, and independently compare them to
+the admitted nodes and edges. Adversarial fixture evidence should show refusal
+of equal-count wrong-node and duplicate-component correspondences, wrong
+identity or range/row/term assignments, missing work and extra work. Such
+observations qualify only the proposed correspondence proof; installation
+selection and subsequent use require the separate evidence above.
 
 A possible later sequence is compiler-derived coverage in
 `AudioRoutingCompiler.swift`, concrete owned storage and isolated installation/use
