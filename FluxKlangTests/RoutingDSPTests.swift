@@ -20,6 +20,220 @@ struct RoutingDSPTests {
 }
 
 extension RoutingDSPTests {
+    @Test func planCorrespondenceRejectsWrongEndpointRoleAndSortedOutputRowDescriptors() throws {
+        var documents = Fixtures.documents()
+        try Fixtures.appendEndpoint(to: &documents, input: true, suffix: "source2")
+        try Fixtures.appendEndpoint(to: &documents, input: false, suffix: "output2")
+        let secondSource = try #require(documents.graph.nodes.first { $0.id == NodeID(validated: "node.source2") })
+        let secondOutputNode = try #require(
+            documents.graph.nodes.first { $0.id == NodeID(validated: "node.output2") }
+        )
+        var secondEdge = documents.graph.edges[0]
+        secondEdge.id = EdgeID(validated: "edge.second")
+        secondEdge.from.node = secondSource.id
+        secondEdge.to.node = secondOutputNode.id
+        documents.graph.edges.append(secondEdge)
+        documents.graph.nodes.reverse()
+        let plan = try Fixtures.compile(documents)
+
+        var terms = plan.terms
+        let firstOutput = try #require(plan.layout.outputs.first)
+        let secondOutputEndpoint = try #require(plan.layout.outputs.dropFirst().first)
+        let firstRowIndex = try #require(plan.rows.indices.contains(firstOutput.firstChannel)
+            ? firstOutput.firstChannel : nil)
+        let secondRowIndex = try #require(plan.rows.indices.contains(secondOutputEndpoint.firstChannel)
+            ? secondOutputEndpoint.firstChannel : nil)
+        let firstOutputTerm = try #require(
+            plan.rows[firstRowIndex].termCount == 1
+                && terms.indices.contains(plan.rows[firstRowIndex].firstTerm)
+                ? plan.rows[firstRowIndex].firstTerm : nil
+        )
+        let secondOutputTerm = try #require(
+            plan.rows[secondRowIndex].termCount == 1
+                && terms.indices.contains(plan.rows[secondRowIndex].firstTerm)
+                ? plan.rows[secondRowIndex].firstTerm : nil
+        )
+        terms.swapAt(firstOutputTerm, secondOutputTerm)
+        let malformedTerms = try Fixtures.replacingPlan(plan, in: documents, terms: terms)
+        #expect(throws: AudioRoutingPreparationError.unsupported) {
+            try Fixtures.validatePlan(malformedTerms, in: documents)
+        }
+
+        let firstRow = try #require(plan.rows.first)
+        let invalidRows = [
+            PreparedAudioRoutingPlan.Row(
+                firstTerm: firstRow.firstTerm + 1, termCount: firstRow.termCount, isIdentity: firstRow.isIdentity
+            ),
+            PreparedAudioRoutingPlan.Row(
+                firstTerm: firstRow.firstTerm, termCount: firstRow.termCount - 1, isIdentity: firstRow.isIdentity
+            ),
+            PreparedAudioRoutingPlan.Row(
+                firstTerm: firstRow.firstTerm, termCount: firstRow.termCount, isIdentity: false
+            )
+        ]
+        for invalidRow in invalidRows {
+            var rows = plan.rows
+            rows[0] = invalidRow
+            let malformedRows = try Fixtures.replacingPlan(plan, in: documents, rows: rows)
+            #expect(throws: AudioRoutingPreparationError.unsupported) {
+                try Fixtures.validatePlan(malformedRows, in: documents)
+            }
+        }
+
+        var inputs = plan.layout.inputs
+        let firstInputNode = try #require(plan.layout.inputs.first?.node)
+        let firstInputIndex = try #require(inputs.firstIndex { $0.node == firstInputNode })
+        let firstInput = inputs[firstInputIndex]
+        let alternateInput = try #require(inputs.first { $0.node != firstInputNode })
+        let wrongInput = AudioRoutingEndpoint(
+            node: firstInput.node, port: firstInput.port, role: alternateInput.role,
+            channels: firstInput.channels, firstChannel: firstInput.firstChannel
+        )
+        inputs[firstInputIndex] = wrongInput
+        let wrongIdentity = try Fixtures.replacingPlan(plan, in: documents, inputs: inputs)
+        #expect(throws: AudioRoutingPreparationError.unsupported) {
+            try Fixtures.validatePlan(wrongIdentity, in: documents)
+        }
+    }
+
+    @Test func planCorrespondenceRejectsUnknownAndDuplicateDisconnectedInputs() throws {
+        var documents = Fixtures.documents()
+        documents.graph.nodes.removeAll { $0.kind == .roleOutput }
+        documents.graph.edges = []
+        documents.project.roles.removeAll { $0.direction == .output }
+        try Fixtures.appendEndpoint(to: &documents, input: true, suffix: "second")
+        let plan = try Fixtures.compile(documents)
+
+        var unknownInputs = plan.layout.inputs
+        let unknownIndex = try #require(unknownInputs.indices.first)
+        let knownEndpoint = unknownInputs[unknownIndex]
+        unknownInputs[unknownIndex] = AudioRoutingEndpoint(
+            node: NodeID(validated: "node.unknown"), port: knownEndpoint.port,
+            role: knownEndpoint.role, channels: knownEndpoint.channels,
+            firstChannel: knownEndpoint.firstChannel
+        )
+        let unknownPlan = try Fixtures.replacingPlan(plan, in: documents, inputs: unknownInputs)
+        #expect(throws: AudioRoutingPreparationError.unsupported) {
+            try Fixtures.validatePlan(unknownPlan, in: documents)
+        }
+
+        var duplicateInputs = plan.layout.inputs
+        let firstIndex = try #require(duplicateInputs.indices.first)
+        let duplicateIndex = try #require(duplicateInputs.indices.dropFirst().first)
+        let firstEndpoint = duplicateInputs[firstIndex]
+        let laterEndpoint = duplicateInputs[duplicateIndex]
+        duplicateInputs[duplicateIndex] = AudioRoutingEndpoint(
+            node: firstEndpoint.node, port: firstEndpoint.port, role: firstEndpoint.role,
+            channels: laterEndpoint.channels, firstChannel: laterEndpoint.firstChannel
+        )
+        let duplicatePlan = try Fixtures.replacingPlan(plan, in: documents, inputs: duplicateInputs)
+        #expect(throws: AudioRoutingPreparationError.unsupported) {
+            try Fixtures.validatePlan(duplicatePlan, in: documents)
+        }
+    }
+
+    @Test func planCorrespondenceRejectsReorderedAndDuplicatedConvertedTerms() throws {
+        let documents = Fixtures.muteDocuments(
+            false, channels: 3,
+            inputMap: [[2, 0], [1, 1], [0]],
+            outputMap: [[1, 0], [2, 2], [0, 1]]
+        )
+        let plan = try Fixtures.compile(documents)
+        let mute = try #require(plan.mute)
+        let muteRow = try #require(mute.rows.first { $0.termCount >= 2 })
+        let muteSecondTerm = try #require(
+            muteRow.firstTerm >= 0 && muteRow.firstTerm < plan.terms.count - 1 ? muteRow.firstTerm + 1 : nil
+        )
+        let outputRow = try #require(plan.rows.first { $0.termCount >= 2 })
+        let outputSecondTerm = try #require(
+            outputRow.firstTerm >= 0 && outputRow.firstTerm < plan.terms.count - 1
+                ? outputRow.firstTerm + 1 : nil
+        )
+        var reorderedMuteTerms = plan.terms
+        reorderedMuteTerms.swapAt(muteRow.firstTerm, muteSecondTerm)
+        var duplicateMuteTerms = plan.terms
+        duplicateMuteTerms[muteSecondTerm] = duplicateMuteTerms[muteRow.firstTerm]
+        var reorderedOutputTerms = plan.terms
+        reorderedOutputTerms.swapAt(outputRow.firstTerm, outputSecondTerm)
+        var duplicateOutputTerms = plan.terms
+        duplicateOutputTerms[outputSecondTerm] = duplicateOutputTerms[outputRow.firstTerm]
+
+        for terms in [reorderedMuteTerms, duplicateMuteTerms, reorderedOutputTerms, duplicateOutputTerms] {
+            let malformed = try Fixtures.replacingPlan(plan, in: documents, terms: terms)
+            #expect(throws: AudioRoutingPreparationError.unsupported) {
+                try Fixtures.validatePlan(malformed, in: documents)
+            }
+        }
+    }
+
+    @Test func planCorrespondenceRejectsWrongMuteGeometry() throws {
+        let documents = Fixtures.muteDocuments(false)
+        let plan = try Fixtures.compile(documents)
+        let mute = try #require(plan.mute)
+        let malformedMute = PreparedAudioRoutingPlan.Mute(
+            node: mute.node, inputPort: mute.inputPort, outputPort: mute.outputPort, muted: mute.muted,
+            inputOffset: mute.inputOffset + 1, resultOffset: mute.resultOffset, rows: mute.rows
+        )
+        #expect(throws: AudioRoutingPreparationError.unsupported) {
+            try Fixtures.validatePlan(
+                Fixtures.replacingPlan(plan, in: documents, mute: malformedMute), in: documents
+            )
+        }
+
+        let wrongMuteBit = PreparedAudioRoutingPlan.Mute(
+            node: mute.node, inputPort: mute.inputPort, outputPort: mute.outputPort, muted: !mute.muted,
+            inputOffset: mute.inputOffset, resultOffset: mute.resultOffset, rows: mute.rows
+        )
+        #expect(throws: AudioRoutingPreparationError.unsupported) {
+            try Fixtures.validatePlan(
+                Fixtures.replacingPlan(plan, in: documents, mute: wrongMuteBit), in: documents
+            )
+        }
+
+        let wrongPortIdentity = PreparedAudioRoutingPlan.Mute(
+            node: mute.node, inputPort: mute.outputPort, outputPort: mute.outputPort, muted: mute.muted,
+            inputOffset: mute.inputOffset, resultOffset: mute.resultOffset, rows: mute.rows
+        )
+        #expect(throws: AudioRoutingPreparationError.unsupported) {
+            try Fixtures.validatePlan(
+                Fixtures.replacingPlan(plan, in: documents, mute: wrongPortIdentity), in: documents
+            )
+        }
+
+        let firstMuteRow = try #require(mute.rows.first)
+        let invalidRows = [
+            PreparedAudioRoutingPlan.Row(
+                firstTerm: firstMuteRow.firstTerm + 1,
+                termCount: firstMuteRow.termCount,
+                isIdentity: firstMuteRow.isIdentity
+            ),
+            PreparedAudioRoutingPlan.Row(
+                firstTerm: firstMuteRow.firstTerm,
+                termCount: firstMuteRow.termCount - 1,
+                isIdentity: firstMuteRow.isIdentity
+            ),
+            PreparedAudioRoutingPlan.Row(
+                firstTerm: firstMuteRow.firstTerm, termCount: firstMuteRow.termCount, isIdentity: false
+            )
+        ]
+        for invalidRow in invalidRows {
+            var rows = mute.rows
+            rows[0] = invalidRow
+            let corruptedMute = PreparedAudioRoutingPlan.Mute(
+                node: mute.node, inputPort: mute.inputPort, outputPort: mute.outputPort, muted: mute.muted,
+                inputOffset: mute.inputOffset, resultOffset: mute.resultOffset, rows: rows
+            )
+            #expect(throws: AudioRoutingPreparationError.unsupported) {
+                try Fixtures.validatePlan(
+                    Fixtures.replacingPlan(plan, in: documents, mute: corruptedMute), in: documents
+                )
+            }
+        }
+    }
+
+}
+
+extension RoutingDSPTests {
     @Test func muteBitCopiesOrStoresPositiveZeroAtWidthBoundariesAndReversedPorts() throws {
         let samples: [Float] = [0, -0.0, .leastNonzeroMagnitude, -.leastNonzeroMagnitude]
         for channels in [1, 64] {

@@ -127,4 +127,36 @@ enum AudioRoutingTestFixtures {
             }
         }
     }
+
+    static func replacingPlan(
+        _ plan: PreparedAudioRoutingPlan, in documents: Documents,
+        layout: AudioRoutingLayout? = nil, inputs: [AudioRoutingEndpoint]? = nil,
+        rows: [PreparedAudioRoutingPlan.Row]? = nil,
+        terms: [Int]? = nil, mute: PreparedAudioRoutingPlan.Mute? = nil
+    ) throws -> PreparedAudioRoutingPlan {
+        let geometry = try AudioRoutingAdmission.preflight(
+            project: documents.project, graph: documents.graph, limits: plan.bounds
+        )
+        let changedLayout = inputs.map { replacementInputs in
+            AudioRoutingLayout(
+                graph: plan.layout.graph, revision: plan.layout.revision, maxFrames: plan.layout.maxFrames,
+                inputs: replacementInputs, outputs: plan.layout.outputs,
+                inputSampleCount: plan.layout.inputSampleCount, outputSampleCount: plan.layout.outputSampleCount,
+                peakCount: plan.layout.peakCount
+            )
+        } ?? layout ?? plan.layout
+        return PreparedAudioRoutingPlan(
+            layout: changedLayout, bounds: plan.bounds, geometry: geometry,
+            mute: mute ?? plan.mute, rows: rows ?? plan.rows, terms: terms ?? plan.terms
+        )
+    }
+
+    static func validatePlan(_ plan: PreparedAudioRoutingPlan, in documents: Documents) throws {
+        let geometry = try AudioRoutingAdmission.preflight(
+            project: documents.project, graph: documents.graph, limits: plan.bounds
+        )
+        try AudioRoutingCompiler.validateCorrespondence(
+            plan: plan, graph: documents.graph, limits: plan.bounds, geometry: geometry
+        )
+    }
 }
