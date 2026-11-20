@@ -20,32 +20,7 @@ struct RoutingDSPTests {
 }
 
 extension RoutingDSPTests {
-    private func replacingPlan(
-        _ plan: PreparedAudioRoutingPlan, in documents: Fixtures.Documents,
-        layout: AudioRoutingLayout? = nil, rows: [PreparedAudioRoutingPlan.Row]? = nil,
-        terms: [Int]? = nil, mute: PreparedAudioRoutingPlan.Mute? = nil
-    ) throws -> PreparedAudioRoutingPlan {
-        let geometry = try AudioRoutingAdmission.preflight(
-            project: documents.project, graph: documents.graph, limits: plan.bounds
-        )
-        return PreparedAudioRoutingPlan(
-            layout: layout ?? plan.layout, bounds: plan.bounds, geometry: geometry,
-            mute: mute ?? plan.mute, rows: rows ?? plan.rows, terms: terms ?? plan.terms
-        )
-    }
-
-    private func validatePlan(
-        _ plan: PreparedAudioRoutingPlan, in documents: Fixtures.Documents
-    ) throws {
-        let geometry = try AudioRoutingAdmission.preflight(
-            project: documents.project, graph: documents.graph, limits: plan.bounds
-        )
-        try AudioRoutingCompiler.validateCorrespondence(
-            plan: plan, graph: documents.graph, limits: plan.bounds, geometry: geometry
-        )
-    }
-
-    @Test func planCorrespondenceRejectsWrongEndpointRoleAndOutputRowDescriptors() throws {
+    @Test func planCorrespondenceRejectsWrongEndpointRoleAndSortedOutputRowDescriptors() throws {
         var documents = Fixtures.documents()
         try Fixtures.appendEndpoint(to: &documents, input: true, suffix: "source2")
         try Fixtures.appendEndpoint(to: &documents, input: false, suffix: "output2")
@@ -56,7 +31,31 @@ extension RoutingDSPTests {
         secondEdge.from.node = secondSource.id
         secondEdge.to.node = secondOutput.id
         documents.graph.edges.append(secondEdge)
+        documents.graph.nodes.reverse()
         let plan = try Fixtures.compile(documents)
+
+        var terms = plan.terms
+        let firstOutput = try #require(plan.layout.outputs.first)
+        let secondOutput = try #require(plan.layout.outputs.dropFirst().first)
+        let firstRowIndex = try #require(plan.rows.indices.contains(firstOutput.firstChannel)
+            ? firstOutput.firstChannel : nil)
+        let secondRowIndex = try #require(plan.rows.indices.contains(secondOutput.firstChannel)
+            ? secondOutput.firstChannel : nil)
+        let firstOutputTerm = try #require(
+            plan.rows[firstRowIndex].termCount == 1
+                && terms.indices.contains(plan.rows[firstRowIndex].firstTerm)
+                ? plan.rows[firstRowIndex].firstTerm : nil
+        )
+        let secondOutputTerm = try #require(
+            plan.rows[secondRowIndex].termCount == 1
+                && terms.indices.contains(plan.rows[secondRowIndex].firstTerm)
+                ? plan.rows[secondRowIndex].firstTerm : nil
+        )
+        terms.swapAt(firstOutputTerm, secondOutputTerm)
+        let malformedTerms = try Fixtures.replacingPlan(plan, in: documents, terms: terms)
+        #expect(throws: AudioRoutingPreparationError.unsupported) {
+            try Fixtures.validatePlan(malformedTerms, in: documents)
+        }
 
         let firstRow = try #require(plan.rows.first)
         let invalidRows = [
@@ -73,9 +72,9 @@ extension RoutingDSPTests {
         for invalidRow in invalidRows {
             var rows = plan.rows
             rows[0] = invalidRow
-            let malformedRows = try replacingPlan(plan, in: documents, rows: rows)
+            let malformedRows = try Fixtures.replacingPlan(plan, in: documents, rows: rows)
             #expect(throws: AudioRoutingPreparationError.unsupported) {
-                try validatePlan(malformedRows, in: documents)
+                try Fixtures.validatePlan(malformedRows, in: documents)
             }
         }
 
@@ -89,15 +88,45 @@ extension RoutingDSPTests {
             channels: firstInput.channels, firstChannel: firstInput.firstChannel
         )
         inputs[firstInputIndex] = wrongInput
-        let badLayout = AudioRoutingLayout(
-            graph: plan.layout.graph, revision: plan.layout.revision, maxFrames: plan.layout.maxFrames,
-            inputs: inputs, outputs: plan.layout.outputs,
-            inputSampleCount: plan.layout.inputSampleCount, outputSampleCount: plan.layout.outputSampleCount,
-            peakCount: plan.layout.peakCount
-        )
-        let wrongIdentity = try replacingPlan(plan, in: documents, layout: badLayout)
+        let wrongIdentity = try Fixtures.replacingPlan(plan, in: documents, inputs: inputs)
         #expect(throws: AudioRoutingPreparationError.unsupported) {
-            try validatePlan(wrongIdentity, in: documents)
+            try Fixtures.validatePlan(wrongIdentity, in: documents)
+        }
+    }
+
+    @Test func planCorrespondenceRejectsUnknownAndDuplicateDisconnectedInputs() throws {
+        var documents = Fixtures.documents()
+        documents.graph.nodes.removeAll { $0.kind == .roleOutput }
+        documents.graph.edges = []
+        documents.project.roles.removeAll { $0.direction == .output }
+        try Fixtures.appendEndpoint(to: &documents, input: true, suffix: "second")
+        let plan = try Fixtures.compile(documents)
+
+        var unknownInputs = plan.layout.inputs
+        let unknownIndex = try #require(unknownInputs.indices.first)
+        let knownEndpoint = unknownInputs[unknownIndex]
+        unknownInputs[unknownIndex] = AudioRoutingEndpoint(
+            node: NodeID(validated: "node.unknown"), port: knownEndpoint.port,
+            role: knownEndpoint.role, channels: knownEndpoint.channels,
+            firstChannel: knownEndpoint.firstChannel
+        )
+        let unknownPlan = try Fixtures.replacingPlan(plan, in: documents, inputs: unknownInputs)
+        #expect(throws: AudioRoutingPreparationError.unsupported) {
+            try Fixtures.validatePlan(unknownPlan, in: documents)
+        }
+
+        var duplicateInputs = plan.layout.inputs
+        let firstIndex = try #require(duplicateInputs.indices.first)
+        let duplicateIndex = try #require(duplicateInputs.indices.dropFirst().first)
+        let firstEndpoint = duplicateInputs[firstIndex]
+        let laterEndpoint = duplicateInputs[duplicateIndex]
+        duplicateInputs[duplicateIndex] = AudioRoutingEndpoint(
+            node: firstEndpoint.node, port: firstEndpoint.port, role: firstEndpoint.role,
+            channels: laterEndpoint.channels, firstChannel: laterEndpoint.firstChannel
+        )
+        let duplicatePlan = try Fixtures.replacingPlan(plan, in: documents, inputs: duplicateInputs)
+        #expect(throws: AudioRoutingPreparationError.unsupported) {
+            try Fixtures.validatePlan(duplicatePlan, in: documents)
         }
     }
 
@@ -128,9 +157,9 @@ extension RoutingDSPTests {
         duplicateOutputTerms[outputSecondTerm] = duplicateOutputTerms[outputRow.firstTerm]
 
         for terms in [reorderedMuteTerms, duplicateMuteTerms, reorderedOutputTerms, duplicateOutputTerms] {
-            let malformed = try replacingPlan(plan, in: documents, terms: terms)
+            let malformed = try Fixtures.replacingPlan(plan, in: documents, terms: terms)
             #expect(throws: AudioRoutingPreparationError.unsupported) {
-                try validatePlan(malformed, in: documents)
+                try Fixtures.validatePlan(malformed, in: documents)
             }
         }
     }
@@ -144,7 +173,9 @@ extension RoutingDSPTests {
             inputOffset: mute.inputOffset + 1, resultOffset: mute.resultOffset, rows: mute.rows
         )
         #expect(throws: AudioRoutingPreparationError.unsupported) {
-            try validatePlan(replacingPlan(plan, in: documents, mute: malformedMute), in: documents)
+            try Fixtures.validatePlan(
+                Fixtures.replacingPlan(plan, in: documents, mute: malformedMute), in: documents
+            )
         }
 
         let wrongMuteBit = PreparedAudioRoutingPlan.Mute(
@@ -152,7 +183,9 @@ extension RoutingDSPTests {
             inputOffset: mute.inputOffset, resultOffset: mute.resultOffset, rows: mute.rows
         )
         #expect(throws: AudioRoutingPreparationError.unsupported) {
-            try validatePlan(replacingPlan(plan, in: documents, mute: wrongMuteBit), in: documents)
+            try Fixtures.validatePlan(
+                Fixtures.replacingPlan(plan, in: documents, mute: wrongMuteBit), in: documents
+            )
         }
 
         let wrongPortIdentity = PreparedAudioRoutingPlan.Mute(
@@ -160,7 +193,9 @@ extension RoutingDSPTests {
             inputOffset: mute.inputOffset, resultOffset: mute.resultOffset, rows: mute.rows
         )
         #expect(throws: AudioRoutingPreparationError.unsupported) {
-            try validatePlan(replacingPlan(plan, in: documents, mute: wrongPortIdentity), in: documents)
+            try Fixtures.validatePlan(
+                Fixtures.replacingPlan(plan, in: documents, mute: wrongPortIdentity), in: documents
+            )
         }
 
         let firstMuteRow = try #require(mute.rows.first)
@@ -187,28 +222,13 @@ extension RoutingDSPTests {
                 inputOffset: mute.inputOffset, resultOffset: mute.resultOffset, rows: rows
             )
             #expect(throws: AudioRoutingPreparationError.unsupported) {
-                try validatePlan(replacingPlan(plan, in: documents, mute: corruptedMute), in: documents)
+                try Fixtures.validatePlan(
+                    Fixtures.replacingPlan(plan, in: documents, mute: corruptedMute), in: documents
+                )
             }
         }
     }
 
-    @Test func planCorrespondenceAcceptsSortedDisconnectedAndEmptyComponents() throws {
-        var reordered = Fixtures.documents()
-        reordered.graph.nodes.reverse()
-        let reorderedPlan = try Fixtures.compile(reordered)
-        try validatePlan(reorderedPlan, in: reordered)
-
-        var disconnected = Fixtures.muteDocuments(false)
-        disconnected.graph.edges = []
-        let disconnectedPlan = try Fixtures.compile(disconnected)
-        try validatePlan(disconnectedPlan, in: disconnected)
-
-        var empty = Fixtures.documents()
-        empty.graph.nodes = []
-        empty.graph.edges = []
-        let emptyPlan = try Fixtures.compile(empty)
-        try validatePlan(emptyPlan, in: empty)
-    }
 }
 
 extension RoutingDSPTests {
