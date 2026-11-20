@@ -25,22 +25,24 @@ extension RoutingDSPTests {
         try Fixtures.appendEndpoint(to: &documents, input: true, suffix: "source2")
         try Fixtures.appendEndpoint(to: &documents, input: false, suffix: "output2")
         let secondSource = try #require(documents.graph.nodes.first { $0.id == NodeID(validated: "node.source2") })
-        let secondOutput = try #require(documents.graph.nodes.first { $0.id == NodeID(validated: "node.output2") })
+        let secondOutputNode = try #require(
+            documents.graph.nodes.first { $0.id == NodeID(validated: "node.output2") }
+        )
         var secondEdge = documents.graph.edges[0]
         secondEdge.id = EdgeID(validated: "edge.second")
         secondEdge.from.node = secondSource.id
-        secondEdge.to.node = secondOutput.id
+        secondEdge.to.node = secondOutputNode.id
         documents.graph.edges.append(secondEdge)
         documents.graph.nodes.reverse()
         let plan = try Fixtures.compile(documents)
 
         var terms = plan.terms
         let firstOutput = try #require(plan.layout.outputs.first)
-        let secondOutput = try #require(plan.layout.outputs.dropFirst().first)
+        let secondOutputEndpoint = try #require(plan.layout.outputs.dropFirst().first)
         let firstRowIndex = try #require(plan.rows.indices.contains(firstOutput.firstChannel)
             ? firstOutput.firstChannel : nil)
-        let secondRowIndex = try #require(plan.rows.indices.contains(secondOutput.firstChannel)
-            ? secondOutput.firstChannel : nil)
+        let secondRowIndex = try #require(plan.rows.indices.contains(secondOutputEndpoint.firstChannel)
+            ? secondOutputEndpoint.firstChannel : nil)
         let firstOutputTerm = try #require(
             plan.rows[firstRowIndex].termCount == 1
                 && terms.indices.contains(plan.rows[firstRowIndex].firstTerm)
