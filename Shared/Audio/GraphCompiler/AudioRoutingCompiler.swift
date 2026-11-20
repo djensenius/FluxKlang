@@ -110,7 +110,8 @@ enum AudioRoutingCompiler {
         plan: PreparedAudioRoutingPlan, graph: GraphDocument, limits: AudioRoutingLimits,
         geometry: AudioRoutingAdmission.Geometry
     ) throws {
-        try CorrespondenceValidator(plan: plan, graph: graph, limits: limits, geometry: geometry).validate()
+        var validator = CorrespondenceValidator(plan: plan, graph: graph, limits: limits, geometry: geometry)
+        try validator.validate()
     }
 
     /// Ephemeral, per-compilation check state; nothing is attached to the lowered plan.
