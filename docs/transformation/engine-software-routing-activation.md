@@ -67,7 +67,7 @@ These are existing boundaries, not implementations of the proposed target.
 | [`ActivationValidator.swift`](../../Shared/Host/Authority/ActivationValidator.swift), `ValidatedActivation` | Context validation is neither authorization nor a write and can become stale. Provenance alone is not activation. |
 | [`HostAuthority.swift`](../../Shared/Host/Authority/HostAuthority.swift), `begin`, `constructAdmittedPreparation`, `PendingPreparation.evaluate` | #288/#290 reserve one lifetime before canonical admission and consume its admitted FIFO command. Construction remains private and construction-only; evaluation allocates output/peak arrays per call. Prepare-only mode refuses external success and commit. |
 | [`AudioRoutingAdmission.swift`](../../Shared/Audio/GraphCompiler/AudioRoutingAdmission.swift), `preflight`, `validateSelectedContext` | Checks the bounded role-input/output and at-most-one constant-mute subset, selected graph/project context, topology, metadata, capability and budget refusals; does not validate unsupplied unrelated graph documents. |
-| [`AudioRoutingCompiler.swift`](../../Shared/Audio/GraphCompiler/AudioRoutingCompiler.swift), `PreparedAudioRoutingPlan`, `compile`, `lowerRows`, `endpoints` | Produces a document-free plan with endpoint geometry, output rows, mute rows and ordered terms. It does not yet produce the proposed exact executable-component coverage descriptor or installed target. |
+| [`AudioRoutingCompiler.swift`](../../Shared/Audio/GraphCompiler/AudioRoutingCompiler.swift), `PreparedAudioRoutingPlan`, `compile`, `validateCorrespondence` | Produces a document-free plan and runs an ephemeral offline-plan consistency validator against the selected graph: endpoint identity/order and geometry, node coverage, mute identity/geometry, and positional row/ordered-term contents. It does not produce a persistent executable-component coverage descriptor or installed target. |
 | [`AudioRoutingTypes.swift`](../../Shared/Audio/GraphCompiler/AudioRoutingTypes.swift), `AudioRoutingLayout`; [`OfflineAudioRoutingProcessor.swift`](../../Shared/Audio/Kernel/Processors/OfflineAudioRoutingProcessor.swift), `process` | Fixed-stride planar Float32 processing of supplied buffers. The noncopyable processor owns its original arena. Its private `commit` copies samples to caller buffers; it is not activation or `EngineCommand.commit`. |
 | [`ActivationTransaction.swift`](../../Shared/Host/Authority/ActivationTransaction.swift), `ActivationCommitReport`, `acknowledged` | Requires an outcome and exact planned-node partition. Empty sets alone distinguish neither successful empty replacement nor failure. |
 | [`PreparedPlanSlot.swift`](../../Shared/Audio/Kernel/Memory/PreparedPlanSlot.swift); [`ScratchArena.swift`](../../Shared/Audio/Kernel/Memory/ScratchArena.swift) | The slot requires an exclusively owned `AnyObject & Sendable` plan and creates a fresh arena. It is not an adapter for this processor. The arena's 16 MiB ceiling is not a whole-resource byte proof. |
@@ -100,7 +100,9 @@ later refused; binding is not a deferred accounting checkpoint.
    No second arena, reference boxing, duplicate owner or `PreparedPlanSlot`
    adaptation. Scratch remains cycle-local and initialized before reading;
    endpoint storage must not depend on scratch surviving a reset.
-5. Derive exact node-to-executable-component correspondence during compilation.
+5. Establish exact node-to-executable-component correspondence during
+   compilation beyond the existing offline-plan consistency check described in
+   3.1.
    It must cover every candidate node with the actual ranges, rows and
    operations below, with no missing or extra node. Appending a node-ID set
    after compilation proves nothing.
@@ -130,7 +132,9 @@ later refused; binding is not a deferred accounting checkpoint.
 | The optional constant mute, even without consumers | Input materialization rows, scratch ranges and mute operation, including true/unused channels and a wholly disconnected mute. It is not elided because no output observes it. |
 
 These behaviors already appear in the compiler and processor's `stage`,
-`materializeMute` and `compute`; the new correspondence must preserve them.
+`materializeMute` and `compute`; the existing plan validator checks lowered
+plan consistency, and the proposed full correspondence proof must preserve
+them.
 Acknowledgement means those components became the installed executable image,
 not that samples have run or output was nonzero. Preparation proves neither
 lease/context freshness at commit, successful samples, physical deallocation
@@ -138,14 +142,19 @@ nor the remaining byte/lifetime obligations.
 
 ### 3.1 Proposed executable correspondence proof (#887)
 
-This is a proposed proof obligation, not a descriptor or verifier implemented
-by the current compiler or offline processor. Admission checks the selected
-context and supported topology; compilation creates endpoints, rows and terms
-and its explicit component coverage check compares only the **count** of input
-endpoints, output endpoints and optional mute against the node count. The
-offline processor executes that lowered plan on supplied buffers. Neither the
-count nor a separately appended node-ID set proves that each node corresponds
-to its actual executable component.
+The full proof below remains a proposed obligation, not a persistent descriptor
+or a verifier for owned executable components. The compiler does implement an
+ephemeral offline-plan consistency validator: it checks endpoint identities,
+roles, port directions, sorted channel positions and totals; node coverage;
+mute identity and offsets; and output/mute row positions, identity flags,
+ordered term occurrences and complete term coverage against the selected
+graph. The #890 regression tests exercise rejection of malformed endpoints,
+mute geometry, rows and terms. This is more than a count-only check, but it
+validates fields in the offline plan; it does not establish charged ownership
+or backing-region accounting, correspondence to owned endpoint/peak slabs, a
+persistent component-coverage descriptor, or exact execution/custody and
+installation. The offline processor executes the lowered plan on supplied
+buffers; that offline execution is not target installation or activation.
 
 For the same admitted graph ID/revision and candidate node identities, derive
 evidence **as lowering creates the components**, tied to the actual plan and
@@ -216,8 +225,11 @@ if counts and an appended `{A, B}` set match. Also refuse if both
 correspondences claim the same actual component for `A`, leaving `B` uncovered,
 even when two records and valid-looking ranges are supplied. Likewise, a
 correct node ID with another node's port, channel range, row or terms is not
-correspondence. These refusals concern the proposed proof; they do not assert
-that today's count check detects such adversarial evidence.
+correspondence. These refusals describe the proposed proof obligation. The
+current validator does reject malformed plan endpoint identities and
+missing/duplicate node coverage in its tested cases, but those checks are not a
+persistent proof descriptor or qualification of owned components, backing,
+execution or installation.
 
 ## 4. Installation and outcome semantics
 
@@ -289,21 +301,26 @@ and empty output/peak geometry. An installed flag, node sets, zero-frame-only
 processing or caller-buffer evaluation is not installation evidence. Occupied
 replacement evidence must wait for the separate decision in section 5.
 
-Future compiler-coverage fixtures should inspect the actual lowered components
-and ranges for connected, disconnected, mute-only and empty graphs, including
-empty conversion rows and repeated terms, and independently compare them to
-the admitted nodes and edges. Adversarial fixture evidence should show refusal
-of equal-count wrong-node and duplicate-component correspondences, wrong
-identity or range/row/term assignments, missing work and extra work. Such
-observations qualify only the proposed correspondence proof; installation
-selection and subsequent use require the separate evidence above.
+The #890 compiler-consistency regression tests inspect actual offline-plan
+fields and exercise refusal of malformed endpoint identities/positions,
+missing or duplicate endpoint coverage, mute geometry, row descriptors and
+reordered or duplicated terms. They do not establish the proposed complete
+component-coverage proof or its ownership/backing/slab and exact-execution
+claims. Future fixtures for that proof must independently compare compiler-
+derived coverage to admitted nodes and edges, including connected,
+disconnected, mute-only and empty graphs, empty conversion rows and repeated
+terms; test missing/extra work and adversarial wrong-component assignments;
+and verify any claimed owned ranges. Those observations qualify only the
+proposed correspondence proof; installation selection and subsequent use
+require the separate evidence above.
 
-A possible later sequence is compiler-derived coverage in
-`AudioRoutingCompiler.swift`, concrete owned storage and isolated installation/use
-in the existing `HostAuthority.swift` custody boundary, then separately reviewed
-successful-binding and cleanup increments. Names, file placement and fixture
-interfaces remain proposals, **not implementation authorization**. Qualification
-must not use a supplied backend or expose a resource/borrow to make fixtures pass.
+A possible later sequence is a persistent full compiler-derived coverage proof
+beyond the existing offline-plan consistency validator, concrete owned storage
+and isolated installation/use in the existing `HostAuthority.swift` custody
+boundary, then separately reviewed successful-binding and cleanup increments.
+Names, file placement and fixture interfaces remain proposals, **not
+implementation authorization**. Qualification must not use a supplied backend
+or expose a resource/borrow to make fixtures pass.
 Even a qualified primitive does not authorize installing production candidates
 during prepare or publishing from the never-published lifecycle.
 
