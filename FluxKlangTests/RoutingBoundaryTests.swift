@@ -17,6 +17,77 @@ struct RoutingBoundaryTests {
 }
 
 extension RoutingBoundaryTests {
+    @Test func planCorrespondenceRejectsInvalidInputOffsetsAndExtraOutputRows() throws {
+        var documents = Fixtures.documents()
+        documents.graph.nodes.removeAll { $0.kind == .roleOutput }
+        documents.graph.edges = []
+        documents.project.roles.removeAll { $0.direction == .output }
+        try Fixtures.appendEndpoint(to: &documents, input: true, suffix: "second")
+        let inputPlan = try Fixtures.compile(documents)
+        var inputs = inputPlan.layout.inputs
+        let firstIndex = try #require(inputs.indices.first)
+        let secondIndex = try #require(inputs.indices.dropFirst().first)
+        let first = inputs[firstIndex]
+        let second = inputs[secondIndex]
+        for offset in [first.firstChannel, second.firstChannel + second.channels] {
+            inputs = inputPlan.layout.inputs
+            inputs[secondIndex] = AudioRoutingEndpoint(
+                node: second.node, port: second.port, role: second.role, channels: second.channels,
+                firstChannel: offset
+            )
+            let malformed = try Fixtures.replacingPlan(inputPlan, in: documents, inputs: inputs)
+            #expect(throws: AudioRoutingPreparationError.unsupported) {
+                try Fixtures.validatePlan(malformed, in: documents)
+            }
+        }
+
+        let outputDocuments = Fixtures.documents()
+        let outputPlan = try Fixtures.compile(outputDocuments)
+        var rows = outputPlan.rows
+        rows.append(PreparedAudioRoutingPlan.Row(
+            firstTerm: outputPlan.terms.count, termCount: 0, isIdentity: false
+        ))
+        let extraRow = try Fixtures.replacingPlan(outputPlan, in: outputDocuments, rows: rows)
+        #expect(throws: AudioRoutingPreparationError.unsupported) {
+            try Fixtures.validatePlan(extraRow, in: outputDocuments)
+        }
+    }
+
+    @Test func planCorrespondenceRejectsIdentityFlagsOnConvertedMuteAndOutputRows() throws {
+        let documents = Fixtures.muteDocuments(false, inputMap: [[0], []], outputMap: [[0], []])
+        let plan = try Fixtures.compile(documents)
+        let mute = try #require(plan.mute)
+        #expect(mute.rows.map(\.termCount) == [1, 0])
+        #expect(plan.rows.map(\.termCount) == [1, 0])
+
+        for index in mute.rows.indices {
+            let row = mute.rows[index]
+            var rows = mute.rows
+            rows[index] = PreparedAudioRoutingPlan.Row(
+                firstTerm: row.firstTerm, termCount: row.termCount, isIdentity: true
+            )
+            let malformedMute = PreparedAudioRoutingPlan.Mute(
+                node: mute.node, inputPort: mute.inputPort, outputPort: mute.outputPort, muted: mute.muted,
+                inputOffset: mute.inputOffset, resultOffset: mute.resultOffset, rows: rows
+            )
+            let malformed = try Fixtures.replacingPlan(plan, in: documents, mute: malformedMute)
+            #expect(throws: AudioRoutingPreparationError.unsupported) {
+                try Fixtures.validatePlan(malformed, in: documents)
+            }
+        }
+        for index in plan.rows.indices {
+            let row = plan.rows[index]
+            var rows = plan.rows
+            rows[index] = PreparedAudioRoutingPlan.Row(
+                firstTerm: row.firstTerm, termCount: row.termCount, isIdentity: true
+            )
+            let malformed = try Fixtures.replacingPlan(plan, in: documents, rows: rows)
+            #expect(throws: AudioRoutingPreparationError.unsupported) {
+                try Fixtures.validatePlan(malformed, in: documents)
+            }
+        }
+    }
+
     @Test func upstreamOverflowInUnusedMuteChannelRefusesEvenMutedOrWithoutConsumers() throws {
         for muted in [false, true] {
             for consumers in [false, true] {
