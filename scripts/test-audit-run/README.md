@@ -216,16 +216,54 @@ fresh identical observations. Neither writes output. The separate closed schema
 (including schema 3) and #707 untouched. It is **provider/job-reported observation,
 not authenticated provenance**, a receipt, reusable authority, or iOS qualification.
 
-The future reviewed no-launch runner must supply code adapters, not commands or
-serialized authority: a closed context projection and a bounded read-only reader
-returning `(kind, raw_bytes)` for a requested 40-lowercase-hex Git object ID.
-**No adapters, CLI, hosted integration, or trigger changes are supplied here.**
-Adapters must observe the current checkout HEAD and actual GitHub event/job
-context, bound their own reads before returning, and must not read credentials,
-dump environments, execute data, fetch objects, honor replacement objects, or
-consult candidate toolchain paths. Missing objects refuse; no fetch/repair occurs.
-Git hashes validate supplied object content, not the honesty of these adapters,
-current remote refs, or GitHub/provider authenticity.
+`github_context.read_context(environment, event_bytes, checkout_sha)` supplies
+only the context projection. All inputs are explicit: it does not read ambient
+environment, files, Git, or the network, and `checkout_sha` is a caller-reported
+string, **not a verified HEAD**. The first argument must be a plain dictionary
+with exactly these keys (not an environment dump):
+
+```text
+GITHUB_REPOSITORY GITHUB_EVENT_NAME GITHUB_SHA GITHUB_REF
+GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_JOB
+RUNNER_NAME RUNNER_ENVIRONMENT RUNNER_OS RUNNER_ARCH
+GITHUB_WORKFLOW_REF GITHUB_WORKFLOW_SHA
+```
+
+Each value is a nonempty string of at most 512 characters, except the workflow
+pair may both be `None` when unavailable. IDs are canonical positive ASCII
+decimal integers at most 2^63-1. The workflow path is derived from the reported
+repository-qualified workflow ref; the envelope's existing closed validation
+checks the complete context. No workflow SHA is inferred from checkout SHA.
+The second argument is UTF-8 JSON bytes, at most 1 MiB, with duplicate keys and
+nonfinite numbers refused, including in otherwise ignored provider fields.
+JSON integer tokens are limited to 32 characters and floating tokens to 128;
+malformed or excessively nested input refuses. Additional event fields are
+ignored, not projected. Required `repository.full_name` must match the reported
+repository. Push requires matching `ref` and `after`; workflow_dispatch requires
+matching `ref`. Both refuse non-null PR identity. Pull request requires matching
+top-level and PR numbers, base repository identity, and head/base SHA fields.
+Its reported merge SHA comes only from `GITHUB_SHA` and must match the separately
+supplied checkout SHA; the payload's `merge_commit_sha` is not substituted. The
+envelope's raw commit parent check remains necessary to check the reported
+merge/base/head relationship.
+Unsupported events and missing, malformed or conflicting fields refuse.
+
+A future reviewed runner must obtain fresh explicit inputs for **each** envelope
+snapshot; reusing a frozen projection cannot detect later context changes.
+The caller owns safe bounded event-file reading, path handling and selection of
+the reported checkout SHA; this adapter supplies none of those operations.
+Reported values are not authenticated, and the projection alone verifies
+neither checkout nor source and confers no launch authority.
+
+The future runner also needs a separately reviewed bounded read-only Git-object
+reader returning `(kind, raw_bytes)` for a requested 40-lowercase-hex Git object
+ID. **No Git adapter, CLI, output writer, hosted integration, or trigger changes
+are supplied here.** That reader must observe actual checkout HEAD, bound its
+own reads before returning, and must not read credentials, dump environments,
+execute data, fetch objects, honor replacement objects, or consult candidate
+toolchain paths. Missing objects refuse; no fetch/repair occurs. Git hashes
+validate supplied object content, not adapter honesty, current remote refs, or
+GitHub/provider authenticity.
 
 The exact context keys are `repository`, `event_name`, `event_sha`, `event_ref`,
 `checkout_sha`, `pull_request`, `workflow`, `run_id`, `run_attempt`, `job`,
@@ -250,9 +288,10 @@ or proof that a ref currently resolves to it is made.
 The fixed executing-source allowlist is **only** `provider_attribution.py` and
 `ios_runtime.py` under `scripts/test-audit-run`. Their SHA256 and Git blob IDs
 are recorded after bounded regular-file reads match the checkout tree blobs.
-This does not hash a future runner, adapters, Python/stdlib, or loaded code in
-memory; reviewing that runner and its own fixed source allowlist is still a
-required follow-up, not a claim this library makes. The library checks context,
+This does not hash `github_context.py`, a future runner, the Git adapter,
+Python/stdlib, or loaded code in memory; reviewing that runner and its own fixed
+source allowlist is still a required follow-up, not a claim this library makes.
+The library checks context,
 Git objects and sources before/after the existing provider verifier, which
 itself rechecks its runtime observations. These snapshots are not atomic custody
 or protection against a hostile provider/job.
@@ -271,6 +310,13 @@ Mock-only check (all process/native and source-read operations mocked):
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_provider_attribution.py'
+```
+
+Context fixture check (no event files or native tools):
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_github_context.py'
 ```
 
 ## Explicit opt-in retention requests
