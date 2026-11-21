@@ -173,6 +173,27 @@ class PackAcquireTests(unittest.TestCase):
                 self.paths[1].write_bytes(index)
                 self.refused()
 
+    def test_valid_structure_with_wrong_object_identity_refuses(self):
+        original = fixtures.object_id("blob", b"a")
+        pack, index = fixtures.fixture([(original, fixtures.plain(3, b"a"))])
+        pack_id = pack[-20:].hex()
+        pack_path = self.directory / f"pack-{pack_id}.pack"
+        index_path = self.directory / f"pack-{pack_id}.idx"
+        pack_path.write_bytes(pack)
+        index_path.write_bytes(index)
+        self.assertEqual(reader.acquire_pair(str(self.root), pack_id), (pack, index))
+
+        # Keep the name's first byte (fanout), sorting, CRC, offsets and pack
+        # identity intact; recompute the index checksum after changing the name.
+        altered = original[:-1] + bytes([original[-1] ^ 1])
+        names = 1032
+        bad = fixtures.rehash(index[:names] + altered + index[names + 20:])
+        index_path.write_bytes(bad)
+        with self.assertRaises(reader.Refusal) as raised:
+            reader.acquire_pair(str(self.root), pack_id)
+        self.assertIsInstance(raised.exception.__cause__, ValueError)
+        self.assertEqual(str(raised.exception.__cause__), "object identity mismatch")
+
     def test_short_reads_and_both_files_checked_after_pair_read(self):
         actual_read = os.read
         sizes = []
