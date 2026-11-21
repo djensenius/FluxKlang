@@ -424,6 +424,167 @@ class AttributionTests(unittest.TestCase):
                 with self.assertRaises(runtime.Refusal):
                     attribution._Objects(self.git.read).file(tree, "file")
 
+    def test_grouped_sources_match_sequential_with_shared_tree_reads(self):
+        paths = tuple(reversed(attribution.SOURCES))
+        grouped_objects = attribution._Objects(self.git.read)
+        grouped = grouped_objects.files(self.tree, paths)
+        grouped_requests = self.git.requests[:]
+        self.git.requests.clear()
+        sequential_objects = attribution._Objects(self.git.read)
+        sequential = {path: sequential_objects.file(self.tree, path) for path in paths}
+        self.assertEqual(grouped, sequential)
+        self.assertEqual(list(grouped), sorted(paths))
+        self.assertEqual(len(grouped_requests), 5)  # three trees, two blobs
+        self.assertEqual(len(self.git.requests), 8)
+        self.assertEqual(grouped_objects.count, 5)
+        self.assertEqual(sequential_objects.count, 8)
+        # A new call re-reads the trees and each blob, including identical blob IDs.
+        blob = self.git.add("blob", b"same")
+        root = self.git.tree({"a": ("100644", blob), "b": ("100755", blob)})
+        self.git.requests.clear()
+        objects = attribution._Objects(self.git.read)
+        self.assertEqual(objects.files(root, ["b", "a"]),
+                         {"a": (blob, b"same"), "b": (blob, b"same")})
+        self.assertEqual(self.git.requests, [root, blob, blob])
+        self.git.objects[blob] = ("blob", b"changed")
+        with self.assertRaisesRegex(runtime.Refusal, "identity mismatch"):
+            objects.files(root, ["a", "b"])
+        self.assertEqual(self.git.requests, [root, blob, blob, root, blob])
+
+    def test_grouped_sources_reject_bad_paths_before_reading(self):
+        bad_inputs = (
+            None, "file", (), [], ["a"] * (attribution.OBJECT_COUNT + 1),
+            ["a", "a"], ["a", "dir/b"], ["dir/a", "other/b"],
+            ["/a"], ["a/"], ["a//b"], ["./a"], ["a/../b"],
+            ["a\\b"], ["a\nb"], ["é"], [True], ["x" * 256],
+            ["/".join(["a"] * (attribution.OBJECT_COUNT + 1))],
+            ["/".join(["x" * 255] * 17)],
+        )
+        for paths in bad_inputs:
+            with self.subTest(paths=str(paths)[:80]):
+                self.git.requests.clear()
+                with self.assertRaises(runtime.Refusal):
+                    attribution._Objects(self.git.read).files(self.tree, paths)
+                self.assertEqual(self.git.requests, [])
+
+    def test_grouped_sources_validate_all_tree_entries_and_modes(self):
+        blob = self.git.add("blob", b"data")
+        entry = b"100644 file\0" + bytes.fromhex(blob)
+        invalid = (
+            (entry + entry, "unsupported/ambiguous"),
+            (entry + b"120000 other\0" + bytes.fromhex(blob), "unsupported/ambiguous"),
+            (entry + b"100644 other\0short", "malformed Git tree"),
+            (entry + b"100644 bad\nname\0" + bytes.fromhex(blob), "unsupported/ambiguous"),
+            (b"".join(b"100644 " + str(i).encode() + b"\0" + bytes.fromhex(blob)
+                      for i in range(1025)), "entry count"),
+        )
+        for data, message in invalid:
+            with self.subTest(message=message):
+                tree = self.git.add("tree", data)
+                with self.assertRaisesRegex(runtime.Refusal, message):
+                    attribution._Objects(self.git.read).files(tree, ["file"])
+        duplicate_parent = self.git.add("tree", entry + entry)
+        with self.assertRaisesRegex(runtime.Refusal, "unsupported/ambiguous"):
+            attribution._Objects(self.git.read).files(duplicate_parent, ["file/child"])
+        directory = self.git.tree({"file": ("100644", blob)})
+        root = self.git.tree({"dir": ("40000", directory), "regular": ("100644", blob)})
+        for paths, message in (
+            (["missing/file"], "unavailable"),
+            (["regular/file"], "regular file"),
+            (["dir/missing"], "unavailable"),
+            (["dir"], "regular file"),
+            (["dir/file", "dir/missing"], "unavailable"),
+        ):
+            with self.subTest(paths=paths):
+                with self.assertRaisesRegex(runtime.Refusal, message):
+                    attribution._Objects(self.git.read).files(root, paths)
+
+    def test_grouped_sources_object_identity_and_budgets(self):
+        blob = self.git.add("blob", b"x" * attribution.OBJECT_LIMIT)
+        root = self.git.tree({str(i): ("100644", blob) for i in range(5)})
+        with self.assertRaisesRegex(runtime.Refusal, "total size"):
+            attribution._Objects(self.git.read).files(root, [str(i) for i in range(5)])
+        small = self.git.add("blob", b"")
+        directory = self.git.tree({str(i): ("100644", small) for i in range(31)})
+        root = self.git.tree({"dir": ("40000", directory)})
+        with self.assertRaisesRegex(runtime.Refusal, "count limit"):
+            attribution._Objects(self.git.read).files(
+                root, [f"dir/{i}" for i in range(31)])
+        root = self.git.tree({"file": ("100644", small)})
+        for oid, replacement, message in (
+            (root, ("tree", b"tampered"), "identity mismatch"),
+            (small, ("blob", b"tampered"), "identity mismatch"),
+            (small, ("tree", b""), "shape/size"),
+            (small, ("blob", b"x" * (attribution.OBJECT_LIMIT + 1)), "shape/size"),
+        ):
+            with self.subTest(message=message):
+                saved = self.git.objects[oid]
+                self.git.objects[oid] = replacement
+                with self.assertRaisesRegex(runtime.Refusal, message):
+                    attribution._Objects(self.git.read).files(root, ["file"])
+                self.git.objects[oid] = saved
+        with self.assertRaises(runtime.Refusal):
+            attribution._Objects(self.git.read).files("bad", ["file"])
+        del self.git.objects[small]
+        with self.assertRaisesRegex(runtime.Refusal, "observation unavailable"):
+            attribution._Objects(self.git.read).files(root, ["file"])
+
+    def test_grouped_sources_inclusive_and_preconsumed_count_budget(self):
+        blob = self.git.add("blob", b"")
+        for preconsumed, files, succeeds in ((0, 31, True), (1, 30, True), (2, 30, False)):
+            with self.subTest(preconsumed=preconsumed, files=files):
+                paths = [str(i) for i in range(files)]
+                root = self.git.tree({path: ("100644", blob) for path in paths})
+                objects = attribution._Objects(self.git.read)
+                self.git.requests.clear()
+                for _ in range(preconsumed):
+                    objects.get(blob, "blob")
+                if succeeds:
+                    self.assertEqual(objects.files(root, paths),
+                                     {path: (blob, b"") for path in paths})
+                    self.assertEqual(objects.count, attribution.OBJECT_COUNT)
+                else:
+                    with self.assertRaisesRegex(runtime.Refusal, "count limit"):
+                        objects.files(root, paths)
+                    self.assertEqual(objects.count, attribution.OBJECT_COUNT + 1)
+                self.assertEqual(len(self.git.requests), attribution.OBJECT_COUNT)
+
+    def test_grouped_sources_inclusive_and_preconsumed_byte_budget(self):
+        limit = 1024 * 1024
+        large_data = b"x" * attribution.OBJECT_LIMIT
+        large = self.git.add("blob", large_data)
+        # Tree size is independent of blob IDs; reserve one byte for preconsumption.
+        root = self.git.tree({str(i): ("100644", large) for i in range(4)})
+        tree_size = len(self.git.objects[root][1])
+        tail_data = b"y" * (limit - 3 * len(large_data) - tree_size - 1)
+        tail = self.git.add("blob", tail_data)
+        root = self.git.tree({str(i): ("100644", large if i < 3 else tail)
+                              for i in range(4)})
+        expected = {str(i): (large, large_data) if i < 3 else (tail, tail_data)
+                    for i in range(4)}
+        for prior, succeeds in ((b"", True), (b"p", True), (b"pp", False)):
+            with self.subTest(preconsumed=len(prior)):
+                objects = attribution._Objects(self.git.read)
+                objects.get(self.git.add("blob", prior), "blob")
+                if succeeds:
+                    self.assertEqual(objects.files(root, list(expected)), expected)
+                    self.assertEqual(objects.total, limit - 1 + len(prior))
+                else:
+                    with self.assertRaisesRegex(runtime.Refusal, "total size"):
+                        objects.files(root, list(expected))
+                    self.assertEqual(objects.total, limit + 1)
+                self.assertEqual(objects.count, 6)
+
+    def test_observe_and_validate_keep_sequential_source_call_path(self):
+        with mock.patch.object(attribution._Objects, "files",
+                               side_effect=AssertionError("grouped path not integrated")), \
+                mock.patch.object(attribution._Objects, "file",
+                                  autospec=True, side_effect=attribution._Objects.file) as file:
+            data = self.observe()
+            self.validate(data)
+        self.assertEqual([call.args[2] for call in file.call_args_list],
+                         (list(attribution.SOURCES) + [self.context["workflow"]["path"]]) * 4)
+
     def test_git_commit_ambiguous_headers_and_parent_count(self):
         for data in (b"not a commit", f"tree {self.tree}\nparent bad\n\nx".encode(),
                      (f"tree {self.tree}\n" + "parent " + "1" * 40 + "\n"
