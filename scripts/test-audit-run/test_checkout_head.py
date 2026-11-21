@@ -28,6 +28,22 @@ class CheckoutHeadTests(unittest.TestCase):
     def observe(self, expected=FIRST):
         return observer.observe_checkout_head(str(self.root), expected)
 
+    def tracked_open(self, actual_open, opened, heads):
+        def track(path, flags, mode=0o777, *, dir_fd=None):
+            descriptor = actual_open(path, flags, mode, dir_fd=dir_fd)
+            opened.append(descriptor)
+            if path == "HEAD":
+                heads.append(descriptor)
+            return descriptor
+
+        return track
+
+    def assert_descriptors_closed(self, descriptors):
+        for descriptor in descriptors:
+            with self.subTest(descriptor=descriptor):
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
     def assert_refused(self, root=None, expected=FIRST):
         with self.assertRaises(observer.Refusal):
             observer.observe_checkout_head(
@@ -39,6 +55,65 @@ class CheckoutHeadTests(unittest.TestCase):
         self.write_head(SECOND)
         self.assertEqual(self.observe(SECOND), SECOND)
         self.assert_refused()
+
+    def test_read_error_refuses_and_closes_all_descriptors(self):
+        actual_open = os.open
+        opened = []
+        heads = []
+
+        with mock.patch.object(
+                observer.os, "open",
+                side_effect=self.tracked_open(actual_open, opened, heads)) as open_patch:
+            supported = observer.os.supports_dir_fd | {open_patch}
+            with mock.patch.object(observer.os, "supports_dir_fd", supported):
+                with mock.patch.object(
+                        observer.os, "read",
+                        side_effect=OSError("injected read error")):
+                    with self.assertRaises(observer.Refusal) as refusal:
+                        self.observe()
+
+        self.assertEqual(str(refusal.exception.__cause__), "injected read error",
+                         repr(refusal.exception))
+        self.assertEqual(len(heads), 1)
+        self.assert_descriptors_closed(opened)
+
+    def test_head_fstat_error_refuses_and_closes_all_descriptors(self):
+        actual_open = os.open
+        actual_fstat = os.fstat
+        opened = []
+        heads = []
+
+        def failing_head_fstat(descriptor):
+            if descriptor in heads:
+                raise OSError("injected fstat error")
+            return actual_fstat(descriptor)
+
+        with mock.patch.object(
+                observer.os, "open",
+                side_effect=self.tracked_open(actual_open, opened, heads)) as open_patch:
+            supported = observer.os.supports_dir_fd | {open_patch}
+            with mock.patch.object(observer.os, "supports_dir_fd", supported):
+                with mock.patch.object(observer.os, "fstat", side_effect=failing_head_fstat):
+                    with self.assertRaises(observer.Refusal) as refusal:
+                        self.observe()
+
+        self.assertEqual(str(refusal.exception.__cause__), "injected fstat error",
+                         repr(refusal.exception))
+        self.assertEqual(len(heads), 1)
+        self.assert_descriptors_closed(opened)
+
+    def test_short_sequential_reads_return_canonical_head(self):
+        actual_read = os.read
+        read_calls = []
+
+        def short_read(descriptor, size):
+            read_calls.append(size)
+            return actual_read(descriptor, min(size, 7))
+
+        with mock.patch.object(observer.os, "read", side_effect=short_read):
+            self.assertEqual(self.observe(), FIRST)
+
+        self.assertGreater(len(read_calls), 1)
 
     def test_rejects_symbolic_and_malformed_head_content(self):
         for content in (
