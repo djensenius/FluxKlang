@@ -15,6 +15,7 @@ import struct
 import subprocess
 import sys
 import time
+from typing import TypedDict
 
 
 RUNTIME = "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
@@ -25,6 +26,45 @@ REQUIREMENT = '=identifier "com.apple.libMainThreadChecker" and anchor apple'
 OUTPUT_LIMIT = 2 * 1024 * 1024
 TIMEOUT = 30
 ENV = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
+
+
+class ProviderXcodeObservation(TypedDict):
+    developer_directory: str
+    version: str
+    build: str
+    simulator_sdk_version: str
+    xcodebuild_path: str
+    xcodebuild_file_identity: list
+    xcodebuild_apple_anchor_check: str
+    simctl_path: str
+    simctl_file_identity: list
+    simctl_apple_anchor_check: str
+
+
+class ProviderRuntimeObservationDetails(TypedDict):
+    identifier: str
+    version: str
+    build: str
+    available: bool
+    bundle_path: str
+    runtime_root: str
+
+
+class ProviderCheckerObservation(TypedDict):
+    canonical_path: str
+    accepted_paths: list
+    size: int
+    sha256: str
+    architecture: str
+    signature_requirement: str
+    signature_check: str
+
+
+class ProviderRuntimeObservation(TypedDict):
+    schema: str
+    xcode: ProviderXcodeObservation
+    runtime: ProviderRuntimeObservationDetails
+    checker: ProviderCheckerObservation
 
 
 class Refusal(ValueError):
@@ -278,3 +318,188 @@ def verified_checker():
             require(_alias(canonical) == alias, "standard alias changed")
     except OSError as error:
         raise Refusal("live runtime verification unavailable") from error
+
+
+def _provider_inventory():
+    """Observe the fixed toolchain under the separately trusted-provider model.
+
+    These observations are not independent provenance or custody evidence. The
+    caller explicitly trusts the disposable hosted image and reviewed job.
+    """
+    require(sys.platform == "darwin" and os.uname().machine == "arm64",
+            "provider-trusted runtime requires Darwin arm64")
+    developer = DEVELOPER
+    xcodebuild = developer + "/usr/bin/xcodebuild"
+    simctl = developer + "/usr/bin/simctl"
+    tools = {}
+    for tool in (xcodebuild, simctl):
+        path = _path(tool)
+        info = os.stat(path, follow_symlinks=False)
+        require(stat.S_ISREG(info.st_mode), "fixed Xcode tool is not a regular file")
+        tools[path] = _identity(info)
+        _command(["/usr/bin/codesign", "--verify", "--strict", "-R", "=anchor apple", path])
+    version = _command([xcodebuild, "-version"], developer)
+    require(version == "Xcode 27.1\nBuild version 27A9275",
+            "unreviewed Xcode version/build observation")
+    xcode_version, build_line = version.splitlines()
+    build_prefix = "Build version "
+    require(build_line.startswith(build_prefix), "malformed Xcode build observation")
+    xcode_build = build_line[len(build_prefix):]
+    sdk_version = _command(
+        [xcodebuild, "-version", "-sdk", "iphonesimulator", "SDKVersion"], developer,
+    )
+    require(sdk_version == "27.1", "unreviewed simulator SDK observation")
+    try:
+        inventory = json.loads(
+            _command([simctl, "list", "runtimes", "--json"], developer),
+            object_pairs_hook=_json_pairs,
+        )
+    except (ValueError, TypeError) as error:
+        raise Refusal("invalid provider-trusted runtime inventory") from error
+    require(type(inventory) is dict and type(inventory.get("runtimes")) is list
+            and all(type(item) is dict for item in inventory["runtimes"]),
+            "invalid provider-trusted runtime inventory shape")
+    selected = [item for item in inventory["runtimes"] if item.get("identifier") == RUNTIME]
+    require(len(selected) == 1, "provider-trusted runtime missing or ambiguous")
+    runtime = selected[0]
+    require(runtime.get("version") == "27.0" and runtime.get("buildversion") == "24A434"
+            and runtime.get("isAvailable") is True,
+            "unreviewed/unavailable provider-trusted runtime observation")
+    bundle = _path(runtime.get("bundlePath"))
+    root = _path(runtime.get("runtimeRoot"))
+    require(bundle.startswith("/private/var/") and bundle.endswith("/iOS 27.0.simruntime")
+            and root == bundle + "/Contents/Resources/RuntimeRoot",
+            "unexpected provider-trusted runtime bundle/root relationship")
+    require({path: _identity(os.stat(path, follow_symlinks=False)) for path in tools} == tools,
+            "fixed Xcode tool changed during provider-trusted inventory")
+    return {
+        "developer_directory": developer,
+        "xcodebuild_path": xcodebuild,
+        "xcodebuild_identity": tools[xcodebuild],
+        "xcodebuild_version": xcode_version,
+        "xcodebuild_build": xcode_build,
+        "simulator_sdk_version": sdk_version,
+        "xcodebuild_apple_anchor_check": "passed",
+        "simctl_path": simctl,
+        "simctl_identity": tools[simctl],
+        "simctl_apple_anchor_check": "passed",
+        "runtime": {
+            "identifier": runtime["identifier"],
+            "version": runtime["version"],
+            "build": runtime["buildversion"],
+            "available": runtime["isAvailable"],
+            "bundle_path": bundle,
+            "runtime_root": root,
+        },
+    }
+
+
+def _provider_file(path, limit):
+    """Read only a bounded, independently derived fixed path; not custody proof."""
+    descriptor = None
+    try:
+        path = _path(path)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        info = os.fstat(descriptor)
+        require(stat.S_ISREG(info.st_mode) and info.st_size <= limit,
+                "provider-trusted runtime file shape/size mismatch")
+        identity = _identity(info)
+        data = _read(descriptor, limit)
+        require(_identity(os.fstat(descriptor)) == identity and
+                _identity(os.stat(path, follow_symlinks=False)) == identity,
+                "provider-trusted runtime file changed during observation")
+        return data, identity
+    except OSError as error:
+        raise Refusal("provider-trusted runtime file unavailable") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _provider_alias(canonical):
+    """Observe only the standard /var -> /private/var alias."""
+    try:
+        info = os.lstat("/var")
+        require(stat.S_ISLNK(info.st_mode) and
+                os.readlink("/var") in ("private/var", "/private/var"),
+                "standard /var alias unavailable")
+        private = os.lstat("/private")
+        target = os.lstat("/private/var")
+        require(stat.S_ISDIR(private.st_mode) and stat.S_ISDIR(target.st_mode) and
+                _identity(os.stat("/var"))[:2] == _identity(target)[:2],
+                "standard /var alias identity mismatch")
+        alias = canonical[len("/private"):]
+        require(_identity(os.stat(alias))[:2] ==
+                _identity(os.stat(canonical, follow_symlinks=False))[:2],
+                "checker alias identity mismatch")
+        return alias, _identity(info), _identity(private)[:5], _identity(target)[:5]
+    except OSError as error:
+        raise Refusal("standard /var alias unavailable") from error
+
+
+def _provider_snapshot():
+    """Bounded fixed-path observations; trust, not these checks, is the boundary."""
+    inventory = _provider_inventory()
+    bundle = inventory["runtime"]["bundle_path"]
+    root = inventory["runtime"]["runtime_root"]
+    canonical = _path(root + "/usr/lib/libMainThreadChecker.dylib")
+    library, identity = _provider_file(canonical, LIBRARY_SIZE)
+    require(len(library) == LIBRARY_SIZE and
+            hashlib.sha256(library).hexdigest() == LIBRARY_SHA256,
+            "unreviewed checker digest observation")
+    require(library[:8] == struct.pack("<II", 0xFEEDFACF, 0x0100000C),
+            "checker observation must be thin arm64 Mach-O")
+    _command(["/usr/bin/codesign", "--verify", "--strict", "-R", REQUIREMENT, canonical])
+    require(_provider_file(canonical, LIBRARY_SIZE) == (library, identity),
+            "checker changed during provider-trusted signature observation")
+    plist_bytes, plist_identity = _provider_file(bundle + "/Contents/Info.plist", OUTPUT_LIMIT)
+    try:
+        info = plistlib.loads(plist_bytes)
+    except (ValueError, plistlib.InvalidFileException) as error:
+        raise Refusal("invalid provider-trusted runtime Info.plist observation") from error
+    require(type(info) is dict and info.get("CFBundleIdentifier") == RUNTIME,
+            "provider-trusted runtime plist identifier mismatch")
+    alias = _provider_alias(canonical)
+    record: ProviderRuntimeObservation = {
+        "schema": "ios-provider-trusted-runtime-observation-v1",
+        "xcode": {
+            "developer_directory": inventory["developer_directory"],
+            "version": inventory["xcodebuild_version"],
+            "build": inventory["xcodebuild_build"],
+            "simulator_sdk_version": inventory["simulator_sdk_version"],
+            "xcodebuild_path": inventory["xcodebuild_path"],
+            "xcodebuild_file_identity": list(inventory["xcodebuild_identity"]),
+            "xcodebuild_apple_anchor_check": inventory["xcodebuild_apple_anchor_check"],
+            "simctl_path": inventory["simctl_path"],
+            "simctl_file_identity": list(inventory["simctl_identity"]),
+            "simctl_apple_anchor_check": inventory["simctl_apple_anchor_check"],
+        },
+        "runtime": inventory["runtime"],
+        "checker": {
+            "canonical_path": canonical,
+            "accepted_paths": [canonical, alias[0]],
+            "size": len(library),
+            "sha256": hashlib.sha256(library).hexdigest(),
+            "architecture": "arm64",
+            "signature_requirement": REQUIREMENT,
+            "signature_check": "passed",
+        },
+    }
+    return record, canonical, alias[0], identity, library, plist_identity, plist_bytes, alias
+
+
+@contextmanager
+def provider_verified_checker():
+    """Yield fixed checker spellings under an explicit hosted-provider trust assumption.
+
+    Filesystem, version, digest and signature results are observations on the
+    trusted image, not independent provenance or defense against hostile job
+    code/provider compromise. This remains a separate, lower-assurance profile.
+    """
+    try:
+        before = _provider_snapshot()
+        yield (before[1], before[2]), before[0]
+        require(_provider_snapshot() == before,
+                "provider-trusted runtime/toolchain observation changed")
+    except OSError as error:
+        raise Refusal("provider-trusted runtime verification unavailable") from error

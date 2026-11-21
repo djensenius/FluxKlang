@@ -143,6 +143,70 @@ guards, environment delivery, sandbox access, receipts, or #60 qualification.
 The existing four profiles remain metadata-only and retain their original
 inputs, outputs, CLI claims and platform independence.
 
+## Explicit provider-trusted lower-assurance runtime profile
+
+`ios-simulator-isolated-unit-ui-xcode27.1-runtime27.0-mtc-provider-trusted-v1`
+is a distinct source-only preparation/validation profile. It uses the same
+closed iOS input metadata, fixed Xcode 27.1 build `27A9275`, simulator SDK
+27.1, iOS 27.0 runtime build `24A434`, checker digest, Apple-signature
+requirement, and exact ordered MainThreadChecker DYLD values as the strict
+runtime-backed profile above. It accepts only the inventory-derived fixed
+canonical checker path or its standard `/var` spelling; input strings never
+select paths for filesystem or tool probes. Unknown/ambiguous identities,
+runtime entries, paths, metadata, or checker values are refused. Tool output
+and reads are bounded, and the fixed observations are rechecked on exit.
+
+Its provider-only intent field `provider_observation` uses the closed
+`ios-provider-trusted-runtime-observation-v1` schema. It records only values
+this preparer observes: fixed Xcode path/version/build, SDK version, Xcode tool
+file metadata and Apple-anchor check results, the selected runtime's exact
+inventory identity/version/build/availability/bundle paths, and the checker
+path/accepted spelling(s), size, SHA256, architecture and signature-check
+result. These remain observations under the stated trust assumption, not
+authenticated provenance. The provider-profile outer intent uses integer
+`schema_version: 3`: the standard intent fields plus exactly
+`provider_observation`. That object has exactly `schema`, `xcode`, `runtime`,
+and `checker`. The nested closed keys are:
+
+- `xcode`: `developer_directory`, `version`, `build`,
+  `simulator_sdk_version`, `xcodebuild_path`, `xcodebuild_file_identity`,
+  `xcodebuild_apple_anchor_check`, `simctl_path`, `simctl_file_identity`,
+  `simctl_apple_anchor_check`.
+- `runtime`: `identifier`, `version`, `build`, `available`, `bundle_path`,
+  `runtime_root`.
+- `checker`: `canonical_path`, `accepted_paths`, `size`, `sha256`,
+  `architecture`, `signature_requirement`, `signature_check`.
+
+The typed `ProviderRuntimeObservation` record in `ios_runtime.py` defines the
+same shape. Validation compares the whole record, rejecting changed versions,
+missing/extra keys, or altered observations. The field is absent from every
+other profile; schemas 1 and 2 remain unchanged.
+
+The assurance boundary is different: this profile explicitly trusts the
+disposable GitHub-hosted VM/image and reviewed job/toolchain. Its ownership,
+version, digest, signature, and filesystem checks are observations on that
+trusted provider environment, **not** independent provenance or proof of
+custody. In particular, rechecking files or observing a matching version or
+digest does not defend against hostile same-job code, mutable tool replacement,
+or a compromised provider. Do not use this profile to make the strict
+profile's stronger filesystem-authority claim; the strict implementation and
+its acceptance/refusal semantics are unchanged.
+
+This preparation slice does **not** claim source commit/head, runner identity,
+workflow/job provenance, or that those values are bound to this observation.
+It intentionally does not trust ambient environment variables to supply them.
+Closing that gap needs a separate, reviewed hosted-runner issue: bind the
+checked-out source/head and workflow/job/run/runner attribution to this typed
+observation, then review a no-launch hosted measurement. Any launch integration
+or test attempt remains a later, separately authorized and reviewed scope.
+
+This profile does not select or verify a simulator device and has no launch
+integration. It is not evidence of #60 isolation, denial of production service
+access, receipt custody/coverage, or production readiness. It changes no
+feature defaults, guards, receipt behavior, CI triggers, provisioning, or
+privileged state and authorizes no hosted dispatch, simulator, test launch,
+hardware access, or credentials.
+
 ## Explicit opt-in retention requests
 
 Two additional closed profiles reuse the corresponding **original pinned input**,
@@ -162,8 +226,8 @@ locations; the third iOS location remains
 changes are allowed. Prepared inputs, preexisting UUIDs, altered input
 lifetimes, filtering, subsets, and layout drift remain refused.
 
-The new intents use integer `schema_version: 2` and add only `attachment_policy`
-to the existing intent fields. Its closed shape is:
+Retention-request intents use integer `schema_version: 2` and add only
+`attachment_policy` to the existing intent fields. Its closed shape is:
 
 ```json
 {

@@ -212,9 +212,18 @@ class RuntimeTests(unittest.TestCase):
     def prepare(self):
         return prepare.prepare(self.source, self.pin, prepare.IOS_RUNTIME_PROFILE)
 
+    def prepare_provider(self):
+        return prepare.prepare(self.source, self.pin, prepare.IOS_PROVIDER_RUNTIME_PROFILE)
+
     def validate(self, record):
         return prepare.validate(self.source, self.pin, prepare.IOS_RUNTIME_PROFILE,
                                 record["output"]["path"], record["intent_path"])
+
+    def validate_provider(self, record):
+        return prepare.validate(
+            self.source, self.pin, prepare.IOS_PROVIDER_RUNTIME_PROFILE,
+            record["output"]["path"], record["intent_path"],
+        )
 
     def test_fresh_alias_and_canonical_round_trip_preserves_generated_fields(self):
         for spelling in (ALIAS, LIBRARY):
@@ -229,11 +238,231 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(self.validate(record), record)
                 self.assertGreater(len(self.host.commands), before)
                 self.assertNotIn("verified", record)
+                self.assertNotIn("provider_observation", record)
+                self.assertEqual(record["schema_version"], 1)
+        self.write(fixture(LIBRARY.replace("fresh-inventory-mount", "untrusted-location")))
+        with self.assertRaisesRegex(
+            ValueError, "UI checker does not match the independently verified runtime",
+        ):
+            self.prepare()
         signatures = [argv for argv, _ in self.host.commands if LIBRARY in argv]
         self.assertTrue(signatures)
         self.assertTrue(all(argv[-2] ==
                             '=identifier "com.apple.libMainThreadChecker" and anchor apple'
                             for argv in signatures))
+        self.assertFalse(self.host.fds)
+
+    def test_provider_trusted_profile_accepts_bounded_observation_separately(self):
+        self.write(fixture())
+        ancestor = self.host.nodes["/Applications"]
+        ancestor.st_mode = stat.S_IFDIR | 0o775
+        ancestor.st_gid = 80
+        record = self.prepare_provider()
+        self.assertEqual(record["schema_version"], 3)
+        self.assertEqual(
+            set(record),
+            {
+                "schema_version", "profile", "qualification", "run_id", "targets",
+                "input", "output", "intent_path", "provider_observation",
+            },
+        )
+        observation = record["provider_observation"]
+        self.assertEqual(observation["schema"], "ios-provider-trusted-runtime-observation-v1")
+        self.assertEqual(set(observation), {"schema", "xcode", "runtime", "checker"})
+        self.assertEqual(
+            set(observation["xcode"]),
+            {
+                "developer_directory", "version", "build", "simulator_sdk_version",
+                "xcodebuild_path", "xcodebuild_file_identity", "xcodebuild_apple_anchor_check",
+                "simctl_path", "simctl_file_identity", "simctl_apple_anchor_check",
+            },
+        )
+        self.assertEqual(
+            set(observation["runtime"]),
+            {"identifier", "version", "build", "available", "bundle_path", "runtime_root"},
+        )
+        self.assertEqual(
+            set(observation["checker"]),
+            {
+                "canonical_path", "accepted_paths", "size", "sha256", "architecture",
+                "signature_requirement", "signature_check",
+            },
+        )
+        self.assertEqual(observation["xcode"]["version"], "Xcode 27.1")
+        self.assertEqual(observation["xcode"]["build"], "27A9275")
+        self.assertEqual(observation["xcode"]["simulator_sdk_version"], "27.1")
+        self.assertEqual(observation["runtime"]["identifier"], runtime.RUNTIME)
+        self.assertEqual(observation["runtime"]["version"], "27.0")
+        self.assertEqual(observation["runtime"]["build"], "24A434")
+        self.assertEqual(observation["checker"]["canonical_path"], LIBRARY)
+        self.assertEqual(observation["checker"]["sha256"], runtime.LIBRARY_SHA256)
+        self.assertEqual(observation["checker"]["accepted_paths"], [LIBRARY, ALIAS])
+        self.assertNotIn("source", observation)
+        self.assertNotIn("head", observation)
+        self.assertNotIn("runner", observation)
+        output = plistlib.loads(Path(record["output"]["path"]).read_bytes())
+        expected = fixture()
+        for target, environment in UUID_PATHS:
+            expected[target][environment][prepare.RUN_KEY] = record["run_id"]
+        self.assertEqual(output, expected)
+        self.assertEqual(self.validate_provider(record), record)
+        # The original strict profile retains its protected-ancestor refusal.
+        with self.assertRaisesRegex(ValueError, "root-owned"):
+            self.prepare()
+        commands = [argv for argv, _ in self.host.commands]
+        self.assertIn(
+            ("/usr/bin/codesign", "--verify", "--strict", "-R", runtime.REQUIREMENT, LIBRARY),
+            commands,
+        )
+        self.assertFalse(self.host.fds)
+
+    def test_provider_inventory_paths_are_bounded_and_non_traversing(self):
+        cases = (
+            ("bundlePath", BUNDLE + "/../escape"),
+            ("bundlePath", "/private/var//invalid/iOS 27.0.simruntime"),
+            ("bundlePath", "/private/var/" + "x" * 4100 + "/iOS 27.0.simruntime"),
+            ("runtimeRoot", ROOT + "/../../escape"),
+            ("runtimeRoot", "/etc"),
+        )
+        for key, value in cases:
+            saved = self.host.runtime[key]
+            self.host.runtime[key] = value
+            with self.subTest(key=key, value=value[:80]), self.assertRaises(ValueError):
+                self.prepare_provider()
+            self.host.runtime[key] = saved
+            self.assertEqual(list(self.source.parent.iterdir()), [self.source])
+        self.assertFalse(self.host.fds)
+
+    def test_provider_context_rechecks_observations_on_exit(self):
+        original = self.host.nodes[LIBRARY].data
+        with self.assertRaisesRegex(ValueError, "digest"):
+            with runtime.provider_verified_checker():
+                self.host.nodes[LIBRARY].data = original[:-1] + b"x"
+        self.host.nodes[LIBRARY].data = original
+        self.assertFalse(self.host.fds)
+
+    def test_provider_validation_rejects_altered_input_and_intent(self):
+        record = self.prepare_provider()
+        original_input = self.source.read_bytes()
+        self.source.write_bytes(original_input + b"\n")
+        with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
+            prepare.validate(
+                self.source, record["input"]["sha256"], prepare.IOS_PROVIDER_RUNTIME_PROFILE,
+                record["output"]["path"], record["intent_path"],
+            )
+        self.source.write_bytes(original_input)
+
+        intent_path = Path(record["intent_path"])
+        original_intent = intent_path.read_text()
+        altered = json.loads(original_intent)
+        altered["provider_observation"]["runtime"]["build"] = "24A435"
+        intent_path.write_text(json.dumps(altered))
+        with self.assertRaisesRegex(ValueError, "provider_observation"):
+            self.validate_provider(record)
+        for version in (1, 2, 4, True):
+            altered = json.loads(original_intent)
+            altered["schema_version"] = version
+            intent_path.write_text(json.dumps(altered))
+            with self.subTest(schema_version=version), self.assertRaisesRegex(
+                ValueError, "schema_version",
+            ):
+                self.validate_provider(record)
+        altered = json.loads(original_intent)
+        altered["unexpected"] = "not in schema 3"
+        intent_path.write_text(json.dumps(altered))
+        with self.assertRaisesRegex(ValueError, "unsupported or missing keys"):
+            self.validate_provider(record)
+        altered = json.loads(original_intent)
+        altered["provider_observation"]["runner"] = "unverified"
+        intent_path.write_text(json.dumps(altered))
+        with self.assertRaisesRegex(ValueError, "provider_observation"):
+            self.validate_provider(record)
+        intent_path.write_text(original_intent)
+        self.assertEqual(self.validate_provider(record), record)
+        self.assertFalse(self.host.fds)
+
+    def test_provider_profile_refuses_identity_and_closed_metadata_drift(self):
+        for key, value in (
+            ("version", "27.1"), ("buildversion", "24A435"),
+            ("identifier", "com.apple.CoreSimulator.SimRuntime.iOS-27-1"),
+            ("isAvailable", False),
+        ):
+            saved = self.host.runtime[key]
+            self.host.runtime[key] = value
+            with self.subTest(identity=key), self.assertRaises(ValueError):
+                self.prepare_provider()
+            self.host.runtime[key] = saved
+        self.host.runtimes.append(dict(self.host.runtime))
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            self.prepare_provider()
+        self.host.runtimes.pop()
+
+        xcode = (DEVELOPER + "/usr/bin/xcodebuild", "-version")
+        self.host.responses[tuple(xcode)] = "Xcode 27.1\nBuild version wrong"
+        with self.assertRaisesRegex(ValueError, "Xcode version"):
+            self.prepare_provider()
+        self.host.responses.clear()
+        sdk = (
+            DEVELOPER + "/usr/bin/xcodebuild", "-version", "-sdk",
+            "iphonesimulator", "SDKVersion",
+        )
+        self.host.responses[tuple(sdk)] = "27.0"
+        with self.assertRaisesRegex(ValueError, "SDK observation"):
+            self.prepare_provider()
+        self.host.responses.clear()
+
+        original_bytes = self.host.nodes[LIBRARY].data
+        self.host.nodes[LIBRARY].data = original_bytes[:-1] + b"x"
+        with self.assertRaisesRegex(ValueError, "digest"):
+            self.prepare_provider()
+        self.host.nodes[LIBRARY].data = original_bytes
+        signature = (
+            "/usr/bin/codesign", "--verify", "--strict", "-R",
+            runtime.REQUIREMENT, LIBRARY,
+        )
+        self.host.responses[signature] = runtime.Refusal("provider checker signature mismatch")
+        with self.assertRaisesRegex(ValueError, "signature mismatch"):
+            self.prepare_provider()
+        self.host.responses.clear()
+        plist = self.host.nodes[PLIST]
+        original_plist = plist.data
+        plist.data = plistlib.dumps({"CFBundleIdentifier": "unexpected"})
+        with self.assertRaisesRegex(ValueError, "plist identifier"):
+            self.prepare_provider()
+        plist.data = original_plist
+
+        original = fixture()
+        candidates = []
+        bad_path = copy.deepcopy(original)
+        bad_path["FluxKlangUITests"]["TestingEnvironmentVariables"][DYLD] = (
+            LIBRARY.replace("fresh-inventory-mount", "untrusted-location")
+        )
+        candidates.append(bad_path)
+        extra_library = copy.deepcopy(original)
+        extra_library["FluxKlangUITests"]["TestingEnvironmentVariables"][DYLD] += (
+            ":/tmp/unreviewed.dylib"
+        )
+        candidates.append(extra_library)
+        main_thread_setting = copy.deepcopy(original)
+        main_thread_setting["FluxKlangUITests"]["UITargetAppMainThreadCheckerEnabled"] = True
+        candidates.append(main_thread_setting)
+        target_app_injection = copy.deepcopy(original)
+        target_app_injection["FluxKlangUITests"]["UITargetAppEnvironmentVariables"][DYLD] = LIBRARY
+        candidates.append(target_app_injection)
+        for index, value in enumerate(candidates):
+            self.write(value)
+            before = len(self.host.commands)
+            if index == 0:
+                context = self.assertRaisesRegex(
+                    ValueError, "UI checker does not match the fixed provider-trusted runtime observation",
+                )
+            else:
+                context = self.assertRaises(ValueError)
+            with self.subTest(metadata=index), context:
+                self.prepare_provider()
+            self.assertEqual(list(self.source.parent.iterdir()), [self.source])
+            self.assertNotIn(LIBRARY.replace("fresh-inventory-mount", "untrusted-location"),
+                             [item for argv, _ in self.host.commands[before:] for item in argv])
         self.assertFalse(self.host.fds)
 
     def test_library_lists_and_ui_presence_remain_closed(self):

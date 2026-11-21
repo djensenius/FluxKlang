@@ -114,6 +114,9 @@ OBSERVED = {
 IOS_PROFILE = "ios-simulator-isolated-unit-ui-v1"
 IOS_RETENTION_PROFILE = "ios-simulator-isolated-unit-ui-retention-request-v1"
 IOS_RUNTIME_PROFILE = "ios-simulator-isolated-unit-ui-xcode27.1-runtime27.0-mtc-v1"
+IOS_PROVIDER_RUNTIME_PROFILE = (
+    "ios-simulator-isolated-unit-ui-xcode27.1-runtime27.0-mtc-provider-trusted-v1"
+)
 
 # Complete observed combined simulator XML v1 input. The app-hosted unit
 # bundle and runner-hosted UI bundle intentionally have different fields.
@@ -291,7 +294,9 @@ def _profile_definition(profile):
             OBSERVED, [TARGET], ((TARGET, "EnvironmentVariables", RUN_KEY),),
             profile == RETENTION_PROFILE,
         )
-    if profile in (IOS_PROFILE, IOS_RETENTION_PROFILE, IOS_RUNTIME_PROFILE):
+    if profile in (
+        IOS_PROFILE, IOS_RETENTION_PROFILE, IOS_RUNTIME_PROFILE, IOS_PROVIDER_RUNTIME_PROFILE,
+    ):
         return IOS_OBSERVED, ["FluxKlangTests", "FluxKlangUITests"], (
             ("FluxKlangTests", "EnvironmentVariables", RUN_KEY),
             ("FluxKlangUITests", "EnvironmentVariables", RUN_KEY),
@@ -426,21 +431,35 @@ def _checked_input(selected, expected_sha256, profile):
         raise Refusal("input SHA256 mismatch")
     parsed = parse_plist(data)
     authority = nullcontext()
-    if profile == IOS_RUNTIME_PROFILE:
+    if profile in (IOS_RUNTIME_PROFILE, IOS_PROVIDER_RUNTIME_PROFILE):
         # Lazy import: old profiles have no runtime/platform/tool dependency.
         import ios_runtime
 
-        authority = ios_runtime.verified_checker()
-    with authority as spellings:
-        if profile == IOS_RUNTIME_PROFILE:
-            # Candidate text can select only between two freshly proven exact
-            # spellings. It never supplies a path to a filesystem/tool probe.
+        authority = (
+            ios_runtime.verified_checker()
+            if profile == IOS_RUNTIME_PROFILE else
+            ios_runtime.provider_verified_checker()
+        )
+    provider_observation = None
+    with authority as result:
+        if profile == IOS_PROVIDER_RUNTIME_PROFILE:
+            spellings, provider_observation = result
+        else:
+            spellings = result
+        if profile in (IOS_RUNTIME_PROFILE, IOS_PROVIDER_RUNTIME_PROFILE):
+            # Candidate text can select only between two inventory-derived
+            # fixed spellings. It never supplies a path to a filesystem/tool probe.
             try:
                 checker = parsed["FluxKlangUITests"]["TestingEnvironmentVariables"]["DYLD_INSERT_LIBRARIES"]
             except (KeyError, TypeError) as error:
                 raise Refusal("missing runtime-backed UI checker field") from error
             if type(checker) is not str or checker not in spellings:
-                raise Refusal("UI checker does not match the independently verified runtime")
+                message = (
+                    "UI checker does not match the independently verified runtime"
+                    if profile == IOS_RUNTIME_PROFILE else
+                    "UI checker does not match the fixed provider-trusted runtime observation"
+                )
+                raise Refusal(message)
             expected = copy.deepcopy(expected)
             expected["FluxKlangTests"]["TestingEnvironmentVariables"]["DYLD_INSERT_LIBRARIES"] = (
                 "__TESTHOST__/Frameworks/libXCTestBundleInject.dylib:"
@@ -449,12 +468,12 @@ def _checked_input(selected, expected_sha256, profile):
             expected["FluxKlangUITests"]["TestingEnvironmentVariables"]["DYLD_INSERT_LIBRARIES"] = checker
         # Also refuses every preexisting run key, including empty/malformed IDs.
         require_equal(parsed, expected, "input")
-        yield path, parsed
+        yield path, parsed, provider_observation
 
 
 def pinned_input(selected, expected_sha256, profile):
-    with _checked_input(selected, expected_sha256, profile) as result:
-        return result
+    with _checked_input(selected, expected_sha256, profile) as (path, parsed, _):
+        return path, parsed
 
 
 def check_run_id(value):
@@ -487,10 +506,14 @@ def transformed(original, run_id, profile=PROFILE):
 
 
 def intent_record(input_path, input_digest, output, output_digest, intent, run_id,
-                  profile=PROFILE):
+                  profile=PROFILE, provider_observation=None):
     _, targets, _, retention_requested = _profile_definition(profile)
     record = {
-        "schema_version": 2 if retention_requested else 1,
+        "schema_version": (
+            3 if profile == IOS_PROVIDER_RUNTIME_PROFILE else
+            2 if retention_requested else
+            1
+        ),
         "profile": profile,
         "qualification": "partial-regression",
         "run_id": run_id,
@@ -509,16 +532,26 @@ def intent_record(input_path, input_digest, output, output_digest, intent, run_i
                 } for target in targets
             },
         }
+    if profile == IOS_PROVIDER_RUNTIME_PROFILE:
+        if type(provider_observation) is not dict:
+            raise Refusal("provider runtime observations are required")
+        record["provider_observation"] = provider_observation
     return record
 
 
 def validate(input_path, expected_sha256, profile, output_path, intent_path):
     """Read and verify only; never create identity, flags, files, or products."""
-    with _checked_input(input_path, expected_sha256, profile) as (source, original):
-        return _validate(source, original, expected_sha256, profile, output_path, intent_path)
+    with _checked_input(input_path, expected_sha256, profile) as (
+        source, original, provider_observation,
+    ):
+        return _validate(
+            source, original, expected_sha256, profile, output_path, intent_path,
+            provider_observation,
+        )
 
 
-def _validate(source, original, expected_sha256, profile, output_path, intent_path):
+def _validate(source, original, expected_sha256, profile, output_path, intent_path,
+              provider_observation=None):
     output = existing_file(output_path)
     intent = existing_file(intent_path)
     record = json.loads(
@@ -535,7 +568,10 @@ def _validate(source, original, expected_sha256, profile, output_path, intent_pa
     data = output.read_bytes()
     require_equal(
         record,
-        intent_record(source, expected_sha256, output, digest(data), intent, run_id, profile),
+        intent_record(
+            source, expected_sha256, output, digest(data), intent, run_id, profile,
+            provider_observation,
+        ),
         "intent",
     )
     # Full type-sensitive comparison permits only the profile's run-key additions
@@ -549,8 +585,12 @@ def prepare(input_path, expected_sha256, profile):
     """Create an exclusive sibling pair, publishing intent last; never launch."""
     created = []
     try:
-        with _checked_input(input_path, expected_sha256, profile) as (source, original):
-            return _prepare(source, original, expected_sha256, profile, created)
+        with _checked_input(input_path, expected_sha256, profile) as (
+            source, original, provider_observation,
+        ):
+            return _prepare(
+                source, original, expected_sha256, profile, created, provider_observation,
+            )
     except BaseException:
         # Includes failures of the runtime authority's exit recheck.
         # Remove only our own new files, intent first. Prior collisions survive.
@@ -559,7 +599,7 @@ def prepare(input_path, expected_sha256, profile):
         raise
 
 
-def _prepare(source, original, expected_sha256, profile, created):
+def _prepare(source, original, expected_sha256, profile, created, provider_observation=None):
     run_id = str(uuid.uuid4())
     check_run_id(run_id)
     output, intent = output_paths(source, run_id)
@@ -568,6 +608,7 @@ def _prepare(source, original, expected_sha256, profile, created):
     require_equal(parse_plist(data), prepared, "serialized output")
     record = intent_record(
         source, expected_sha256, output, digest(data), intent, run_id, profile,
+        provider_observation,
     )
     intent_data = (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8")
     for path, content in ((output, data), (intent, intent_data)):
@@ -589,7 +630,7 @@ def main(argv=None):
         command.add_argument("--expected-sha256", required=True)
         command.add_argument("--profile", required=True, choices=[
             PROFILE, IOS_PROFILE, RETENTION_PROFILE, IOS_RETENTION_PROFILE,
-            IOS_RUNTIME_PROFILE,
+            IOS_RUNTIME_PROFILE, IOS_PROVIDER_RUNTIME_PROFILE,
         ])
         if name == "validate":
             command.add_argument("--output", required=True, type=Path)
@@ -610,6 +651,9 @@ def main(argv=None):
         "claim": (
             "fresh runtime verification; partial-regression; not execution authorization"
             if args.profile == IOS_RUNTIME_PROFILE else
+            "provider-trusted runtime observations only; no source/head/runner attribution; "
+            "partial-regression; not execution authorization"
+            if args.profile == IOS_PROVIDER_RUNTIME_PROFILE else
             "metadata-only; partial-regression; not execution authorization"
         ),
         "intent": record,
