@@ -2,7 +2,6 @@
 
 from contextlib import ExitStack
 import os
-from pathlib import Path
 import re
 import stat
 
@@ -24,10 +23,8 @@ def _contains_nul(value):
 
 
 def _checkout_path(value):
-    if isinstance(value, Path):
-        value = str(value)
     if type(value) is not str:
-        raise Refusal("checkout root must be an absolute path")
+        raise Refusal("checkout root must be an absolute path string")
     if len(value) > PATH_BYTES:
         raise Refusal("checkout root path limit")
     if _contains_nul(value) or not value.startswith("/"):
@@ -94,8 +91,9 @@ def _open_checkout_root(pieces):
             try:
                 os.close(parent)
             except BaseException:
-                _close_quietly(current)
+                child = current
                 current = None
+                _close_quietly(child)
                 raise
         return current
     except BaseException:
@@ -107,7 +105,7 @@ def _open_checkout_root(pieces):
 def observe_checkout_head(checkout_root, expected_oid):
     """Return the freshly observed detached HEAD OID, or raise Refusal.
 
-    The root must be an absolute checkout path and ``expected_oid`` must be a
+    The root must be an absolute path string and ``expected_oid`` must be a
     lowercase SHA-1 object ID. Only a real ``.git`` directory and canonical
     detached ``HEAD`` file are accepted.
     """

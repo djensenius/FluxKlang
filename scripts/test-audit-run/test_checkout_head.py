@@ -26,11 +26,13 @@ class CheckoutHeadTests(unittest.TestCase):
         (self.root / ".git" / "HEAD").write_bytes(value.encode("ascii") + b"\n")
 
     def observe(self, expected=FIRST):
-        return observer.observe_checkout_head(self.root, expected)
+        return observer.observe_checkout_head(str(self.root), expected)
 
     def assert_refused(self, root=None, expected=FIRST):
         with self.assertRaises(observer.Refusal):
-            observer.observe_checkout_head(self.root if root is None else root, expected)
+            observer.observe_checkout_head(
+                str(self.root) if root is None else root, expected,
+            )
 
     def test_reads_canonical_detached_head_and_observes_each_call(self):
         self.assertEqual(self.observe(), FIRST)
@@ -94,7 +96,8 @@ class CheckoutHeadTests(unittest.TestCase):
         symlink_root = self.root.parent / (self.root.name + "-link")
         symlink_root.symlink_to(self.root, target_is_directory=True)
         self.addCleanup(symlink_root.unlink)
-        self.assert_refused(root=symlink_root)
+        self.assert_refused(root=str(symlink_root))
+        self.assert_refused(root=self.root)
         for expected in (FIRST.upper(), "a" * 39, "a" * 41, 1, None):
             with self.subTest(expected=expected):
                 self.assert_refused(expected=expected)
@@ -158,6 +161,47 @@ class CheckoutHeadTests(unittest.TestCase):
             if close_calls:
                 try:
                     actual_close(close_calls[0])
+                except OSError:
+                    pass
+
+    def test_interrupted_child_cleanup_does_not_close_reused_descriptor(self):
+        actual_close = os.close
+        actual_open_directory = observer._open_directory
+        opened_directories = []
+        close_calls = []
+        reused = []
+        sentinel = self.root / "sentinel"
+        sentinel.write_bytes(b"descriptor must remain open")
+
+        def track_directory(parent, name):
+            descriptor = actual_open_directory(parent, name)
+            opened_directories.append(descriptor)
+            return descriptor
+
+        def injected_close(descriptor):
+            close_calls.append(descriptor)
+            if len(close_calls) == 1:
+                raise OSError("injected parent close failure")
+            if len(close_calls) == 2:
+                actual_close(descriptor)
+                replacement = os.open(sentinel, os.O_RDONLY)
+                reused.append(replacement)
+                raise KeyboardInterrupt("injected child cleanup interruption")
+            return actual_close(descriptor)
+
+        try:
+            with mock.patch.object(observer, "_open_directory", side_effect=track_directory), \
+                    mock.patch.object(observer.os, "close", side_effect=injected_close):
+                with self.assertRaisesRegex(KeyboardInterrupt, "child cleanup interruption"):
+                    self.observe()
+            self.assertEqual(len(opened_directories), 1)
+            self.assertEqual(reused, [opened_directories[0]])
+            self.assertEqual(len(close_calls), 2)
+            self.assertEqual(os.read(reused[0], 1), b"d")
+        finally:
+            for descriptor in (*reused, *close_calls[:1]):
+                try:
+                    actual_close(descriptor)
                 except OSError:
                     pass
 

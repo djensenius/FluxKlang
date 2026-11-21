@@ -256,14 +256,17 @@ Reported values are not authenticated, and the projection alone verifies
 neither checkout nor source and confers no launch authority.
 
 `checkout_head.observe_checkout_head(checkout_root, expected_oid)` is a
-standalone, synchronous filesystem observer. It opens the explicitly supplied
-absolute checkout root component-by-component, requiring descriptor-relative
-no-follow directory operations, then reads only `.git/HEAD` from a real `.git`
-directory. It accepts exactly a regular, bounded file containing a lowercase
-40-hex SHA-1 object ID and newline, and returns that ID only when it matches
-the caller's expected ID. Symbolic HEADs, linked-worktree `.git` files,
-symlinks, special files, unsupported descriptor operations and all filesystem
-errors fail closed as `checkout_head.Refusal` (`ValueError`). Each invocation
+standalone, synchronous filesystem observer. `checkout_root` must be an
+absolute Python `str`, not a `pathlib.Path`: refusing path-object conversion
+keeps validation from first allocating an unbounded string representation.
+It opens the explicitly supplied root component-by-component, requiring
+descriptor-relative no-follow directory operations, then reads only
+`.git/HEAD` from a real `.git` directory. It accepts exactly a regular, bounded
+file containing a lowercase 40-hex SHA-1 object ID and newline, returning the
+ID only when it matches the caller's expected ID. Symbolic HEADs,
+linked-worktree `.git` files, symlinks, special files, unsupported descriptor
+operations and all filesystem errors fail closed as `checkout_head.Refusal`
+(`ValueError`). Each invocation
 reopens and observes the filesystem; it does not cache results.
 
 This is a narrow observation, not custody or protection against a malicious or
