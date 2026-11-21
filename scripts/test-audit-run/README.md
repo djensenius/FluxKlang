@@ -421,6 +421,49 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_git_pack.py'
 ```
 
+`git_pack_acquire.acquire_pair(checkout_root, pack_id)` separately returns fresh
+plain `(pack_bytes, index_bytes)` or raises `checkout_head.Refusal`
+(`ValueError`). The root must be an exact absolute plain `str`, with the same
+unambiguous path restrictions as `checkout_head`; the identifier must be an
+exact plain lowercase 40-hex SHA-1 string. Only the explicit real
+`.git/objects/pack/pack-<id>.pack` and matching `.idx` are opened. Root and
+directory traversal use the existing descriptor-relative no-follow helpers;
+files are opened no-follow and nonblocking and must be regular. There is no
+enumeration, fallback, alternate-object-store consultation or multiple-pack
+routing. Missing files and linked-worktree `.git` files refuse.
+
+Each call opens both files afresh, checks their initial sizes against the
+existing inclusive 8 MiB pack and 1 MiB index caps, reads at most each cap plus
+one detection byte, and checks both held descriptors' metadata after both reads
+(excluding access time) and actual read lengths. It requires the filename ID
+to equal the pack trailer, then fully validates the pair with `git_pack`'s
+existing parser, including unrequested objects. No parser limits are expanded.
+Lookup is separate: the returned pair can be passed to `git_pack.read_object`
+or `BoundedReader.read`. Acquisition itself always performs a complete parse;
+the subsequent lookup interface incurs its own parsing/budgets. This is not an
+invocation-wide acquisition/work or wall-clock budget, nor a ready-made
+envelope object reader; the existing envelope error-translation requirements
+still apply.
+
+Ownership/cleanup patterns are shared with `git_loose_acquire`, with the same
+asynchronous interruption and failed-close limitations described above.
+Before/after descriptor metadata detects some changes, not all races or path
+replacements: replacing a directory while files remain held can return the
+original valid pair; a later fresh acquisition sees the replacement. Hostile
+writers or changes reverted between acquisitions may evade detection. SHA-1
+integrity is consistency, not authentication, collision resistance or custody.
+This API does not verify HEAD or the complete checkout, integrate the envelope,
+invoke Git/subprocess/network/native tools, claim hosted compatibility, or
+confer provenance or launch authority.
+
+Synthetic temporary filesystems and the existing static Git-produced REF/OFS
+fixtures exercise this source-only API without invoking Git:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_git_pack_acquire.py'
+```
+
 `git_delta.apply_delta(base, program)` is a separate pure byte-to-byte primitive,
 not that reader. It applies a single uncompressed Git pack delta as described
 in `gitformat-pack(5)`, or raises `ValueError`. It accepts only plain `bytes`:
