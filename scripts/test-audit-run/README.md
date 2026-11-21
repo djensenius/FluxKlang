@@ -284,6 +284,37 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_checkout_head.py'
 ```
 
+`git_loose.read_object(compressed_bytes, oid)` is an independent, in-memory
+SHA-1 Git loose-object decoder. It accepts only plain immutable `bytes` and a
+plain `str` containing a full lowercase 40-hex ID, returning `(kind, raw_bytes)`
+or raising `ValueError`. It requires exactly one complete zlib stream, with no
+trailing or concatenated data, and a canonical `commit`, `tree`, `blob`, or
+`tag` header with an unsigned decimal length (zero is `0`, otherwise no leading
+zeroes), a NUL separator, exactly that many content bytes and a matching SHA-1.
+It does not interpret the contents.
+
+The inclusive content limit is 256 KiB, matching the pack reader and attribution
+object limit. Compressed input is capped at 264 KiB before decompression; this
+conservative cap leaves 8 KiB for the header and zlib/DEFLATE overhead of a
+stored uncompressed object at the content limit. It does not accept every
+possible inefficient encoding of an otherwise valid object. Inflate output is
+limited to 256 KiB plus the 14-byte maximum canonical header and one detection
+byte, before header parsing. Input, inflate work and retained/temporary output
+copies are bounded per call, but the caller must bound acquisition separately;
+there is no wall-clock or shared multi-call budget.
+
+The decoder reads no files or ambient state, invokes no Git subprocess or
+network, and is not integrated into the envelope. SHA-1 consistency is not
+authentication or collision resistance. Multi-pack lookup, filesystem
+acquisition and race policy, hosted layout measurement and iOS launch remain
+separate; this does not assert hosted checkout compatibility or launch authority.
+The tests use an existing Git-produced loose fixture and do not invoke Git:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_git_loose.py'
+```
+
 `git_pack.read_object(pack_bytes, index_bytes, oid)` is an isolated in-memory
 SHA-1 Git-object reader returning `(kind, raw_bytes)` for a full lowercase
 40-hex ID, or raising `ValueError`. It only consumes the explicitly supplied
