@@ -1,5 +1,195 @@
 # Mac and iOS audit-run preparation (partial regression only)
 
+## Dedicated hosted iOS observation (#694; part of #60, roadmap #48)
+
+`.github/workflows/ios-isolated-observation.yml` and
+`ios_simulator_observation.py` implement one bounded, summary-only observation.
+**Local integration is not permission to publish or execute.** This branch now
+normal-merges `main` at `3038fa019b06a0b8a4b182c04f05977c972a6114`, containing
+**#699, #703 and #709**. The coordinator must independently review this combined
+tree before publishing or authorizing one hosted attempt. No dispatch, native
+execution, guard bypass, or relaxation of a profile is part of this integration.
+
+### First hosted refusal and temporary diagnostic-only entrypoint
+
+Run **43672143259** executed synthetic merge
+`7e164780c2d172095f00b76fd7feeb1c4845c154` (PR #707 head
+`3b0d3a8dcf76907daeb14445b800bf136e4a4b1a`). Xcode 27.1 / 27A9275,
+simulator SDK 27.1, and available iOS 27.0 / 24A434 / iPhone 17 reached the
+generated metadata pin
+`09b0c691618e39cf207e31c7da8bed43adc0df8c97853be8240cb643e0c1f08a`.
+Preparation refused the string value at
+`FluxKlangTests.TestingEnvironmentVariables.DYLD_INSERT_LIBRARIES`. The closed
+profile expects
+`__TESTHOST__/Frameworks/libXCTestBundleInject.dylib:/usr/lib/libRPAC.dylib`;
+**the actual value was not retained and is unknown**. This is not evidence of
+which library/path differs, or that all remaining metadata matches.
+
+Artifact **14144808894** contains only the original summaries. The complete
+23,307-byte job log (SHA256
+`4243cdf7bc0075e6d45dbcf4418cebe2ed111db3abcbdcd992cdc506b14f568f`)
+contains no DYLD/xctestrun value. The original evidence is not replaced: zero
+test launch calls, no run ID/results/receipts, source guard verified but built
+guard not yet checked. Cleanup reported shutdown exit 149 / CoreSimulator 405
+because the device was already Shutdown. No delete failure was listed; that
+alone does **not** independently verify device absence.
+
+**Full observation remains blocked.** The fixed production entrypoint is now
+`MetadataDiagnostic`, not the full observation runner. The next separately reviewed
+build/preflight-only attempt uses the actual #709 verifier as described below,
+not the earlier informational metadata/signature probes. It never prepares an envelope or
+allocates an audit run ID. It always ends in a recorded refusal, **even when the
+entire input matches**, before marker, boot, install or test execution.
+Its command boundary also rejects test/boot/install/launch operations. There is
+no dispatch input or environment switch enabling tests; restoring observation
+requires another reviewed code change. No raw plist, environment dump, receipt
+or xcresult is uploaded. A changed/truncated display is not exact-value evidence.
+No profile, pin, isolation setting or test selection is repaired or relaxed.
+
+Run **43675292121**, artifact **14146592231**, recorded the runtime's
+`libMainThreadChecker.dylib` between XCTest injection and RPAC (306 characters,
+display unchanged). That is evidence from this diagnostic, **not** recovery of the
+first run's value or authentication of library bytes. Both earlier artifacts remain
+untouched. **#708** tracks compatibility; **#709** supplied the separately reviewed
+runtime-backed profile, not proof of its acceptance on a hosted runner.
+
+A pre-checkout fixed-path `/usr/bin/stat` step logs unauthenticated OS ownership/type/mode
+only, not runtime authority; failure skips observation and summary upload because no owned
+observation workspace was allocated. It neither changes permissions nor replaces the verifier.
+
+After summary/workspace allocation and pure source preflight, but before environment
+Xcode/SDK reporting, project generation or device creation/build (#710),
+`ios_runtime.verified_checker()` performs the actual fixed tool/runtime,
+signature, digest, no-follow ownership, alias and held-FD
+read-only mount checks documented below. `runtime_evidence.prebuild` becomes
+`accepted` **only after successful context exit**, including exit rechecks.
+Then the existing combined scheme is built and exactly one generated xctestrun
+is pinned once. Read-only `prepare.pinned_input(..., IOS_RUNTIME_PROFILE)` performs
+a **fresh** verifier check and binds both unit/UI metadata to the separate
+`ios-simulator-isolated-unit-ui-xcode27.1-runtime27.0-mtc-v1` profile.
+`runtime_evidence.generated_input` becomes `accepted` only after that call,
+including its verifier exit, completes. These results are not cached authority,
+serialized bindings, or authorization to prepare/launch. The original profiles
+and disabled full-run implementation remain unchanged.
+
+Both summaries record the stages as accepted/refused/unavailable and retain
+bounded refusal context from existing checks: independent component, observed
+type/mode/owner, held-FD `ST_RDONLY` (or unavailable), or sanitized native argv/exit
+where known. No extra probes follow refusal, and no candidate DYLD path supplies
+a probe. A generic signature success or a newly computed hash is not substituted
+for the verifier's exact reviewed identity/content/Apple-anchor requirements.
+No signing, code loading, keychain query, permission fallback or download is added.
+Actual hosted layout/acceptance, especially `/Applications` ownership and runtime
+mount flags, remains unproven. Even two accepted stages end with exit 1,
+zero test launches, and unavailable audit UUID/results/receipts.
+
+Cleanup now skips shutdown only after a fresh, full owned-device inventory/path
+check confirms `Shutdown`. If that cannot be confirmed, the original checked
+shutdown is attempted and its errors remain failures. Delete still targets only
+the successfully created owned UUID; command success is distinguished from
+independently verified absence. These changes do not authorize a rerun.
+
+### Retained launch gates and receipt strategy (full-run path disabled)
+
+- Pinned `xcode-27` / Xcode 27.1; the existing pinned checkout/mise/upload actions,
+  XcodeGen version/project-sync checks and committed-package drift checks are
+  reused. The combined `FluxKlangIsolatedTests` scheme alone is built, Debug,
+  `CODE_SIGNING_ALLOWED=NO`, `ARCHS=arm64`, in a fresh owned DerivedData directory.
+  This is **not** the Apple qualification scheme or a claim of an unsandboxed host.
+- Initial policy is exactly **iOS 27.0 / iPhone 17**, from
+  `docs/transformation/toolchain-inventory.md`; availability is checked on each runner.
+  Runtime and device-type identifiers come from `simctl list --json`, including
+  availability, build, supported device types and numeric min/max runtime range.
+  Absent, duplicate, unavailable, incompatible or unsupported JSON/layout data
+  refuses; there is no guessed identifier, latest fallback or download.
+- A uniquely named device is created; only a successful create's returned canonical
+  UUID, absent from the pre-create inventory, is adopted. A failed create's output
+  never authorizes shutdown/delete, even for a valid previously unseen UUID.
+  Build and test destinations use the owned UUID. No global booted device or
+  physical device is used.
+- Exactly one generated xctestrun is selected and its SHA256 computed once as a
+  **run-local, not independently reviewed pin**. The unchanged `prepare.py`
+  prepares and validates `ios-simulator-isolated-unit-ui-v1`. Validation repeats
+  immediately before launch against that same pin, never a repaired/repinned
+  envelope. Both unit/UI identities, literal `1/0/0` flags and the three matching
+  audit UUID insertions remain the closed profile's responsibility.
+- Source digests require the exact #703 guard implementation reviewed at
+  `00c4d510` (implementation `edd9feb`), plus the existing UI prelaunch
+  `-ui-testing`/matching UUID/flags checks and lazy fake-service selection.
+  A fresh unit executable must contain its own defined guard/anchor/scope symbols
+  and marker string. Defined symbols are demangled via stdin before matching
+  qualified names; undefined references cannot satisfy this check.
+  Built/installed unit bytes must still match at launch.
+  Source changes require independent review, not a runtime override. The integrated
+  source matches these pins; drift **refuses before build/device creation**.
+- Only then is the exact empty regular `FluxKlangAuditRequireFileReceipts-v1`
+  created **directly in `FluxKlangTests.xctest`**, not the UI runner or host root.
+  The reviewed guard uses its own class anchor and executable-image check;
+  explicit mode requires a valid file directory before a unit scope body and
+  cannot silently use attachment publication.
+- The owned device is booted; `simctl install` installs the built unit-host app
+  **without launching it**. `get_app_container <owned UUID> <app ID> app/data`
+  must resolve its installed marker and own data container. Only the standard,
+  canonical nonsymlink
+  `$HOME/Library/Developer/CoreSimulator/Devices/<owned UUID>/data/Containers/{Bundle,Data}/Application/<returned container UUID>`
+  layout is supported. An unexpected API/path/ownership result refuses rather
+  than guessing. A fresh absolute **0700** receipt directory is exclusively
+  created inside that app's own data container. Container/directory identities,
+  owner, mode, marker and emptiness are rechecked immediately before launch.
+- `TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR` is supplied outside the validated
+  xctestrun, with no extra envelope environment keys. The single
+  `test-without-building` uses the owned device and `-parallel-testing-enabled NO`;
+  no `-test-iterations 1`, filters, retries or fallback. UI runner/app transport
+  stays separate: no new UI receipt-environment protocol.
+
+**Unproven runtime boundaries:** host filesystem checks do not establish iOS
+sandbox access or Xcode's `TEST_RUNNER_` forwarding. The #703 process guard is
+required, not simulated proof of either. Xcode reinstallation may invalidate a
+container: the process guard must refuse inaccessible file transport, and
+post-run identity checks reject changed containers. No directory is recreated,
+permissions widened, or host/global-temp fallback attempted. Guard/publication
+failure ends the attempt. This is not earliest-host isolation, descendant
+coverage, or #60 qualification. The first attempt established inventory selection
+and build output, not app/test execution or file-transport success.
+
+### Evidence and cleanup
+
+The runner retains sanitized JSON/Markdown outside its generated workspace,
+including checked-out SHA separately from PR/event SHA, pin, audit ID, runtime
+build/type, sanitized device UUID/argv, times, actual test exit (or unavailable),
+test/audit/file counts and separate refusal/cleanup outcomes. Missing evidence
+is not zero. A zero Xcode exit without positive test/file evidence is not success.
+Receipt contents and raw xcresults/logs are never uploaded; receipt filename/path
+forms and non-run UUIDs are redacted **before** truncation in both formats using
+the reviewed shared redaction primitives plus an iOS adapter. Mac formatting and
+semantics are unchanged.
+
+Command and overall deadlines reserve cleanup time. Command failures and
+cancellation signal only the newly created process group:
+SIGTERM then SIGKILL if needed, each with a 10-second drain bound. Unbuffered
+streams are explicitly closed and the final wait is bounded to 10 seconds.
+Cleanup failures remain refusals; partial output is never promoted to a result,
+and unsuccessful termination/reaping is not claimed as success. Normal errors, partial
+boot/install failures and handled cancellation always attempt shutdown/delete of
+only the returned owned UUID, then remove only the identity-checked generated
+workspace (DD, metadata and results). Simulator deletion removes its receipt
+outputs; failed deletion is reported, not replaced by recursive deletion of a
+simulator path. Foreign files/devices and broader runner temp/workspace survive.
+No safe cleanup can be promised after host loss/SIGKILL, or a failed/unknown create
+outcome. Those ownership gaps are recorded, never repaired by adopting a failed
+create's printed UUID or sweeping inventory. Initial sanitized summaries survive
+a later interrupted run.
+The artifact selects only the two files advertised from this run's exclusively
+created summary directory, has a run-attempt suffix, and missing files fail upload.
+
+Local checks require no Apple tools or dependencies:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/test-audit-run -p 'test_prepare*.py'
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/test-audit-run -p 'test_ios*.py'
+actionlint -config-file .github/actionlint.yaml .github/workflows/ios-isolated-observation.yml
+```
+
 `prepare.py` is an external, Python-standard-library preparer, **never a test
 launcher**. It generates a fresh UUID4 before any hypothetical future launch.
 Existing profiles remain metadata-only with no subprocess or native-tool calls.
@@ -321,10 +511,10 @@ and is not a write-permission or persistence probe. Without the marker, ordinary
 selection remains unchanged: absent key uses best-effort attachments, present
 key uses only the file sink, whose failures occur at publication.
 
-The future observation workflow must create and verify this exact marker
+The observation workflow must create and verify this exact marker
 against its **validated unit bundle before launch**, keep the products stable,
 and own the fresh per-run **0700 directory preflight** and launch-time forwarding.
-No marker or workflow is installed here; closed `prepare.py` profiles and the
+The guard itself installs no marker or workflow; closed `prepare.py` profiles and the
 UI runner/app transport are unchanged. This is a **process-side pre-body guard,
 not pre-host-startup qualification**, a sandbox-access guarantee, test coverage,
 or platform delivery proof. Actual iOS forwarding, sandbox access and retained

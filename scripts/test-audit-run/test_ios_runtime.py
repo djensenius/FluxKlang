@@ -413,12 +413,18 @@ class RuntimeTests(unittest.TestCase):
 
     def test_runtime_plist_requires_readonly_filesystem(self):
         self.host.plist_readonly = False
-        with self.assertRaisesRegex(ValueError, "read-only filesystem"):
+        with self.assertRaisesRegex(runtime.Refusal, "read-only filesystem") as raised:
             self.prepare()
+        self.assertEqual(raised.exception.context, {
+            "stage": "plist entry", "component": PLIST, "type_mode": "-rw-rw-r--",
+            "mode": "0o664", "uid": 0, "gid": 0, "st_readonly": False,
+        })
         self.host.plist_readonly = True
         with mock.patch.object(self.host.os, "fstatvfs", side_effect=OSError("unavailable")):
-            with self.assertRaises(ValueError):
+            with self.assertRaises(runtime.Refusal) as raised:
                 self.prepare()
+        self.assertEqual(raised.exception.context["st_readonly"], "not available")
+        self.assertEqual(raised.exception.context["component"], PLIST)
         for path, key, bad in (
             (PLIST, "st_mode", stat.S_IFREG | 0o666),
             (PLIST, "st_uid", 501),
@@ -550,8 +556,13 @@ class CommandTests(unittest.TestCase):
                         self.assertEqual(kwargs["cwd"], "/")
                         self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
                     else:
-                        with self.assertRaises(runtime.Refusal):
+                        with self.assertRaises(runtime.Refusal) as raised:
                             runtime._command([DEVELOPER + "/usr/bin/xcodebuild", "-version"])
+                        self.assertEqual(raised.exception.context["stage"], "command")
+                        self.assertEqual(raised.exception.context["argv_sanitized"],
+                                         [DEVELOPER + "/usr/bin/xcodebuild", "-version"])
+                        self.assertEqual(raised.exception.context["exit_code"],
+                                         1 if case == "nonzero" else 0 if case == "bad-utf8" else "not available")
                     if case != "unavailable":
                         self.assertTrue(process.stdout.closed)
                         self.assertTrue(all(call.kwargs.get("timeout") is not None

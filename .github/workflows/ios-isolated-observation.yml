@@ -1,0 +1,76 @@
+name: iOS isolated observation
+
+# #694, part of #60; roadmap #48. Observation, not qualification.
+# LOCAL INTEGRATION: main containing #699 AND #703 is normal-merged. Coordinator must
+# independently review the combined tree before publishing/allowing one hosted attempt.
+# TEMPORARY: entrypoint is build/preflight-only after run 43672143259's metadata refusal.
+# There is no dispatch input enabling tests; full observation requires a separately reviewed change.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/ios-isolated-observation.yml
+      - scripts/test-audit-run/**
+      - FluxKlangTests/ProductionAccessScope.swift
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-isolated-observation-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+  observe:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Unauthenticated fixed-path OS metadata (not authority)
+        id: tool_path_metadata
+        timeout-minutes: 1
+        shell: /bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          printf '%s\n' 'UNAUTHENTICATED OS METADATA ONLY; NOT runtime authority'
+          /usr/bin/stat -f 'path=%N type=%HT uid=%u gid=%g mode=%Sp raw_mode=%Op dev=%d inode=%i' \
+            '/' '/Applications' '/Applications/Xcode_27.1.app' '/Applications/Xcode_27.1.app/Contents' \
+            '/Applications/Xcode_27.1.app/Contents/Developer' '/Applications/Xcode_27.1.app/Contents/Developer/usr' \
+            '/Applications/Xcode_27.1.app/Contents/Developer/usr/bin' \
+            '/Applications/Xcode_27.1.app/Contents/Developer/usr/bin/xcodebuild' \
+            '/Applications/Xcode_27.1.app/Contents/Developer/usr/bin/simctl'
+      - uses: actions/checkout@v6.0.3
+        id: checkout
+        timeout-minutes: 5
+      - uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+        id: mise
+        timeout-minutes: 5
+        with:
+          version: 2026.10.25
+          install_args: xcodegen
+      - name: Build/preflight-only metadata diagnostic (no test launch)
+        id: observation
+        if: always() && steps.tool_path_metadata.outcome == 'success'
+        timeout-minutes: 100
+        env:
+          SETUP_OUTCOME: ${{ steps.checkout.outcome }}/${{ steps.mise.outcome }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # Python owns device/DD/results and cleanup; command timeouts leave cleanup headroom.
+        # MetadataDiagnostic always stops before preparation and rejects test/boot/install commands.
+        run: python3 scripts/test-audit-run/ios_simulator_observation.py
+      - name: Upload sanitized summaries only
+        if: always() && steps.tool_path_metadata.outcome == 'success'
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-isolated-observation-summary-${{ github.run_attempt }}
+          path: |
+            ${{ steps.observation.outputs.summary_json }}
+            ${{ steps.observation.outputs.summary_markdown }}
+          if-no-files-found: error
+          retention-days: 14

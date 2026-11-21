@@ -30,10 +30,14 @@ ENV = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
 class Refusal(ValueError):
     """Live authority was unavailable, changed, or outside the closed pins."""
 
+    def __init__(self, message, context=None):
+        super().__init__(message)
+        self.context = context or {}  # Observations only; never accepted as authority input.
 
-def require(condition, message):
+
+def require(condition, message, context=None):
     if not condition:
-        raise Refusal(message)
+        raise Refusal(message, context)
 
 
 def _command(argv, developer=None):
@@ -41,6 +45,7 @@ def _command(argv, developer=None):
     env = dict(ENV)
     if developer is not None:
         env["DEVELOPER_DIR"] = developer
+    process, exit_code = None, None
     try:
         process = subprocess.Popen(
             argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -62,7 +67,8 @@ def _command(argv, developer=None):
                     require(len(data) <= OUTPUT_LIMIT, "runtime verification output limit")
             remaining = deadline - time.monotonic()
             require(remaining > 0, "runtime verification command timed out")
-            require(process.wait(timeout=remaining) == 0, "runtime verification command failed")
+            exit_code = process.wait(timeout=remaining)
+            require(exit_code == 0, "runtime verification command failed")
             return data.decode("utf-8", errors="strict").strip()
         finally:
             # Popen.__exit__ waits without a timeout, including after a failed
@@ -75,8 +81,15 @@ def _command(argv, developer=None):
                         process.wait(timeout=TIMEOUT)
             finally:
                 process.stdout.close()
-    except (OSError, UnicodeError, subprocess.SubprocessError) as error:
-        raise Refusal("runtime verification command unavailable") from error
+    except (Refusal, OSError, UnicodeError, subprocess.SubprocessError) as error:
+        code = getattr(process, "returncode", exit_code)
+        context = {"stage": "command", "argv_sanitized": list(argv),
+                   "exit_code": code if type(code) is int else "not available",
+                   "errno": getattr(error, "errno", None)}
+        if isinstance(error, Refusal):
+            error.context = error.context or context
+            raise
+        raise Refusal("runtime verification command unavailable", context) from error
 
 
 def _path(value):
@@ -93,19 +106,35 @@ def _identity(info):
             info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
-def _owned(info, directory=False):
+def _file_context(stage, component, info=None):
+    context = {"stage": stage, "component": component}
+    if info is not None:
+        context.update(type_mode=stat.filemode(info.st_mode), mode=oct(stat.S_IMODE(info.st_mode)),
+                       uid=info.st_uid, gid=info.st_gid)
+    return context
+
+
+def _owned(info, directory=False, component="not available"):
+    context = _file_context("ownership", component, info)
     require(stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode),
-            "non-directory ancestor" if directory else "not a regular file")
+            "non-directory ancestor" if directory else "not a regular file", context)
     require(info.st_uid == 0 and not info.st_mode & 0o022,
-            "runtime/tool path must be root-owned and not group/world writable")
+            "runtime/tool path must be root-owned and not group/world writable", context)
 
 
-def _readonly_plist(fd):
+def _readonly_plist(fd, component, stage):
     info = os.fstat(fd)
+    context = _file_context(stage, component, info)
+    context["st_readonly"] = "not available"
     require(stat.S_ISREG(info.st_mode) and info.st_uid == 0
-            and stat.S_IMODE(info.st_mode) == 0o664, "unreviewed runtime plist file shape")
-    require(os.fstatvfs(fd).f_flag & os.ST_RDONLY,
-            "runtime plist requires a read-only filesystem")
+            and stat.S_IMODE(info.st_mode) == 0o664, "unreviewed runtime plist file shape", context)
+    try:
+        flags = os.fstatvfs(fd).f_flag
+    except OSError as error:
+        context["errno"] = error.errno
+        raise Refusal("runtime/tool filesystem verification unavailable", context) from error
+    context["st_readonly"] = bool(flags & os.ST_RDONLY)
+    require(flags & os.ST_RDONLY, "runtime plist requires a read-only filesystem", context)
 
 
 @contextmanager
@@ -118,11 +147,13 @@ def _open_file(path, *, runtime_plist=False):
     parts = _path(path).split("/")[1:]
     descriptors = []
     links = []
+    stage, component, info = "filesystem entry", "/", None
     try:
         current = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         descriptors.append(current)
-        _owned(os.fstat(current), directory=True)
+        _owned(os.fstat(current), directory=True, component="/")
         for index, part in enumerate(parts):
+            component, info = "/" + "/".join(parts[:index + 1]), None
             directory = index < len(parts) - 1
             flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
             if directory:
@@ -131,9 +162,9 @@ def _open_file(path, *, runtime_plist=False):
             descriptors.append(child)
             info = os.fstat(child)
             if runtime_plist and not directory:
-                _readonly_plist(child)
+                _readonly_plist(child, component, "plist entry")
             else:
-                _owned(info, directory)
+                _owned(info, directory, component)
             # Directory timestamps can change for unrelated children. Their
             # identity/ownership/mode must not; the file also binds timestamps.
             identity = _identity(info)[:5] if directory else _identity(info)
@@ -141,13 +172,18 @@ def _open_file(path, *, runtime_plist=False):
             current = child
         yield current
         if runtime_plist:
-            _readonly_plist(current)
-        for parent, part, child, identity, directory in links:
+            _readonly_plist(current, path, "plist exit")
+        stage = "filesystem exit"
+        for index, (parent, part, child, identity, directory) in enumerate(links):
+            component, info = "/" + "/".join(parts[:index + 1]), None
             for info in (os.fstat(child), os.stat(part, dir_fd=parent, follow_symlinks=False)):
                 observed = _identity(info)[:5] if directory else _identity(info)
-                require(observed == identity, "runtime/tool path replaced during verification")
+                require(observed == identity, "runtime/tool path replaced during verification",
+                        _file_context(stage, component, info))
     except OSError as error:
-        raise Refusal("runtime/tool filesystem verification unavailable") from error
+        context = _file_context(stage, component, info)
+        context["errno"] = error.errno
+        raise Refusal("runtime/tool filesystem verification unavailable", context) from error
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)
@@ -194,7 +230,7 @@ def _inventory():
                 object_pairs_hook=_json_pairs,
             )
         except (ValueError, TypeError) as error:
-            raise Refusal("invalid runtime inventory") from error
+            raise Refusal("invalid runtime inventory", getattr(error, "context", None)) from error
         require(type(inventory) is dict and type(inventory.get("runtimes")) is list,
                 "invalid runtime inventory shape")
         require(all(type(item) is dict for item in inventory["runtimes"]),
@@ -223,8 +259,8 @@ def _alias(canonical):
             "standard /var alias unavailable")
     private = os.lstat("/private")
     target = os.lstat("/private/var")
-    _owned(private, directory=True)
-    _owned(target, directory=True)
+    _owned(private, directory=True, component="/private")
+    _owned(target, directory=True, component="/private/var")
     require(_identity(os.stat("/var")) == _identity(target), "standard /var identity mismatch")
     alias = canonical[len("/private"):]
     require(_identity(os.stat(alias)) == _identity(os.stat(canonical, follow_symlinks=False)),
@@ -234,12 +270,13 @@ def _alias(canonical):
 
 def _library(fd, canonical):
     info = os.fstat(fd)
+    context = _file_context("checker", canonical, info)
     require(info.st_size == LIBRARY_SIZE and stat.S_IMODE(info.st_mode) == 0o755
-            and info.st_uid == 0, "unreviewed checker file shape")
+            and info.st_uid == 0, "unreviewed checker file shape", context)
     data = _read(fd, LIBRARY_SIZE)
-    require(hashlib.sha256(data).hexdigest() == LIBRARY_SHA256, "unreviewed checker digest")
+    require(hashlib.sha256(data).hexdigest() == LIBRARY_SHA256, "unreviewed checker digest", context)
     require(data[:8] == struct.pack("<II", 0xFEEDFACF, 0x0100000C),
-            "checker must be thin arm64 Mach-O")
+            "checker must be thin arm64 Mach-O", context)
     _command(["/usr/bin/codesign", "--verify", "--strict", "-R", REQUIREMENT, canonical])
     require(_identity(os.fstat(fd)) == _identity(info), "checker changed during signature check")
     require(_identity(os.stat(canonical, follow_symlinks=False)) == _identity(info),
@@ -256,10 +293,12 @@ def verified_checker():
     This is not a reusable token: callers cannot supply context or verified flags.
     Hold the independently derived file and ancestors across the metadata work.
     """
+    stage, component = "inventory entry", DEVELOPER
     try:
         before = _inventory()
         bundle, root = before[-2:]
         canonical = root + "/usr/lib/libMainThreadChecker.dylib"
+        stage, component = "runtime plist", bundle + "/Contents/Info.plist"
         with _open_file(bundle + "/Contents/Info.plist", runtime_plist=True) as plist_fd, \
                 _open_file(canonical) as fd:
             plist_bytes = _read(plist_fd, OUTPUT_LIMIT)
@@ -269,12 +308,20 @@ def verified_checker():
                 raise Refusal("invalid runtime Info.plist") from error
             require(type(info) is dict and info.get("CFBundleIdentifier") == RUNTIME,
                     "runtime plist identifier mismatch")
+            stage, component = "checker/alias entry", canonical
             identity = _library(fd, canonical)
             alias = _alias(canonical)
             yield canonical, alias[0]
+            stage, component = "inventory exit", DEVELOPER
             require(_inventory() == before, "runtime/toolchain inventory changed")
+            stage, component = "runtime plist exit", bundle + "/Contents/Info.plist"
             require(_read(plist_fd, OUTPUT_LIMIT) == plist_bytes, "runtime plist changed")
+            stage, component = "checker/alias exit", canonical
             require(_library(fd, canonical) == identity, "checker identity changed")
             require(_alias(canonical) == alias, "standard alias changed")
+    except Refusal as error:
+        error.context = error.context or {"stage": stage, "component": component}
+        raise
     except OSError as error:
-        raise Refusal("live runtime verification unavailable") from error
+        raise Refusal("live runtime verification unavailable",
+                      {"stage": stage, "component": component, "errno": error.errno}) from error
