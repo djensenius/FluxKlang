@@ -64,6 +64,75 @@ class PackAcquireTests(unittest.TestCase):
                 self.refused()
                 self.restore()
 
+    def test_validated_pair_single_parse_immutable_and_fresh(self):
+        base = b"".join(("line %04d words and data\n" % i).encode() for i in range(100))
+        target = base[:700] + b"Git delta fixture insertion\n" + base[700:1800] + b"end\n"
+        with mock.patch.object(subprocess, "Popen", side_effect=AssertionError("process")), \
+                mock.patch.object(socket, "socket", side_effect=AssertionError("network")), \
+                mock.patch.object(os, "listdir", side_effect=AssertionError("enumeration")), \
+                mock.patch.object(os, "scandir", side_effect=AssertionError("enumeration")), \
+                mock.patch.object(git_pack, "_parse", wraps=git_pack._parse) as parse:
+            result = reader.acquire_validated_pair(str(self.root), self.pack_id)
+            self.assertEqual(parse.call_count, 1)
+            self.assertEqual(result.read(fixtures.BASE_ID), ("blob", base))
+            self.assertEqual(result.read(fixtures.TARGET_ID), ("blob", target))
+            for oid in ("0" * 40, "invalid"):
+                with self.assertRaises(ValueError):
+                    result.read(oid)
+            with self.assertRaises(TypeError):
+                result[0][bytes.fromhex(fixtures.BASE_ID)] = ("blob", b"forged")
+            with self.assertRaises(TypeError):
+                result[0] = {}
+            self.assertEqual(result.read(fixtures.BASE_ID), ("blob", base))
+            self.assertEqual(parse.call_count, 1)
+
+            self.paths[1].write_bytes(b"corrupt")
+            with self.assertRaises(reader.Refusal):
+                reader.acquire_validated_pair(str(self.root), self.pack_id)
+            self.assertEqual(parse.call_count, 2)
+            self.assertEqual(result.read(fixtures.BASE_ID), ("blob", base))
+            self.restore()
+            again = reader.acquire_validated_pair(str(self.root), self.pack_id)
+            self.assertEqual(parse.call_count, 3)
+            self.assertIsNot(again, result)
+            self.assertEqual(again.read(fixtures.TARGET_ID), ("blob", target))
+
+    def test_validated_pair_rejects_bad_unrequested_identity(self):
+        a = fixtures.object_id("blob", b"a")
+        b = fixtures.object_id("blob", b"b")
+        bad_b = b[:-1] + bytes([b[-1] ^ 1])
+        pack, index = fixtures.fixture([(a, fixtures.plain(3, b"a")),
+                                        (bad_b, fixtures.plain(3, b"b"))])
+        pack_id = pack[-20:].hex()
+        for suffix, data in (("pack", pack), ("idx", index)):
+            (self.directory / f"pack-{pack_id}.{suffix}").write_bytes(data)
+        with self.assertRaises(reader.Refusal) as raised:
+            reader.acquire_validated_pair(str(self.root), pack_id)
+        self.assertEqual(str(raised.exception.__cause__), "object identity mismatch")
+
+    def test_validated_pair_cleanup_on_parse_fault(self):
+        actual_open = os.open
+        opened_fds = []
+
+        def track(name, flags, mode=0o777, *, dir_fd=None):
+            fd = actual_open(name, flags, mode, dir_fd=dir_fd)
+            opened_fds.append(fd)
+            return fd
+
+        for error in (OSError("fault"), KeyboardInterrupt(), SystemExit()):
+            opened_fds.clear()
+            with self.subTest(error=type(error)), \
+                    mock.patch.object(os, "open", side_effect=track) as opened, \
+                    mock.patch.object(os, "supports_dir_fd", os.supports_dir_fd | {opened}), \
+                    mock.patch.object(git_pack, "_parse", side_effect=error):
+                expected = reader.Refusal if isinstance(error, OSError) else type(error)
+                with self.assertRaises(expected):
+                    reader.acquire_validated_pair(str(self.root), self.pack_id)
+            self.assertTrue(opened_fds)
+            for fd in opened_fds:
+                with self.assertRaises(OSError):
+                    os.fstat(fd)
+
     def test_invalid_inputs_before_open(self):
         class String(str):
             pass

@@ -1,5 +1,6 @@
 """Synthetic, adversarial filesystem fixtures for loose-object acquisition."""
 
+import errno
 import hashlib
 import os
 from pathlib import Path
@@ -94,6 +95,134 @@ class LooseAcquireTests(unittest.TestCase):
         (self.root / ".git").write_text("gitdir: /elsewhere\n", encoding="ascii")
         self.refused()
 
+    def test_only_target_open_enoent_is_loose_absence(self):
+        self.assertTrue(issubclass(reader.LooseAbsent, reader.Refusal))
+        self.path.unlink()
+        with self.assertRaises(reader.LooseAbsent):
+            self.read()
+        self.path.parent.rmdir()
+        with self.assertRaises(reader.LooseAbsent):
+            self.read()
+        self.objects.rmdir()
+        with self.assertRaises(reader.Refusal) as raised:
+            self.read()
+        self.assertNotIsInstance(raised.exception, reader.LooseAbsent)
+        (self.root / ".git").rmdir()
+        with self.assertRaises(reader.Refusal) as raised:
+            self.read()
+        self.assertNotIsInstance(raised.exception, reader.LooseAbsent)
+        with self.assertRaises(reader.Refusal) as raised:
+            self.read(root=str(self.root / "missing"))
+        self.assertNotIsInstance(raised.exception, reader.LooseAbsent)
+
+    def test_other_enoent_and_permission_errors_are_not_absence(self):
+        actual_open = os.open
+        actual_fstat = os.fstat
+        fanout_fds = []
+
+        def track(path, flags, mode=0o777, *, dir_fd=None):
+            fd = actual_open(path, flags, mode, dir_fd=dir_fd)
+            if path == self.oid[:2]:
+                fanout_fds.append(fd)
+            return fd
+
+        def bad_fstat(fd):
+            if fd in fanout_fds:
+                raise OSError(errno.ENOENT, "synthetic fstat")
+            return actual_fstat(fd)
+
+        for operation, fault in (
+                ("fstat", bad_fstat),
+                ("read", OSError(errno.ENOENT, "synthetic read")),
+                ("decode", OSError(errno.ENOENT, "synthetic decode")),
+                ("push", OSError(errno.ENOENT, "synthetic registration"))):
+            with self.subTest(operation=operation), \
+                    mock.patch.object(reader.os, "open", side_effect=track) as opened:
+                with mock.patch.object(reader.os, "supports_dir_fd",
+                                       reader.os.supports_dir_fd | {opened}):
+                    target = (git_loose if operation == "decode" else
+                              reader.ExitStack if operation == "push" else reader.os)
+                    name = ("read_object" if operation == "decode" else operation)
+                    with mock.patch.object(target, name, side_effect=fault):
+                        with self.assertRaises(reader.Refusal) as raised:
+                            self.read()
+                    self.assertNotIsInstance(raised.exception, reader.LooseAbsent)
+
+        for target in (self.oid[:2], self.oid[2:]):
+            def denied(path, flags, mode=0o777, *, dir_fd=None):
+                if path == target:
+                    raise OSError(errno.EACCES, "denied")
+                return actual_open(path, flags, mode, dir_fd=dir_fd)
+
+            with self.subTest(target=target), \
+                    mock.patch.object(reader.os, "open", side_effect=denied) as opened, \
+                    mock.patch.object(reader.os, "supports_dir_fd",
+                                      reader.os.supports_dir_fd | {opened}):
+                with self.assertRaises(reader.Refusal) as raised:
+                    self.read()
+                self.assertNotIsInstance(raised.exception, reader.LooseAbsent)
+
+    def test_absence_does_not_hide_cleanup_failure(self):
+        self.path.unlink()
+        actual_close = os.close
+        actual_open = os.open
+        fanout = []
+
+        def track(path, flags, mode=0o777, *, dir_fd=None):
+            fd = actual_open(path, flags, mode, dir_fd=dir_fd)
+            if path == self.oid[:2]:
+                fanout.append(fd)
+            return fd
+
+        def failed_close(fd):
+            actual_close(fd)
+            if fd in fanout:
+                raise OSError(errno.ENOENT, "synthetic close")
+
+        with mock.patch.object(reader.os, "open", side_effect=track) as opened, \
+                mock.patch.object(reader.os, "supports_dir_fd",
+                                  reader.os.supports_dir_fd | {opened}), \
+                mock.patch.object(reader.os, "close", side_effect=failed_close):
+            with self.assertRaises(reader.Refusal) as raised:
+                self.read()
+        self.assertTrue(fanout)
+        self.assertNotIsInstance(raised.exception, reader.LooseAbsent)
+
+    def test_target_registration_enoent_is_not_absence(self):
+        actual_push = reader.ExitStack.push
+        for stage in (4, 5):
+            pushes = []
+
+            def failing_push(stack, owner):
+                pushes.append(owner)
+                if len(pushes) == stage:
+                    raise OSError(errno.ENOENT, "synthetic registration")
+                return actual_push(stack, owner)
+
+            with self.subTest(stage=stage), \
+                    mock.patch.object(reader.ExitStack, "push", new=failing_push):
+                with self.assertRaises(reader.Refusal) as raised:
+                    self.read()
+            self.assertEqual(len(pushes), stage)
+            self.assertNotIsInstance(raised.exception, reader.LooseAbsent)
+
+    def test_corruption_and_symlink_are_not_absence(self):
+        self.path.write_bytes(b"corrupt")
+        with self.assertRaises(reader.Refusal) as raised:
+            self.read()
+        self.assertNotIsInstance(raised.exception, reader.LooseAbsent)
+        self.path.unlink()
+        self.path.symlink_to(self.path.parent / "missing")
+        with self.assertRaises(reader.Refusal) as raised:
+            self.read()
+        self.assertNotIsInstance(raised.exception, reader.LooseAbsent)
+        self.path.unlink()
+        self.path.parent.rmdir()
+        self.path.parent.symlink_to(self.objects / "missing", target_is_directory=True)
+        with self.assertRaises(reader.Refusal) as raised:
+            self.read()
+        self.assertNotIsInstance(raised.exception, reader.LooseAbsent)
+
     def test_symlinks_at_every_component_refuse(self):
         link = self.root.parent / (self.root.name + "-link")
         link.symlink_to(self.root, target_is_directory=True)
@@ -166,7 +295,9 @@ class LooseAcquireTests(unittest.TestCase):
             return result
 
         with mock.patch.object(reader.os, "read", side_effect=changing_read):
-            self.refused()
+            with self.assertRaises(reader.Refusal) as raised:
+                self.read()
+            self.assertNotIsInstance(raised.exception, reader.LooseAbsent)
 
     def test_read_is_capped_even_if_file_grows_after_initial_fstat(self):
         actual_read = os.read

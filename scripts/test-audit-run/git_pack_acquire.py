@@ -3,6 +3,7 @@
 from contextlib import ExitStack
 import os
 import stat
+from types import MappingProxyType
 
 import checkout_head
 import git_loose_acquire
@@ -24,13 +25,35 @@ def _read(descriptor, limit):
     return bytes(content)
 
 
+class ValidatedPair(tuple):
+    """Immutable validated content from one explicit acquisition."""
+
+    __slots__ = ()
+
+    def __new__(cls, objects):
+        return tuple.__new__(cls, (MappingProxyType(dict(objects)),))
+
+    def read(self, oid):
+        """Return (kind, bytes), or ValueError for an invalid or missing ID."""
+        return git_pack._lookup(self[0], oid)
+
+
 def acquire_pair(checkout_root, pack_id):
     """Return fresh validated (pack_bytes, index_bytes), or raise Refusal.
 
-    Lookup remains separate, via git_pack. This call fully parses the pair;
-    passing it to another parser/adapter incurs that interface's own budgets.
-    Descriptor metadata checks do not prove path custody or exclude all races.
+    Separate lookup parses again. Metadata checks do not prove path custody.
     """
+    pack, index, _ = _acquire(checkout_root, pack_id)
+    return pack, index
+
+
+def acquire_validated_pair(checkout_root, pack_id):
+    """Acquire and parse once for reuse within one snapshot, or raise Refusal."""
+    _, _, objects = _acquire(checkout_root, pack_id)
+    return ValidatedPair(objects)
+
+
+def _acquire(checkout_root, pack_id):
     pieces = checkout_head._checkout_path(checkout_root)
     expected = checkout_head._expected_oid(pack_id)
     if (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY")
@@ -70,8 +93,8 @@ def acquire_pair(checkout_root, pack_id):
             pack, index = contents
             if len(pack) < 20 or pack[-20:].hex() != expected:
                 raise Refusal("pack filename identity mismatch")
-            git_pack._parse(pack, index)
-            return pack, index
+            objects = git_pack._parse(pack, index)
+            return pack, index, objects
     except Refusal:
         raise
     except (OSError, TypeError, ValueError) as error:
