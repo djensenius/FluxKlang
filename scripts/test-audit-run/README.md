@@ -327,6 +327,12 @@ detection byte, checks size and before/after descriptor metadata (excluding
 access time), and applies the loose decoder's bounds and identity validation.
 Missing or unsupported layouts, including linked-worktree `.git` files,
 symlinks, nonregular files, malformed objects and detected changes refuse.
+The `git_loose_acquire.LooseAbsent` subclass of `Refusal` distinguishes only
+an `ENOENT` opening the requested fanout directory or leaf after successfully
+traversing the real root and `.git/objects`. Missing root, `.git` or `objects`,
+other operations' errors, and cleanup failures remain ordinary refusals.
+Existing `Refusal` handlers still catch absence. This is a path observation,
+subject to the race limitations below, not proof of repository-wide absence.
 It never falls back to packs or alternates: a missing loose object is not proof
 that the repository lacks it.
 
@@ -444,6 +450,22 @@ the subsequent lookup interface incurs its own parsing/budgets. This is not an
 invocation-wide acquisition/work or wall-clock budget, nor a ready-made
 envelope object reader; the existing envelope error-translation requirements
 still apply.
+
+`git_pack_acquire.acquire_validated_pair(checkout_root, pack_id)` instead
+performs the same fresh acquisition and exactly one complete validation, returning
+an immutable result whose `read(oid)` returns `(kind, bytes)` or raises
+`ValueError` for invalid or missing IDs. Missing means only absent from this
+explicit pair, not from the repository. Its validated content is retained without
+an exposed mutable object map: it uses immutable entries and binary search;
+lookup does not parse again. The result type has no public constructor and its
+ordinary constructor refuses input; it is not a security boundary against
+same-job code using Python introspection or modifying the runtime. Every
+acquisition opens and validates anew, including after a prior failure. Reusing
+the result is intended only within one future snapshot; a new acquisition is
+required for each snapshot. This changes freshness granularity from per-request
+acquisition and does not detect intervening or reverted changes. It provides no shared
+observation-wide work/call budget, source routing, error translation or envelope
+integration; those remain the future caller's responsibility.
 
 Ownership/cleanup patterns are shared with `git_loose_acquire`, with the same
 asynchronous interruption and failed-close limitations described above.
