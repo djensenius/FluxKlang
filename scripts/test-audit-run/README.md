@@ -207,6 +207,72 @@ feature defaults, guards, receipt behavior, CI triggers, provisioning, or
 privileged state and authorizes no hosted dispatch, simulator, test launch,
 hardware access, or credentials.
 
+### Standalone provider/job attribution observations (#893; source-only)
+
+`provider_attribution.py` adds `observe(context_reader, object_reader)` returning
+canonical JSON bytes and `validate(bytes, context_reader, object_reader)` requiring
+fresh identical observations. Neither writes output. The separate closed schema
+`ios-provider-job-attribution-observation-v1` leaves all preparer schemas/profiles
+(including schema 3) and #707 untouched. It is **provider/job-reported observation,
+not authenticated provenance**, a receipt, reusable authority, or iOS qualification.
+
+The future reviewed no-launch runner must supply code adapters, not commands or
+serialized authority: a closed context projection and a bounded read-only reader
+returning `(kind, raw_bytes)` for a requested 40-lowercase-hex Git object ID.
+**No adapters, CLI, hosted integration, or trigger changes are supplied here.**
+Adapters must observe the current checkout HEAD and actual GitHub event/job
+context, bound their own reads before returning, and must not read credentials,
+dump environments, execute data, fetch objects, honor replacement objects, or
+consult candidate toolchain paths. Missing objects refuse; no fetch/repair occurs.
+Git hashes validate supplied object content, not the honesty of these adapters,
+current remote refs, or GitHub/provider authenticity.
+
+The exact context keys are `repository`, `event_name`, `event_sha`, `event_ref`,
+`checkout_sha`, `pull_request`, `workflow`, `run_id`, `run_attempt`, `job`,
+`runner` (`name`, `environment`), and `platform` (`os`, `arch`). Positive bounded
+integer IDs/attempts, `github-hosted`, and `macOS`/`ARM64` are required. Push and
+workflow_dispatch use branch/tag refs, null PR context, and event=checkout SHA.
+Pull requests instead require `refs/pull/N/merge`, separate PR `number`,
+`head_sha`/`base_sha`, event=checkout SHA, and exact ordered commit parents
+`[base_sha, head_sha]`; the checkout is explicitly `pr-synthetic-merge`, never
+relabeled as the PR head. Unsupported contexts, including pull_request_target
+and head-only checkouts, refuse.
+
+The envelope has exactly `schema`, `assurance`, `context`, `checkout` (commit,
+tree, parents, kind), `workflow`, `executing_sources`, and `provider_runtime`.
+Workflow context is either explicitly null (output status `unavailable`, with
+SHA/ref/path/blob null), or exactly SHA/ref/path. Its ref must name the same
+repository and `.github/workflows/<name>.yml` or `.yaml` path; the workflow
+commit/tree/file object is independently content-checked to record its blob.
+Workflow SHA remains separate; no assumption that it equals checkout/head/base
+or proof that a ref currently resolves to it is made.
+
+The fixed executing-source allowlist is **only** `provider_attribution.py` and
+`ios_runtime.py` under `scripts/test-audit-run`. Their SHA256 and Git blob IDs
+are recorded after bounded regular-file reads match the checkout tree blobs.
+This does not hash a future runner, adapters, Python/stdlib, or loaded code in
+memory; reviewing that runner and its own fixed source allowlist is still a
+required follow-up, not a claim this library makes. The library checks context,
+Git objects and sources before/after the existing provider verifier, which
+itself rechecks its runtime observations. These snapshots are not atomic custody
+or protection against a hostile provider/job.
+
+Reads cap each source at 128 KiB, each Git object at 256 KiB, object requests at
+32 and aggregate object bytes at 1 MiB per snapshot, tree entries at 1024,
+commit headers at 16 KiB and parents at two. Unsupported tree modes (including
+symlinks/gitlinks), duplicate names, hostile/control strings, mismatched object
+IDs/ancestry, malformed or changed records, and noncanonical/tampered outputs
+refuse without returning evidence. JSON output is at most 32 KiB. The module
+has no process/Git command capability: its only native tool operations are
+delegation to the existing fixed, bounded provider verifier probes.
+
+Mock-only check (all process/native and source-read operations mocked):
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_provider_attribution.py'
+```
+
 ## Explicit opt-in retention requests
 
 Two additional closed profiles reuse the corresponding **original pinned input**,
