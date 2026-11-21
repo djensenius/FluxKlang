@@ -305,14 +305,49 @@ there is no wall-clock or shared multi-call budget.
 
 The decoder reads no files or ambient state, invokes no Git subprocess or
 network, and is not integrated into the envelope. SHA-1 consistency is not
-authentication or collision resistance. Multi-pack lookup, filesystem
-acquisition and race policy, hosted layout measurement and iOS launch remain
-separate; this does not assert hosted checkout compatibility or launch authority.
+authentication or collision resistance. Multi-pack lookup, hosted layout
+measurement and iOS launch remain separate; this does not assert hosted checkout
+compatibility or launch authority.
 The tests use an existing Git-produced loose fixture and do not invoke Git:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_git_loose.py'
+```
+
+`git_loose_acquire.read_object(checkout_root, oid)` is a separate, synchronous
+filesystem reader returning the decoder's `(kind, raw_bytes)` or raising
+`checkout_head.Refusal` (`ValueError`). It requires an explicit exact `str`
+absolute root with the same path restrictions as `checkout_head`, and an exact
+lowercase 40-hex SHA-1 ID. It traverses root components and `.git/objects/XX`
+using descriptor-relative no-follow directory opens, then opens the remaining
+OID component no-follow and nonblocking. Only a regular file is accepted; each
+call freshly reopens it, reads at most the 264 KiB compressed limit plus one
+detection byte, checks size and before/after descriptor metadata (excluding
+access time), and applies the loose decoder's bounds and identity validation.
+Missing or unsupported layouts, including linked-worktree `.git` files,
+symlinks, nonregular files, malformed objects and detected changes refuse.
+It never falls back to packs or alternates: a missing loose object is not proof
+that the repository lacks it.
+
+Descriptor owners are registered before opening; registration failures unwind
+already-owned descriptors. This is not absolute cleanup safety: asynchronous
+Python interruptions can occur between an open returning and recording its
+descriptor, or during cleanup (including in the reused checkout helpers).
+An interrupted or failed close cannot safely be retried because the descriptor
+number might already have been reused.
+
+The metadata checks detect some concurrent changes, not all races: a file or
+path can be replaced while its descriptor remains open, and hostile writers
+may evade metadata checks. SHA-1 validates object consistency, not custody or
+collision resistance. This does not verify HEAD, the complete checkout or
+hosted checkout compatibility, and has no envelope integration or launch
+authority. It invokes no Git command, subprocess, network or native launcher.
+Controlled synthetic fixtures run without Git:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_git_loose_acquire.py'
 ```
 
 `git_pack.read_object(pack_bytes, index_bytes, oid)` is an isolated in-memory
