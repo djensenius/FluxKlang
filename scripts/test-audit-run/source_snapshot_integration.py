@@ -26,6 +26,25 @@ _PATHS = tuple(sorted(f"{_DIRECTORY}/{name}" for name in _NAMES))
 _LIMIT = 128 * 1024
 
 
+def _module_graph():
+    edges = (
+        (provider_attribution.runtime, ios_runtime),
+        (git_snapshot_reader.checkout_head, checkout_head),
+        (git_snapshot_reader.git_loose, git_loose),
+        (git_snapshot_reader.git_loose_acquire, git_loose_acquire),
+        (git_snapshot_reader.git_pack, git_pack),
+        (git_snapshot_reader.git_pack_acquire, git_pack_acquire),
+        (git_loose_acquire.checkout_head, checkout_head),
+        (git_loose_acquire.git_loose, git_loose),
+        (git_pack_acquire.checkout_head, checkout_head),
+        (git_pack_acquire.git_loose_acquire, git_loose_acquire),
+        (git_pack_acquire.git_pack, git_pack),
+        (git_pack.git_delta, git_delta),
+    )
+    ios_runtime.require(all(actual is expected for actual, expected in edges),
+                        "project module dependency differs")
+
+
 def _module_paths(root):
     # These are path observations only, not evidence of loaded code integrity.
     modules = (
@@ -41,9 +60,55 @@ def _module_paths(root):
                             "loaded module path differs from fixed source")
 
 
+class _Descriptor:
+    """Close exactly once, retaining any simultaneous operation failure."""
+
+    def __init__(self):
+        self.fd = None
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        descriptor, self.fd = self.fd, None
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except (KeyboardInterrupt, SystemExit) as error:
+                error.original_error = exc_value
+                raise
+            except Exception as error:
+                refusal = ios_runtime.Refusal("descriptor cleanup failed")
+                refusal.original_error = exc_value
+                raise refusal from error
+        return False
+
+
+def _open_owned(stack, opener, *args, **kwargs):
+    owner = _Descriptor()
+    stack.push(owner)
+    owner.fd = opener(*args, **kwargs)
+    return owner
+
+
+def _directory(stack, parent, name):
+    owner = _open_owned(stack, os.open, name,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    ios_runtime.require(stat.S_ISDIR(os.fstat(owner.fd).st_mode),
+                        "expected a real directory")
+    return owner
+
+
+def _root(stack, pieces):
+    owner = _open_owned(stack, os.open, "/", os.O_RDONLY | os.O_DIRECTORY)
+    for piece in pieces:
+        child = _directory(stack, owner.fd, piece)
+        owner.__exit__(None, None, None)
+        owner = child
+    return owner.fd
+
+
 def _observe_sources(checkout_root, tree, objects):
     """Compare ten fresh fixed sources to tree blobs using the supplied _Objects."""
     try:
+        _module_graph()
         pieces = checkout_head._checkout_path(checkout_root)
         checkout_head._expected_oid(tree)
         ios_runtime.require(type(objects) is provider_attribution._Objects,
@@ -54,28 +119,24 @@ def _observe_sources(checkout_root, tree, objects):
                 or os.stat not in os.supports_follow_symlinks):
             raise ios_runtime.Refusal("descriptor-relative no-follow observation unavailable")
         _module_paths(checkout_root)
-        tracked = objects.files(tree, _PATHS)
+        tracked = provider_attribution._Objects.files(objects, tree, _PATHS)
         with ExitStack() as stack:
-            root = git_loose_acquire._open_owned(
-                stack, checkout_head._open_checkout_root, pieces,
-            )
+            root = _root(stack, pieces)
             root_info = os.fstat(root)
             parent = root
             directories = []
             for name in ("scripts", "test-audit-run"):
-                child = git_loose_acquire._open_owned(
-                    stack, checkout_head._open_directory, parent, name,
-                )
+                child = _directory(stack, parent, name).fd
                 directories.append((parent, name, child, os.fstat(child)))
                 parent = child
 
             files = []
             for path in _PATHS:
                 name = path.rpartition("/")[2]
-                descriptor = git_loose_acquire._open_owned(
+                descriptor = _open_owned(
                     stack, os.open, name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                     dir_fd=parent,
-                )
+                ).fd
                 before = os.fstat(descriptor)
                 ios_runtime.require(stat.S_ISREG(before.st_mode)
                                     and 0 <= before.st_size <= _LIMIT,
@@ -101,13 +162,12 @@ def _observe_sources(checkout_root, tree, objects):
                                     and metadata(os.stat(name, dir_fd=directory_parent,
                                                          follow_symlinks=False))
                                     == metadata(before), "source directory changed or replaced")
-            reopened = git_loose_acquire._open_owned(
-                stack, checkout_head._open_checkout_root, pieces,
-            )
+            reopened = _root(stack, pieces)
             ios_runtime.require(metadata(os.fstat(root)) == metadata(root_info)
                                 and metadata(os.fstat(reopened)) == metadata(root_info),
                                 "checkout root changed or replaced")
             _module_paths(checkout_root)
+            _module_graph()
             result = {}
             for path, _, _, _, data in files:
                 blob, expected = tracked[path]

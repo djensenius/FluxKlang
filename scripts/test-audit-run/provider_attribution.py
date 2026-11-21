@@ -166,7 +166,7 @@ class _Objects:
         return lines[0][5:].decode("ascii"), parents
 
     def _tree(self, tree):
-        data = self.get(tree, "tree")
+        data = _Objects.get(self, tree, "tree")
         entries = {}
         while data:
             header, separator, rest = data.partition(b"\0")
@@ -211,12 +211,12 @@ class _Objects:
                         "grouped sources must be distinct and share a directory")
         parent = ordered[0].rpartition("/")[0]
         for part in parent.split("/") if parent else ():
-            entries = self._tree(tree)
+            entries = _Objects._tree(self, tree)
             name = part.encode("ascii")
             runtime.require(name in entries, "tracked source unavailable")
             mode, tree = entries[name]
             runtime.require(mode == b"40000", "source is not a tracked regular file")
-        entries = self._tree(tree)
+        entries = _Objects._tree(self, tree)
         blobs = {}
         for path in ordered:
             name = path.rpartition("/")[2].encode("ascii")
@@ -225,7 +225,7 @@ class _Objects:
             runtime.require(mode in (b"100644", b"100755"),
                             "source is not a tracked regular file")
             blobs[path] = oid
-        return {path: (oid, self.get(oid, "blob")) for path, oid in blobs.items()}
+        return {path: (oid, _Objects.get(self, oid, "blob")) for path, oid in blobs.items()}
 
 
 def _source(path):

@@ -7,6 +7,7 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -26,6 +27,18 @@ from test_provider_attribution import GitObjects
 MODULES = (observer, provider_attribution, ios_runtime, checkout_head,
            git_snapshot_reader, git_loose, git_loose_acquire, git_pack,
            git_pack_acquire, git_delta)
+EXPECTED_PATHS = tuple(sorted((
+    "scripts/test-audit-run/source_snapshot_integration.py",
+    "scripts/test-audit-run/provider_attribution.py",
+    "scripts/test-audit-run/ios_runtime.py",
+    "scripts/test-audit-run/checkout_head.py",
+    "scripts/test-audit-run/git_snapshot_reader.py",
+    "scripts/test-audit-run/git_loose.py",
+    "scripts/test-audit-run/git_loose_acquire.py",
+    "scripts/test-audit-run/git_pack.py",
+    "scripts/test-audit-run/git_pack_acquire.py",
+    "scripts/test-audit-run/git_delta.py",
+)))
 
 
 class FixedSourceTests(unittest.TestCase):
@@ -79,6 +92,67 @@ class FixedSourceTests(unittest.TestCase):
         objects.total = 1024 * 1024
         with self.assertRaisesRegex(ios_runtime.Refusal, "total size limit"):
             self.observe(objects)
+
+    def test_exact_fixed_paths(self):
+        self.assertEqual(observer._PATHS, EXPECTED_PATHS)
+        self.assertEqual(tuple(self.observe()), EXPECTED_PATHS)
+
+    def test_shadowed_object_methods_cannot_bypass_validation(self):
+        for name in ("files", "_tree", "get"):
+            with self.subTest(name=name):
+                objects = provider_attribution._Objects(self.git.read)
+                setattr(objects, name, mock.Mock(side_effect=AssertionError("shadow called")))
+                result = self.observe(objects)
+                self.assertEqual(tuple(result), EXPECTED_PATHS)
+                self.assertEqual(objects.count, 13)
+                getattr(objects, name).assert_not_called()
+                objects.count = provider_attribution.OBJECT_COUNT
+                with self.assertRaisesRegex(ios_runtime.Refusal, "count limit"):
+                    self.observe(objects)
+
+        objects = provider_attribution._Objects(self.git.read)
+
+        def reader(oid):
+            objects._tree = lambda tree: {}
+            objects.get = lambda *args: b"bad"
+            return self.git.read(oid)
+
+        objects.reader = reader
+        self.assertEqual(tuple(self.observe(objects)), EXPECTED_PATHS)
+        self.assertEqual(objects.count, 13)
+        objects = provider_attribution._Objects(lambda oid: ("tree", b"wrong"))
+        objects.files = objects._tree = objects.get = lambda *args: {}
+        with self.assertRaisesRegex(ios_runtime.Refusal, "identity mismatch"):
+            self.observe(objects)
+
+    def test_project_dependency_graph_identity(self):
+        edges = (
+            (provider_attribution, "runtime", ios_runtime),
+            (git_snapshot_reader, "checkout_head", checkout_head),
+            (git_snapshot_reader, "git_loose", git_loose),
+            (git_snapshot_reader, "git_loose_acquire", git_loose_acquire),
+            (git_snapshot_reader, "git_pack", git_pack),
+            (git_snapshot_reader, "git_pack_acquire", git_pack_acquire),
+            (git_loose_acquire, "checkout_head", checkout_head),
+            (git_loose_acquire, "git_loose", git_loose),
+            (git_pack_acquire, "checkout_head", checkout_head),
+            (git_pack_acquire, "git_loose_acquire", git_loose_acquire),
+            (git_pack_acquire, "git_pack", git_pack),
+            (git_pack, "git_delta", git_delta),
+        )
+        for module, name, expected in edges:
+            with self.subTest(module=module.__name__, name=name), \
+                    mock.patch.object(module, name, SimpleNamespace(__file__=expected.__file__)):
+                with self.assertRaisesRegex(ios_runtime.Refusal, "module dependency"):
+                    self.observe()
+
+        def substitute(oid):
+            git_pack.git_delta = SimpleNamespace(__file__=git_delta.__file__)
+            return self.git.read(oid)
+
+        with mock.patch.object(git_pack, "git_delta", git_delta):
+            with self.assertRaisesRegex(ios_runtime.Refusal, "module dependency"):
+                self.observe(provider_attribution._Objects(substitute))
 
     def test_fresh_reads_mismatch_and_restoration(self):
         original = self.observe()
@@ -289,6 +363,105 @@ class FixedSourceTests(unittest.TestCase):
                     with self.assertRaises(ios_runtime.Refusal):
                         self.observe()
                 self.assertTrue(targets)
+
+    def test_simultaneous_operation_and_cleanup_errors_are_retained(self):
+        actual_open, actual_read, actual_close = os.open, os.read, os.close
+        for fault in ("read", "mismatch"):
+            with self.subTest(fault=fault):
+                target = self.root / observer._PATHS[0]
+                if fault == "mismatch":
+                    target.write_bytes(b"mismatch")
+                descriptors, close_calls = [], []
+
+                def opened(name, flags, mode=0o777, *, dir_fd=None):
+                    fd = actual_open(name, flags, mode, dir_fd=dir_fd)
+                    if name == target.name:
+                        descriptors.append(fd)
+                    return fd
+
+                def read(fd, size):
+                    if fault == "read" and fd in descriptors:
+                        raise OSError("injected read fault")
+                    return actual_read(fd, size)
+
+                def closed(fd):
+                    if fd in descriptors:
+                        close_calls.append(fd)
+                        actual_close(fd)
+                        raise OSError("injected close fault")
+                    return actual_close(fd)
+
+                with mock.patch.object(os, "open", side_effect=opened) as opener, \
+                        mock.patch.object(os, "supports_dir_fd", os.supports_dir_fd | {opener}), \
+                        mock.patch.object(os, "read", side_effect=read), \
+                        mock.patch.object(os, "close", side_effect=closed):
+                    with self.assertRaisesRegex(ios_runtime.Refusal, "descriptor cleanup failed") as raised:
+                        self.observe()
+                self.assertEqual(str(raised.exception.__cause__), "injected close fault")
+                original = raised.exception.original_error
+                self.assertIn("injected read fault" if fault == "read" else
+                              "source differs from tracked blob", str(original))
+                self.assertEqual(close_calls, descriptors)
+                with self.assertRaises(OSError):
+                    os.fstat(descriptors[0])
+                target.write_bytes(self.data[observer._PATHS[0]])
+
+    def test_root_walk_open_and_close_errors_are_retained(self):
+        actual_open, actual_close = os.open, os.close
+        root_fds = []
+        close_calls = []
+
+        def opened(name, flags, mode=0o777, *, dir_fd=None):
+            if name == self.root.parts[1]:
+                raise OSError("injected traversal fault")
+            fd = actual_open(name, flags, mode, dir_fd=dir_fd)
+            if name == "/":
+                root_fds.append(fd)
+            return fd
+
+        def closed(fd):
+            actual_close(fd)
+            if fd in root_fds:
+                close_calls.append(fd)
+                raise OSError("injected close fault")
+
+        with mock.patch.object(os, "open", side_effect=opened) as opener, \
+                mock.patch.object(os, "supports_dir_fd", os.supports_dir_fd | {opener}), \
+                mock.patch.object(os, "close", side_effect=closed):
+            with self.assertRaisesRegex(ios_runtime.Refusal, "descriptor cleanup failed") as raised:
+                self.observe()
+        self.assertEqual(str(raised.exception.__cause__), "injected close fault")
+        self.assertEqual(str(raised.exception.original_error), "injected traversal fault")
+        self.assertEqual(close_calls, root_fds)
+        with self.assertRaises(OSError):
+            os.fstat(root_fds[0])
+
+    def test_cleanup_interruptions_preserve_operation_error(self):
+        actual_open, actual_close = os.open, os.close
+        for interruption in (KeyboardInterrupt, SystemExit):
+            with self.subTest(interruption=interruption):
+                descriptors, close_calls = [], []
+
+                def opened(name, flags, mode=0o777, *, dir_fd=None):
+                    fd = actual_open(name, flags, mode, dir_fd=dir_fd)
+                    if name == observer._PATHS[0].rpartition("/")[2]:
+                        descriptors.append(fd)
+                    return fd
+
+                def closed(fd):
+                    actual_close(fd)
+                    if fd in descriptors:
+                        close_calls.append(fd)
+                        raise interruption("injected interruption")
+
+                with mock.patch.object(os, "open", side_effect=opened) as opener, \
+                        mock.patch.object(os, "supports_dir_fd", os.supports_dir_fd | {opener}), \
+                        mock.patch.object(os, "read", side_effect=OSError("read fault")), \
+                        mock.patch.object(os, "close", side_effect=closed):
+                    with self.assertRaises(interruption) as raised:
+                        self.observe()
+                self.assertEqual(str(raised.exception.original_error), "read fault")
+                self.assertEqual(close_calls, descriptors)
 
     def test_invalid_inputs(self):
         for root, tree, objects in (
