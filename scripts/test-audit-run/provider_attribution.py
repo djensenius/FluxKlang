@@ -165,29 +165,67 @@ class _Objects:
                         "ambiguous commit ancestry")
         return lines[0][5:].decode("ascii"), parents
 
+    def _tree(self, tree):
+        data = self.get(tree, "tree")
+        entries = {}
+        while data:
+            header, separator, rest = data.partition(b"\0")
+            runtime.require(separator and len(rest) >= 20, "malformed Git tree")
+            mode, space, name = header.partition(b" ")
+            runtime.require(space and mode in (b"40000", b"100644", b"100755")
+                            and 0 < len(name) <= 255 and b"/" not in name
+                            and re.fullmatch(rb"[A-Za-z0-9_. -]+", name)
+                            and name not in (b".", b"..") and name not in entries,
+                            "unsupported/ambiguous Git tree entry")
+            entries[name] = (mode, rest[:20].hex())
+            runtime.require(len(entries) <= 1024, "Git tree entry count limit")
+            data = rest[20:]
+        return entries
+
     def file(self, tree, path):
         parts = path.split("/")
         for index, part in enumerate(parts):
-            data = self.get(tree, "tree")
-            entries = {}
-            while data:
-                header, separator, rest = data.partition(b"\0")
-                runtime.require(separator and len(rest) >= 20, "malformed Git tree")
-                mode, space, name = header.partition(b" ")
-                runtime.require(space and mode in (b"40000", b"100644", b"100755")
-                                and 0 < len(name) <= 255 and b"/" not in name
-                                and re.fullmatch(rb"[A-Za-z0-9_. -]+", name)
-                                and name not in (b".", b"..") and name not in entries,
-                                "unsupported/ambiguous Git tree entry")
-                entries[name] = (mode, rest[:20].hex())
-                runtime.require(len(entries) <= 1024, "Git tree entry count limit")
-                data = rest[20:]
+            entries = self._tree(tree)
             runtime.require(part.encode("ascii") in entries, "tracked source unavailable")
             mode, tree = entries[part.encode("ascii")]
             runtime.require(mode == b"40000" if index < len(parts) - 1
                             else mode in (b"100644", b"100755"),
                             "source is not a tracked regular file")
         return tree, self.get(tree, "blob")
+
+    def files(self, tree, paths):
+        """Opt-in lookup of explicitly named files in one directory, not enumeration."""
+        runtime.require(type(paths) in (tuple, list) and 0 < len(paths) <= OBJECT_COUNT,
+                        "invalid grouped source paths")
+        for path in paths:
+            runtime.require(type(path) is str and 0 < len(path) <= 4096,
+                            "invalid grouped source path")
+            parts = path.split("/")
+            runtime.require(len(parts) <= OBJECT_COUNT and all(
+                0 < len(part) <= 255 and part not in (".", "..")
+                and re.fullmatch(r"[A-Za-z0-9_. -]+", part, flags=re.ASCII)
+                for part in parts), "invalid grouped source path")
+        ordered = sorted(paths)
+        runtime.require(len(set(ordered)) == len(ordered)
+                        and len({path.rpartition("/")[0] for path in ordered}) == 1,
+                        "grouped sources must be distinct and share a directory")
+        parent = ordered[0].rpartition("/")[0]
+        for part in parent.split("/") if parent else ():
+            entries = self._tree(tree)
+            name = part.encode("ascii")
+            runtime.require(name in entries, "tracked source unavailable")
+            mode, tree = entries[name]
+            runtime.require(mode == b"40000", "source is not a tracked regular file")
+        entries = self._tree(tree)
+        blobs = {}
+        for path in ordered:
+            name = path.rpartition("/")[2].encode("ascii")
+            runtime.require(name in entries, "tracked source unavailable")
+            mode, oid = entries[name]
+            runtime.require(mode in (b"100644", b"100755"),
+                            "source is not a tracked regular file")
+            blobs[path] = oid
+        return {path: (oid, self.get(oid, "blob")) for path, oid in blobs.items()}
 
 
 def _source(path):

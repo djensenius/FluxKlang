@@ -588,6 +588,18 @@ refuse without returning evidence. JSON output is at most 32 KiB. The module
 has no process/Git command capability: its only native tool operations are
 delegation to the existing fixed, bounded provider verifier probes.
 
+The internal opt-in `_Objects.files(tree, paths)` is a source-only prerequisite,
+not integrated into `observe` or `validate` or their fixed allowlist. It accepts a
+nonempty list or tuple of at most 32 distinct canonical relative ASCII paths in
+one directory, each at most 4096 characters and 32 components (255 characters
+per component). Components use only ASCII letters, digits, underscore, dot,
+space, and hyphen, and cannot be empty, `.` or `..`. It returns a path-sorted
+mapping to `(blob ID, bytes)`, reading shared trees once and each requested blob
+separately through the same object and tree limits. It does not enumerate
+candidates or cache across calls or snapshots.
+This helper makes no claim of hosted compatibility, custody, authenticated
+provenance, or launch authority.
+
 Mock-only check (all process/native and source-read operations mocked):
 
 ```sh
