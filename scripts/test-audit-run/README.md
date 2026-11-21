@@ -486,6 +486,48 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_git_pack_acquire.py'
 ```
 
+`git_snapshot_reader.Invocation(checkout_root, pack_id)` is an opt-in,
+sequential adapter for one invocation and at most two snapshots. Both arguments
+have the same exact-string validation as pack acquisition; `pack_id` explicitly
+selects the only pair considered. Call `invocation.snapshot()` once per
+snapshot and call the returned reader with each object ID. Creating the next
+snapshot invalidates the previous reader. A reader returns `(kind, bytes)` or
+raises `KeyError`; invalid construction raises `checkout_head.Refusal`.
+Any refusal, invalidated-reader use, limit breach, or interrupted attempt
+permanently disables the invocation. It cannot be reset, copied or serialized
+through its ordinary API. It is not thread-safe. Use a new invocation for
+each separate operation, not a new invocation to evade the limits.
+
+Every object call freshly attempts loose acquisition, including repeated IDs.
+Only `LooseAbsent` selects the named pair; corruption, cleanup errors and all
+other refusals do not. On first need in a snapshot the adapter freshly acquires
+and completely validates the pair once, retaining its immutable lookup result
+only for that snapshot. A missing ID in that pair is a refusal, not evidence of
+repository-wide absence. No packs or alternates are enumerated or tried.
+
+Across both snapshots, the fixed ceilings are 64 object calls, two pair
+acquisition/parse attempts, 17,301,568 bytes of reserved loose compressed I/O,
+and 18,874,372 bytes of reserved pack/index I/O. Before each attempt the
+adapter reserves the applicable existing per-file cap **plus one detection
+byte**, even when the actual read is smaller or fails; it does not depend on
+compressed sizes returned by the helpers. Failures are terminal, so retries
+cannot repeat expensive work. The existing per-object and parser limits above
+remain unchanged. These are conservative work and byte bounds, not a wall-clock
+deadline.
+
+The adapter is not integrated into `observe` or `validate`; their existing APIs
+and freshness behavior are unchanged. A future integration must explicitly
+mark each snapshot and share one invocation across them. Pair contents may
+change between reads within a snapshot without being re-acquired; a later
+snapshot acquires again only if needed. Loose and pack acquisition retain the
+race, cleanup and SHA-1 limitations described above. This is not authenticated
+provenance, custody, broad checkout compatibility or launch authority.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_git_snapshot_reader.py'
+```
+
 `git_delta.apply_delta(base, program)` is a separate pure byte-to-byte primitive,
 not that reader. It applies a single uncompressed Git pack delta as described
 in `gitformat-pack(5)`, or raises `ValueError`. It accepts only plain `bytes`:
