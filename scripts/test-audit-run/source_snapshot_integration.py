@@ -71,10 +71,15 @@ class _Descriptor:
         if descriptor is not None:
             try:
                 os.close(descriptor)
-            except (KeyboardInterrupt, SystemExit) as error:
-                error.original_error = exc_value
-                raise
-            except Exception as error:
+            except (KeyboardInterrupt, SystemExit, Exception) as error:
+                if isinstance(exc_value, (KeyboardInterrupt, SystemExit)):
+                    exc_value.cleanup_errors = (
+                        getattr(exc_value, "cleanup_errors", ()) + (error,)
+                    )
+                    return False
+                if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                    error.original_error = exc_value
+                    raise
                 refusal = ios_runtime.Refusal("descriptor cleanup failed")
                 refusal.original_error = exc_value
                 raise refusal from error

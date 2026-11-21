@@ -436,6 +436,63 @@ class FixedSourceTests(unittest.TestCase):
         with self.assertRaises(OSError):
             os.fstat(root_fds[0])
 
+    def test_multiple_close_faults_preserve_interruptions_and_diagnostics(self):
+        actual_open, actual_read, actual_close = os.open, os.read, os.close
+        names = [path.rpartition("/")[2] for path in observer._PATHS[:2]]
+        target = self.root / observer._PATHS[0]
+        for interruption in (KeyboardInterrupt, SystemExit):
+            for scenario in ("active", "earlier close", "ordinary"):
+                with self.subTest(interruption=interruption, scenario=scenario):
+                    descriptors, closes, faults = [], [], []
+                    signal = interruption("interrupted")
+                    if scenario != "active":
+                        target.write_bytes(b"mismatch")
+
+                    def opened(name, flags, mode=0o777, *, dir_fd=None):
+                        fd = actual_open(name, flags, mode, dir_fd=dir_fd)
+                        if name in names:
+                            descriptors.append(fd)
+                        return fd
+
+                    def read(fd, size):
+                        if scenario == "active" and len(descriptors) == 2 and fd == descriptors[1]:
+                            raise signal
+                        return actual_read(fd, size)
+
+                    def closed(fd):
+                        actual_close(fd)
+                        if fd in descriptors:
+                            closes.append(fd)
+                            if scenario == "earlier close" and len(closes) == 1:
+                                raise signal
+                            error = OSError(f"close fault {len(closes)}")
+                            faults.append(error)
+                            raise error
+
+                    with mock.patch.object(os, "open", side_effect=opened) as opener, \
+                            mock.patch.object(os, "supports_dir_fd", os.supports_dir_fd | {opener}), \
+                            mock.patch.object(os, "read", side_effect=read), \
+                            mock.patch.object(os, "close", side_effect=closed):
+                        expected = ios_runtime.Refusal if scenario == "ordinary" else interruption
+                        with self.assertRaises(expected) as raised:
+                            self.observe()
+                    self.assertEqual(closes, list(reversed(descriptors)))
+                    for fd in descriptors:
+                        with self.assertRaises(OSError):
+                            os.fstat(fd)
+                    if scenario == "ordinary":
+                        later = raised.exception
+                        self.assertIs(later.__cause__, faults[1])
+                        earlier = later.original_error
+                        self.assertIs(earlier.__cause__, faults[0])
+                        self.assertIn("source differs", str(earlier.original_error))
+                    else:
+                        self.assertIs(raised.exception, signal)
+                        self.assertEqual(signal.cleanup_errors, tuple(faults))
+                        if scenario == "earlier close":
+                            self.assertIn("source differs", str(signal.original_error))
+                    target.write_bytes(self.data[observer._PATHS[0]])
+
     def test_cleanup_interruptions_preserve_operation_error(self):
         actual_open, actual_close = os.open, os.close
         for interruption in (KeyboardInterrupt, SystemExit):

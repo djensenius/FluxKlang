@@ -317,7 +317,9 @@ retrying close; a cleanup refusal's `__cause__` is the close error and its
 cleanup failures nest through `original_error`. The local descriptor owners
 avoid helpers that suppress close failures while unwinding. Cleanup
 `KeyboardInterrupt` and `SystemExit` propagate with the same `original_error`
-attribute rather than being converted to refusals.
+attribute rather than being converted to refusals. An active interruption
+remains the propagated exception if later closes fail; those errors are retained
+in its `cleanup_errors` tuple in close order, without retrying any descriptor.
 These checks detect some replacements and mutations but do not exclude races.
 
 The supplied tree is **not** tied to HEAD here; detached-HEAD verification and
