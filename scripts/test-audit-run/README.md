@@ -255,15 +255,76 @@ the reported checkout SHA; this adapter supplies none of those operations.
 Reported values are not authenticated, and the projection alone verifies
 neither checkout nor source and confers no launch authority.
 
-The future runner also needs a separately reviewed bounded read-only Git-object
-reader returning `(kind, raw_bytes)` for a requested 40-lowercase-hex Git object
-ID. **No Git adapter, CLI, output writer, hosted integration, or trigger changes
-are supplied here.** That reader must observe actual checkout HEAD, bound its
-own reads before returning, and must not read credentials, dump environments,
+`git_pack.read_object(pack_bytes, index_bytes, oid)` is an isolated in-memory
+SHA-1 Git-object reader returning `(kind, raw_bytes)` for a full lowercase
+40-hex ID, or raising `ValueError`. It only consumes the explicitly supplied
+plain `bytes` pack and index; it does not read loose objects, files or ambient
+state, invoke Git, discover HEAD, fetch, publish output, or consult other packs.
+It accepts pack version 2 and index version 2, including ordinary commit, tree,
+blob, tag, REF_DELTA and OFS_DELTA entries within the bounds below. It rejects
+thin/cross-pack bases, unsupported formats, missing objects, cycles, corrupt
+compression, malformed structure, and mismatched checksums, CRCs or object IDs.
+It validates the entire supplied pack, including unrequested entries, before
+returning; a bad unrelated entry therefore also refuses.
+Nonminimal pack object-size headers are refused even if Git `index-pack` accepts
+them.
+
+Fixed inclusive limits per call (no caller overrides): pack 8 MiB, index 1 MiB,
+4,096 entries, non-delta and reconstructed objects 256 KiB, each delta program
+1 MiB, 8 MiB aggregate declared inflated bytes, 8 MiB aggregate reconstructed
+bytes, and 32 objects per delta chain including its base. The existing delta
+primitive also caps each program at 65,536 instructions and uses minimal size
+varints. Input lengths and counts are checked before variable allocation; zlib
+output is capped to the declared size plus one byte, and exact stream boundaries
+are required. The total inflated-program budget also bounds cumulative delta
+instruction work; a single delta's temporary output can add up to two copies of
+256 KiB beyond retained results. Index entries and compressed input are bounded
+independently. Large-offset index entries cannot describe an accepted pack under
+the 8 MiB cap. Unsupported, even otherwise valid, larger packs refuse.
+
+`git_pack.BoundedReader` is an optional synchronous, in-memory adapter for one
+`observe` or `validate` invocation, encompassing both envelope snapshots. Its
+`read(pack_bytes, index_bytes, oid)` takes fresh, explicitly supplied bytes on
+every call, converts parser `ValueError` to `KeyError` (which the envelope
+converts to `runtime.Refusal`), and caches only a completely validated pair.
+Plain immutable bytes are required. Byte-for-byte equal pairs reuse the results;
+changed pack **or** index bytes invalidate the cache and require full validation.
+Any refusal permanently disables that instance; it never falls back to prior
+results. It allows at most 64 calls and two full validation attempts per instance,
+including failed attempts, so repeated requests in the envelope's two snapshots
+cannot repeatedly parse an expensive pack. More than two different valid pairs
+in one invocation refuse. This bounds parsing but does not bound the caller's
+input acquisition or wall-clock time, and the adapter is not thread-safe.
+
+The future caller must create a new adapter for each `observe` or `validate`,
+and its `object_reader(oid)` must obtain fresh bounded pack/index bytes on
+**every** invocation before calling `adapter.read(pack, index, oid)`. It must
+translate any acquisition `ValueError` to `KeyError` or `runtime.Refusal` too;
+the envelope does not catch a bare `ValueError`. Never bind a frozen pair once
+and reuse it across both snapshots: that conceals later input changes. The
+adapter has no input-acquisition function, I/O, or implicit source. The direct
+`read_object` API remains independent and raises `ValueError`; repeated direct
+calls reparse the whole pack and have no shared invocation-wide budget. Neither
+interface detects mutations between acquisitions, changes that are later
+reverted, or a changed pack containing the same observed objects: the envelope
+compares observations, not pack custody.
+
+This is not a filesystem adapter or a checkout/HEAD observation. A future
+reviewed runner must separately acquire fresh bounded bytes and verify actual
+checkout HEAD and custody; it must not read credentials, dump environments,
 execute data, fetch objects, honor replacement objects, or consult candidate
-toolchain paths. Missing objects refuse; no fetch/repair occurs. Git hashes
-validate supplied object content, not adapter honesty, current remote refs, or
-GitHub/provider authenticity.
+toolchain paths. SHA-1 checks validate consistency of supplied bytes, not their
+origin or authenticity; SHA-1 is not collision-resistant. Provider and same-job
+code remain trusted. There is no CLI, output writer, hosted integration or
+trigger change, and no provenance or launch authority is conferred.
+
+The static loose and REF/OFS pack/index fixtures were produced by Git; tests do
+not invoke Git:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_git_pack.py'
+```
 
 `git_delta.apply_delta(base, program)` is a separate pure byte-to-byte primitive,
 not that reader. It applies a single uncompressed Git pack delta as described
@@ -275,12 +336,10 @@ accepts them. The program must declare the exact base and output sizes, and
 copy and insert operations must fit. Optional copy flag bytes may contain zero,
 and zero copy length means 65,536 bytes, as specified by Git.
 
-This primitive neither reads packs/indexes nor decompresses, resolves delta
-chains, verifies object hashes or HEAD, or observes a checkout. Separately
-reviewed pack/index I/O, decompression bounds, chain depth and aggregate
-byte/work budgets, object identity verification, and custody remain necessary.
-Provider and same-job code remain trusted; this is not authenticated provenance
-or launch authority. The isolated Git-produced fixture runs without Git or I/O:
+This primitive itself neither reads packs/indexes nor decompresses, resolves
+delta chains, verifies object hashes or HEAD, or observes a checkout. The
+separate in-memory pack reader above uses it; filesystem I/O and custody remain
+future work. The isolated Git-produced fixture runs without Git or I/O:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \

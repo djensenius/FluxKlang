@@ -13,6 +13,8 @@ from unittest import mock
 
 import ios_runtime as runtime
 import provider_attribution as attribution
+import git_pack
+import test_git_pack as pack_fixture
 
 
 class GitObjects:
@@ -147,6 +149,64 @@ class AttributionTests(unittest.TestCase):
 
     def observe(self):
         return attribution.observe(lambda: copy.deepcopy(self.context), self.git.read)
+
+    def test_explicit_pack_adapter_with_fresh_inputs_and_refusals(self):
+        types = {"commit": 1, "tree": 2, "blob": 3, "tag": 4}
+        entries = [(bytes.fromhex(oid), pack_fixture.plain(types[kind], data))
+                   for oid, (kind, data) in self.git.objects.items()]
+        pack, index = pack_fixture.fixture(entries)
+        current = [pack, index]
+
+        def object_reader(oid):
+            # The real future caller must obtain fresh bounded input here.
+            return cache.read(current[0], current[1], oid)
+
+        cache = git_pack.BoundedReader()
+        with mock.patch.object(git_pack, "_parse", wraps=git_pack._parse) as parse:
+            data = attribution.observe(lambda: copy.deepcopy(self.context), object_reader)
+            self.assertEqual(parse.call_count, 1)
+            cache = git_pack.BoundedReader()
+            attribution.validate(data, lambda: copy.deepcopy(self.context), object_reader)
+            self.assertEqual(parse.call_count, 2)
+
+        # A corrupt second observation must not fall back to the first cache.
+        cache = git_pack.BoundedReader()
+        self.on_exit = lambda: current.__setitem__(0, pack[:-1] + b"x")
+        with self.assertRaisesRegex(runtime.Refusal, "Git object observation unavailable"):
+            attribution.observe(lambda: copy.deepcopy(self.context), object_reader)
+
+        # An independently valid pack with a missing requested object also
+        # becomes Refusal through the existing envelope's KeyError boundary.
+        current[:] = pack_fixture.fixture(entries[:-1])
+        cache = git_pack.BoundedReader()
+        with self.assertRaisesRegex(runtime.Refusal, "Git object observation unavailable"):
+            attribution.observe(lambda: copy.deepcopy(self.context), object_reader)
+
+    def test_equivalent_repacked_objects_are_observations_not_pack_custody(self):
+        types = {"commit": 1, "tree": 2, "blob": 3, "tag": 4}
+        entries = [(bytes.fromhex(oid), pack_fixture.plain(types[kind], data))
+                   for oid, (kind, data) in self.git.objects.items()]
+        first = pack_fixture.fixture(entries)
+        second = pack_fixture.fixture(list(reversed(entries)))
+        self.assertNotEqual(first[0], second[0])
+        self.assertNotEqual(first[1], second[1])
+        expected = self.observe()
+        current = [first]
+        seen = []
+        cache = git_pack.BoundedReader()
+
+        def object_reader(oid):
+            pair = current[0]
+            seen.append(pair)
+            return cache.read(*pair, oid)
+
+        self.on_exit = lambda: current.__setitem__(0, second)
+        with mock.patch.object(git_pack, "_parse", wraps=git_pack._parse) as parse:
+            actual = attribution.observe(lambda: copy.deepcopy(self.context), object_reader)
+        self.assertEqual(actual, expected)
+        self.assertEqual(parse.call_args_list, [mock.call(*first), mock.call(*second)])
+        self.assertGreater(seen.count(first), 1)
+        self.assertGreater(seen.count(second), 1)
 
     def validate(self, data):
         attribution.validate(data, lambda: copy.deepcopy(self.context), self.git.read)
