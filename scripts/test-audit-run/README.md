@@ -265,6 +265,28 @@ toolchain paths. Missing objects refuse; no fetch/repair occurs. Git hashes
 validate supplied object content, not adapter honesty, current remote refs, or
 GitHub/provider authenticity.
 
+`git_delta.apply_delta(base, program)` is a separate pure byte-to-byte primitive,
+not that reader. It applies a single uncompressed Git pack delta as described
+in `gitformat-pack(5)`, or raises `ValueError`. It accepts only plain `bytes`:
+base and program are each limited to 1 MiB, declared output to 256 KiB, and
+instructions to 65,536. Size varints must be minimally encoded and at most
+2^63-1; this intentionally rejects nonminimal encodings even if a Git version
+accepts them. The program must declare the exact base and output sizes, and
+copy and insert operations must fit. Optional copy flag bytes may contain zero,
+and zero copy length means 65,536 bytes, as specified by Git.
+
+This primitive neither reads packs/indexes nor decompresses, resolves delta
+chains, verifies object hashes or HEAD, or observes a checkout. Separately
+reviewed pack/index I/O, decompression bounds, chain depth and aggregate
+byte/work budgets, object identity verification, and custody remain necessary.
+Provider and same-job code remain trusted; this is not authenticated provenance
+or launch authority. The isolated Git-produced fixture runs without Git or I/O:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_git_delta.py'
+```
+
 The exact context keys are `repository`, `event_name`, `event_sha`, `event_ref`,
 `checkout_sha`, `pull_request`, `workflow`, `run_id`, `run_attempt`, `job`,
 `runner` (`name`, `environment`), and `platform` (`os`, `arch`). Positive bounded
