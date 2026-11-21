@@ -529,6 +529,52 @@ class AttributionTests(unittest.TestCase):
         with self.assertRaisesRegex(runtime.Refusal, "observation unavailable"):
             attribution._Objects(self.git.read).files(root, ["file"])
 
+    def test_grouped_sources_inclusive_and_preconsumed_count_budget(self):
+        blob = self.git.add("blob", b"")
+        for preconsumed, files, succeeds in ((0, 31, True), (1, 30, True), (2, 30, False)):
+            with self.subTest(preconsumed=preconsumed, files=files):
+                paths = [str(i) for i in range(files)]
+                root = self.git.tree({path: ("100644", blob) for path in paths})
+                objects = attribution._Objects(self.git.read)
+                self.git.requests.clear()
+                for _ in range(preconsumed):
+                    objects.get(blob, "blob")
+                if succeeds:
+                    self.assertEqual(objects.files(root, paths),
+                                     {path: (blob, b"") for path in paths})
+                    self.assertEqual(objects.count, attribution.OBJECT_COUNT)
+                else:
+                    with self.assertRaisesRegex(runtime.Refusal, "count limit"):
+                        objects.files(root, paths)
+                    self.assertEqual(objects.count, attribution.OBJECT_COUNT + 1)
+                self.assertEqual(len(self.git.requests), attribution.OBJECT_COUNT)
+
+    def test_grouped_sources_inclusive_and_preconsumed_byte_budget(self):
+        limit = 1024 * 1024
+        large_data = b"x" * attribution.OBJECT_LIMIT
+        large = self.git.add("blob", large_data)
+        # Tree size is independent of blob IDs; reserve one byte for preconsumption.
+        root = self.git.tree({str(i): ("100644", large) for i in range(4)})
+        tree_size = len(self.git.objects[root][1])
+        tail_data = b"y" * (limit - 3 * len(large_data) - tree_size - 1)
+        tail = self.git.add("blob", tail_data)
+        root = self.git.tree({str(i): ("100644", large if i < 3 else tail)
+                              for i in range(4)})
+        expected = {str(i): (large, large_data) if i < 3 else (tail, tail_data)
+                    for i in range(4)}
+        for prior, succeeds in ((b"", True), (b"p", True), (b"pp", False)):
+            with self.subTest(preconsumed=len(prior)):
+                objects = attribution._Objects(self.git.read)
+                objects.get(self.git.add("blob", prior), "blob")
+                if succeeds:
+                    self.assertEqual(objects.files(root, list(expected)), expected)
+                    self.assertEqual(objects.total, limit - 1 + len(prior))
+                else:
+                    with self.assertRaisesRegex(runtime.Refusal, "total size"):
+                        objects.files(root, list(expected))
+                    self.assertEqual(objects.total, limit + 1)
+                self.assertEqual(objects.count, 6)
+
     def test_observe_and_validate_keep_sequential_source_call_path(self):
         with mock.patch.object(attribution._Objects, "files",
                                side_effect=AssertionError("grouped path not integrated")), \
