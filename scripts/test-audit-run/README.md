@@ -255,6 +255,32 @@ the reported checkout SHA; this adapter supplies none of those operations.
 Reported values are not authenticated, and the projection alone verifies
 neither checkout nor source and confers no launch authority.
 
+`checkout_head.observe_checkout_head(checkout_root, expected_oid)` is a
+standalone, synchronous filesystem observer. It opens the explicitly supplied
+absolute checkout root component-by-component, requiring descriptor-relative
+no-follow directory operations, then reads only `.git/HEAD` from a real `.git`
+directory. It accepts exactly a regular, bounded file containing a lowercase
+40-hex SHA-1 object ID and newline, and returns that ID only when it matches
+the caller's expected ID. Symbolic HEADs, linked-worktree `.git` files,
+symlinks, special files, unsupported descriptor operations and all filesystem
+errors fail closed as `checkout_head.Refusal` (`ValueError`). Each invocation
+reopens and observes the filesystem; it does not cache results.
+
+This is a narrow observation, not custody or protection against a malicious or
+concurrent job. Filesystem changes around an observation can still race it, and
+matching the expected object ID does not establish who created or controls the
+checkout. It invokes no Git command, subprocess, network or native code; it
+does not inspect objects, verify repository integrity, or assert compatibility
+with hosted checkouts. It is not integrated into the envelope and grants no
+launch authority.
+
+Its controlled filesystem fixtures run without Git:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_checkout_head.py'
+```
+
 `git_pack.read_object(pack_bytes, index_bytes, oid)` is an isolated in-memory
 SHA-1 Git-object reader returning `(kind, raw_bytes)` for a full lowercase
 40-hex ID, or raising `ValueError`. It only consumes the explicitly supplied

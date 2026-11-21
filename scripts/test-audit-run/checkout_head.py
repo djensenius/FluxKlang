@@ -1,0 +1,115 @@
+"""Bounded, read-only observation of a real checkout's detached Git HEAD."""
+
+from contextlib import ExitStack
+import os
+from pathlib import Path
+import re
+import stat
+
+
+HEAD_BYTES = 41
+PATH_BYTES = 4096
+
+
+class Refusal(ValueError):
+    """The requested checkout HEAD observation is unavailable or invalid."""
+
+
+def _checkout_path(value):
+    if isinstance(value, Path):
+        value = str(value)
+    if type(value) is not str or "\0" in value or not value.startswith("/"):
+        raise Refusal("checkout root must be an absolute path")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeError as error:
+        raise Refusal("checkout root must be valid UTF-8") from error
+    if len(encoded) > PATH_BYTES:
+        raise Refusal("checkout root path limit")
+    pieces = value.split("/")[1:]
+    if not pieces or any(piece in ("", ".", "..") for piece in pieces):
+        raise Refusal("ambiguous checkout root")
+    return pieces
+
+
+def _expected_oid(value):
+    if type(value) is not str or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise Refusal("expected checkout object ID must be 40 lowercase hex digits")
+    return value
+
+
+def _open_directory(parent, name):
+    descriptor = os.open(
+        name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent,
+    )
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise Refusal("expected a real directory")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _open_checkout_root(pieces):
+    current = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for component in pieces:
+            child = _open_directory(current, component)
+            os.close(current)
+            current = child
+        return current
+    except BaseException:
+        os.close(current)
+        raise
+
+
+def observe_checkout_head(checkout_root, expected_oid):
+    """Return the freshly observed detached HEAD OID, or raise Refusal.
+
+    The root must be an absolute checkout path and ``expected_oid`` must be a
+    lowercase SHA-1 object ID. Only a real ``.git`` directory and canonical
+    detached ``HEAD`` file are accepted.
+    """
+    pieces = _checkout_path(checkout_root)
+    expected = _expected_oid(expected_oid)
+    if (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY")
+            or os.open not in os.supports_dir_fd):
+        raise Refusal("descriptor-relative no-follow observation unavailable")
+
+    try:
+        with ExitStack() as stack:
+            current = _open_checkout_root(pieces)
+            stack.callback(os.close, current)
+            git_directory = _open_directory(current, ".git")
+            stack.callback(os.close, git_directory)
+            head = os.open(
+                "HEAD",
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=git_directory,
+            )
+            stack.callback(os.close, head)
+            info = os.fstat(head)
+            if not stat.S_ISREG(info.st_mode):
+                raise Refusal("HEAD must be a regular file")
+            if info.st_size < 0 or info.st_size > HEAD_BYTES:
+                raise Refusal("HEAD content size limit")
+
+            content = bytearray()
+            while len(content) <= HEAD_BYTES:
+                chunk = os.read(head, HEAD_BYTES + 1 - len(content))
+                if not chunk:
+                    break
+                content.extend(chunk)
+            if len(content) > HEAD_BYTES:
+                raise Refusal("HEAD content size limit")
+            if re.fullmatch(rb"[0-9a-f]{40}\n", content) is None:
+                raise Refusal("HEAD is not a canonical detached object ID")
+            observed = content[:-1].decode("ascii")
+            if observed != expected:
+                raise Refusal("checkout HEAD does not match expected object ID")
+            return observed
+    except Refusal:
+        raise
+    except (OSError, TypeError, ValueError) as error:
+        raise Refusal("checkout HEAD observation refused") from error
