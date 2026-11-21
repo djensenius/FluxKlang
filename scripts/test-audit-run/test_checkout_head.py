@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import checkout_head as observer
 
@@ -96,6 +97,53 @@ class CheckoutHeadTests(unittest.TestCase):
         for expected in (FIRST.upper(), "a" * 39, "a" * 41, 1, None):
             with self.subTest(expected=expected):
                 self.assert_refused(expected=expected)
+
+    def test_rejects_oversized_path_before_encoding(self):
+        oversized = "/" + "x" * (observer.PATH_BYTES + 1)
+        with mock.patch.object(
+                observer, "_encode_path",
+                side_effect=AssertionError("oversized path was encoded")) as encode:
+            with self.assertRaisesRegex(observer.Refusal, "path limit"):
+                observer._checkout_path(oversized)
+        encode.assert_not_called()
+
+    def test_root_close_failure_closes_child_and_preserves_original_error(self):
+        actual_close = os.close
+        actual_open_directory = observer._open_directory
+        opened_directories = []
+        close_calls = []
+
+        def track_directory(parent, name):
+            descriptor = actual_open_directory(parent, name)
+            opened_directories.append(descriptor)
+            return descriptor
+
+        def injected_close(descriptor):
+            close_calls.append(descriptor)
+            if len(close_calls) == 1:
+                raise OSError("injected parent close failure")
+            if len(close_calls) == 2:
+                actual_close(descriptor)
+                raise OSError("injected child cleanup failure")
+            return actual_close(descriptor)
+
+        try:
+            with mock.patch.object(observer, "_open_directory", side_effect=track_directory), \
+                    mock.patch.object(observer.os, "close", side_effect=injected_close):
+                with self.assertRaises(observer.Refusal) as refusal:
+                    self.observe()
+            self.assertEqual(str(refusal.exception.__cause__), "injected parent close failure")
+            self.assertEqual(len(opened_directories), 1)
+            self.assertEqual(close_calls[1], opened_directories[0])
+            with self.assertRaises(OSError):
+                os.fstat(opened_directories[0])
+        finally:
+            # The injected first close failed without closing the root descriptor.
+            if close_calls:
+                try:
+                    actual_close(close_calls[0])
+                except OSError:
+                    pass
 
 
 if __name__ == "__main__":

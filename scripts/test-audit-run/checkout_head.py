@@ -15,13 +15,19 @@ class Refusal(ValueError):
     """The requested checkout HEAD observation is unavailable or invalid."""
 
 
+def _encode_path(value):
+    return value.encode("utf-8")
+
+
 def _checkout_path(value):
     if isinstance(value, Path):
         value = str(value)
     if type(value) is not str or "\0" in value or not value.startswith("/"):
         raise Refusal("checkout root must be an absolute path")
+    if len(value) > PATH_BYTES:
+        raise Refusal("checkout root path limit")
     try:
-        encoded = value.encode("utf-8")
+        encoded = _encode_path(value)
     except UnicodeError as error:
         raise Refusal("checkout root must be valid UTF-8") from error
     if len(encoded) > PATH_BYTES:
@@ -46,9 +52,28 @@ def _open_directory(parent, name):
         if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
             raise Refusal("expected a real directory")
     except BaseException:
-        os.close(descriptor)
+        _close_quietly(descriptor)
         raise
     return descriptor
+
+
+def _close_quietly(descriptor):
+    try:
+        os.close(descriptor)
+    except BaseException:
+        pass
+
+
+def _register_close(stack, descriptor):
+    def close_on_exit(exc_type, exc_value, traceback):
+        try:
+            os.close(descriptor)
+        except BaseException:
+            if exc_type is None:
+                raise
+        return False
+
+    stack.push(close_on_exit)
 
 
 def _open_checkout_root(pieces):
@@ -56,11 +81,18 @@ def _open_checkout_root(pieces):
     try:
         for component in pieces:
             child = _open_directory(current, component)
-            os.close(current)
+            parent = current
             current = child
+            try:
+                os.close(parent)
+            except BaseException:
+                _close_quietly(current)
+                current = None
+                raise
         return current
     except BaseException:
-        os.close(current)
+        if current is not None:
+            _close_quietly(current)
         raise
 
 
@@ -80,15 +112,15 @@ def observe_checkout_head(checkout_root, expected_oid):
     try:
         with ExitStack() as stack:
             current = _open_checkout_root(pieces)
-            stack.callback(os.close, current)
+            _register_close(stack, current)
             git_directory = _open_directory(current, ".git")
-            stack.callback(os.close, git_directory)
+            _register_close(stack, git_directory)
             head = os.open(
                 "HEAD",
                 os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                 dir_fd=git_directory,
             )
-            stack.callback(os.close, head)
+            _register_close(stack, head)
             info = os.fstat(head)
             if not stat.S_ISREG(info.st_mode):
                 raise Refusal("HEAD must be a regular file")
