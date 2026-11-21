@@ -257,6 +257,109 @@ class LooseAcquireTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     os.fstat(fd)
 
+    def test_registration_failures_close_owned_descriptors_once(self):
+        actual_open = os.open
+        actual_close = os.close
+        actual_push = reader.ExitStack.push
+
+        for stage in range(1, 6):
+            for after_push in (False, True):
+                for error_type in (OSError, RuntimeError, KeyboardInterrupt, SystemExit):
+                    with self.subTest(stage=stage, after_push=after_push, error=error_type):
+                        error = error_type("registration failure")
+                        live = set()
+                        double_closes = []
+                        pushes = []
+                        opens_at_failure = []
+
+                        def track_open(path, flags, mode=0o777, *, dir_fd=None):
+                            fd = actual_open(path, flags, mode, dir_fd=dir_fd)
+                            live.add(fd)
+                            return fd
+
+                        def track_close(fd):
+                            if fd not in live:
+                                double_closes.append(fd)
+                                return
+                            live.remove(fd)
+                            actual_close(fd)
+
+                        def failing_push(stack, callback):
+                            pushes.append(callback)
+                            if len(pushes) == stage:
+                                opens_at_failure.append(set(live))
+                                if after_push:
+                                    actual_push(stack, callback)
+                                raise error
+                            return actual_push(stack, callback)
+
+                        with mock.patch.object(reader.os, "open", side_effect=track_open) as opened:
+                            with mock.patch.object(reader.os, "supports_dir_fd",
+                                                   reader.os.supports_dir_fd | {opened}), \
+                                    mock.patch.object(reader.os, "close", side_effect=track_close), \
+                                    mock.patch.object(reader.ExitStack, "push", new=failing_push):
+                                expected = reader.Refusal if error_type is OSError else error_type
+                                with self.assertRaises(expected) as raised:
+                                    self.read()
+                        if error_type is OSError:
+                            self.assertIs(raised.exception.__cause__, error)
+                        else:
+                            self.assertIs(raised.exception, error)
+                        self.assertEqual(len(pushes), stage)
+                        self.assertEqual(len(opens_at_failure[0]), stage - 1)
+                        self.assertEqual(live, set())
+                        self.assertEqual(double_closes, [])
+
+    def test_registration_unwind_close_failure_preserves_error_and_reused_fd(self):
+        actual_open = os.open
+        actual_close = os.close
+        actual_push = reader.ExitStack.push
+        sentinel = self.root / "sentinel"
+        sentinel.write_bytes(b"safe")
+        for cleanup_error in (OSError("close failure"), KeyboardInterrupt(), SystemExit()):
+            with self.subTest(cleanup_error=type(cleanup_error).__name__):
+                fanout = []
+                reused = []
+                pushes = []
+                registration_error = RuntimeError("registration failure")
+
+                def track_open(path, flags, mode=0o777, *, dir_fd=None):
+                    fd = actual_open(path, flags, mode, dir_fd=dir_fd)
+                    if path == self.oid[:2]:
+                        fanout.append(fd)
+                    return fd
+
+                def failing_close(fd):
+                    if fd in fanout:
+                        actual_close(fd)
+                        reused.append(actual_open(sentinel, os.O_RDONLY))
+                        raise cleanup_error
+                    return actual_close(fd)
+
+                def failing_push(stack, callback):
+                    pushes.append(callback)
+                    result = actual_push(stack, callback)
+                    if len(pushes) == 5:
+                        raise registration_error
+                    return result
+
+                try:
+                    with mock.patch.object(reader.os, "open", side_effect=track_open) as opened:
+                        with mock.patch.object(reader.os, "supports_dir_fd",
+                                               reader.os.supports_dir_fd | {opened}), \
+                                mock.patch.object(reader.os, "close", side_effect=failing_close), \
+                                mock.patch.object(reader.ExitStack, "push", new=failing_push):
+                            expected = (registration_error if isinstance(cleanup_error, OSError)
+                                        else cleanup_error)
+                            with self.assertRaises(type(expected)) as raised:
+                                self.read()
+                    self.assertIs(raised.exception, expected)
+                    self.assertEqual(reused, fanout)
+                    self.assertEqual(os.read(reused[0], 4), b"safe")
+                finally:
+                    for fd in reused:
+                        actual_close(fd)
+
     def test_unsupported_descriptor_operations_refuse(self):
         with mock.patch.object(reader.os, "supports_dir_fd", set()), \
                 mock.patch.object(reader.os, "open", side_effect=AssertionError("opened")):

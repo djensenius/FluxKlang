@@ -330,6 +330,13 @@ symlinks, nonregular files, malformed objects and detected changes refuse.
 It never falls back to packs or alternates: a missing loose object is not proof
 that the repository lacks it.
 
+Descriptor owners are registered before opening; registration failures unwind
+already-owned descriptors. This is not absolute cleanup safety: asynchronous
+Python interruptions can occur between an open returning and recording its
+descriptor, or during cleanup (including in the reused checkout helpers).
+An interrupted or failed close cannot safely be retried because the descriptor
+number might already have been reused.
+
 The metadata checks detect some concurrent changes, not all races: a file or
 path can be replaced while its descriptor remains open, and hostile writers
 may evade metadata checks. SHA-1 validates object consistency, not custody or

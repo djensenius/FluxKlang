@@ -11,6 +11,32 @@ import git_loose
 Refusal = checkout_head.Refusal
 
 
+class _Descriptor:
+    def __init__(self):
+        self.fd = None
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        descriptor = self.fd
+        self.fd = None
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception:
+                if exc_type is None:
+                    raise
+        return False
+
+
+def _open_owned(stack, opener, *args, **kwargs):
+    # Register an empty owner first, before opening this descriptor.
+    owner = _Descriptor()
+    stack.push(owner)
+    owner.fd = opener(*args, **kwargs)
+    return owner.fd
+
+
 def _metadata(info):
     # Do not compare atime: the read itself may update it.
     return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_uid,
@@ -27,17 +53,15 @@ def read_object(checkout_root, oid):
 
     try:
         with ExitStack() as stack:
-            root = checkout_head._open_checkout_root(pieces)
-            checkout_head._register_close(stack, root)
+            root = _open_owned(stack, checkout_head._open_checkout_root, pieces)
             parent = root
             for component in (".git", "objects", expected[:2]):
-                parent = checkout_head._open_directory(parent, component)
-                checkout_head._register_close(stack, parent)
-            descriptor = os.open(
+                parent = _open_owned(stack, checkout_head._open_directory, parent, component)
+            descriptor = _open_owned(
+                stack, os.open,
                 expected[2:], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                 dir_fd=parent,
             )
-            checkout_head._register_close(stack, descriptor)
             before = os.fstat(descriptor)
             if not stat.S_ISREG(before.st_mode):
                 raise Refusal("loose object must be a regular file")
