@@ -19,13 +19,19 @@ def _encode_path(value):
     return value.encode("utf-8")
 
 
+def _contains_nul(value):
+    return "\0" in value
+
+
 def _checkout_path(value):
     if isinstance(value, Path):
         value = str(value)
-    if type(value) is not str or "\0" in value or not value.startswith("/"):
+    if type(value) is not str:
         raise Refusal("checkout root must be an absolute path")
     if len(value) > PATH_BYTES:
         raise Refusal("checkout root path limit")
+    if _contains_nul(value) or not value.startswith("/"):
+        raise Refusal("checkout root must be an absolute path")
     try:
         encoded = _encode_path(value)
     except UnicodeError as error:
@@ -60,7 +66,7 @@ def _open_directory(parent, name):
 def _close_quietly(descriptor):
     try:
         os.close(descriptor)
-    except BaseException:
+    except Exception:
         pass
 
 
@@ -68,7 +74,9 @@ def _register_close(stack, descriptor):
     def close_on_exit(exc_type, exc_value, traceback):
         try:
             os.close(descriptor)
-        except BaseException:
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
             if exc_type is None:
                 raise
         return False

@@ -1,5 +1,6 @@
 """Controlled filesystem fixtures for detached checkout HEAD observation."""
 
+from contextlib import ExitStack
 import os
 from pathlib import Path
 import tempfile
@@ -99,13 +100,28 @@ class CheckoutHeadTests(unittest.TestCase):
                 self.assert_refused(expected=expected)
 
     def test_rejects_oversized_path_before_encoding(self):
-        oversized = "/" + "x" * (observer.PATH_BYTES + 1)
-        with mock.patch.object(
-                observer, "_encode_path",
-                side_effect=AssertionError("oversized path was encoded")) as encode:
+        oversized = "/" + "x" * observer.PATH_BYTES + "\0"
+        with mock.patch.object(observer, "_encode_path",
+                               side_effect=AssertionError("path was encoded")) as encode, \
+                mock.patch.object(observer, "_contains_nul",
+                                  side_effect=AssertionError("path was scanned")) as contains_nul:
             with self.assertRaisesRegex(observer.Refusal, "path limit"):
                 observer._checkout_path(oversized)
         encode.assert_not_called()
+        contains_nul.assert_not_called()
+
+    def test_cleanup_propagates_keyboard_interrupt_and_system_exit(self):
+        for interruption in (KeyboardInterrupt, SystemExit):
+            with self.subTest(interruption=interruption.__name__):
+                with mock.patch.object(observer.os, "close", side_effect=interruption):
+                    with self.assertRaises(interruption):
+                        observer._close_quietly(0)
+
+                with mock.patch.object(observer.os, "close", side_effect=interruption):
+                    with self.assertRaises(interruption):
+                        with ExitStack() as stack:
+                            observer._register_close(stack, 0)
+                            raise observer.Refusal("original refusal")
 
     def test_root_close_failure_closes_child_and_preserves_original_error(self):
         actual_close = os.close
