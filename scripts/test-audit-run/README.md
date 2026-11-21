@@ -456,11 +456,14 @@ performs the same fresh acquisition and exactly one complete validation, returni
 an immutable result whose `read(oid)` returns `(kind, bytes)` or raises
 `ValueError` for invalid or missing IDs. Missing means only absent from this
 explicit pair, not from the repository. Its validated content is retained without
-exposing a mutable object map; lookup does not parse again. Every acquisition
-opens and validates anew, including after a prior failure. Reusing the result is
-intended only within one future snapshot; a new acquisition is required for
-each snapshot. This changes freshness granularity from per-request acquisition
-and does not detect intervening or reverted changes. It provides no shared
+an exposed mutable object map: it uses immutable entries and binary search;
+lookup does not parse again. The result type has no public constructor and its
+ordinary constructor refuses input; it is not a security boundary against
+same-job code using Python introspection or modifying the runtime. Every
+acquisition opens and validates anew, including after a prior failure. Reusing
+the result is intended only within one future snapshot; a new acquisition is
+required for each snapshot. This changes freshness granularity from per-request
+acquisition and does not detect intervening or reverted changes. It provides no shared
 observation-wide work/call budget, source routing, error translation or envelope
 integration; those remain the future caller's responsibility.
 

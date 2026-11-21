@@ -76,7 +76,7 @@ class PackAcquireTests(unittest.TestCase):
             self.assertEqual(parse.call_count, 1)
             self.assertEqual(result.read(fixtures.BASE_ID), ("blob", base))
             self.assertEqual(result.read(fixtures.TARGET_ID), ("blob", target))
-            for oid in ("0" * 40, "invalid"):
+            for oid in ("0" * 40, "f" * 40, "invalid"):
                 with self.assertRaises(ValueError):
                     result.read(oid)
             with self.assertRaises(TypeError):
@@ -96,6 +96,49 @@ class PackAcquireTests(unittest.TestCase):
             self.assertEqual(parse.call_count, 3)
             self.assertIsNot(again, result)
             self.assertEqual(again.read(fixtures.TARGET_ID), ("blob", target))
+
+    def test_validated_pair_reverse_or_cannot_mutate_content(self):
+        result = reader.acquire_validated_pair(str(self.root), self.pack_id)
+        original = result.read(fixtures.BASE_ID)
+        oid = bytes.fromhex(fixtures.BASE_ID)
+
+        class Attacker:
+            def __init__(self):
+                self.called = False
+
+            def __ror__(self, exposed):
+                self.called = True
+                with self_test.assertRaises(TypeError):
+                    exposed[oid] = ("blob", b"forged")
+                with self_test.assertRaises(TypeError):
+                    exposed[0][1][1] = b"forged"
+                return exposed
+
+        self_test = self
+        attacker = Attacker()
+        exposed = result[0] | attacker
+        self.assertTrue(attacker.called)
+        self.assertIsInstance(exposed, tuple)
+        self.assertEqual(result.read(fixtures.BASE_ID), original)
+
+    def test_validated_pair_has_no_public_or_ordinary_constructor(self):
+        result = reader.acquire_validated_pair(str(self.root), self.pack_id)
+        forged = {bytes.fromhex(fixtures.BASE_ID): ("blob", b"forged")}
+        self.assertFalse(hasattr(reader, "ValidatedPair"))
+        with self.assertRaises(TypeError):
+            type(result)(forged)
+        with self.assertRaises(TypeError):
+            type(result)()
+        self.assertNotEqual(result.read(fixtures.BASE_ID), ("blob", b"forged"))
+
+    def test_validated_empty_pair_reports_missing(self):
+        pack, index = fixtures.fixture([])
+        pack_id = pack[-20:].hex()
+        for suffix, data in (("pack", pack), ("idx", index)):
+            (self.directory / f"pack-{pack_id}.{suffix}").write_bytes(data)
+        result = reader.acquire_validated_pair(str(self.root), pack_id)
+        with self.assertRaisesRegex(ValueError, "object unavailable"):
+            result.read("0" * 40)
 
     def test_validated_pair_rejects_bad_unrequested_identity(self):
         a = fixtures.object_id("blob", b"a")

@@ -1,9 +1,9 @@
 """Bounded fresh acquisition of one explicitly named SHA-1 pack/index pair."""
 
+from bisect import bisect_left
 from contextlib import ExitStack
 import os
 import stat
-from types import MappingProxyType
 
 import checkout_head
 import git_loose_acquire
@@ -25,17 +25,22 @@ def _read(descriptor, limit):
     return bytes(content)
 
 
-class ValidatedPair(tuple):
-    """Immutable validated content from one explicit acquisition."""
+class _ValidatedPair(tuple):
+    """Immutable lookup result; constructed internally after acquisition."""
 
     __slots__ = ()
 
-    def __new__(cls, objects):
-        return tuple.__new__(cls, (MappingProxyType(dict(objects)),))
+    def __new__(cls, *args, **kwargs):
+        raise TypeError("use acquire_validated_pair")
 
     def read(self, oid):
         """Return (kind, bytes), or ValueError for an invalid or missing ID."""
-        return git_pack._lookup(self[0], oid)
+        name = git_pack._oid(oid)
+        entries = self[0]
+        position = bisect_left(entries, (name,))
+        if position == len(entries) or entries[position][0] != name:
+            raise ValueError("object unavailable")
+        return entries[position][1]
 
 
 def acquire_pair(checkout_root, pack_id):
@@ -50,7 +55,7 @@ def acquire_pair(checkout_root, pack_id):
 def acquire_validated_pair(checkout_root, pack_id):
     """Acquire and parse once for reuse within one snapshot, or raise Refusal."""
     _, _, objects = _acquire(checkout_root, pack_id)
-    return ValidatedPair(objects)
+    return tuple.__new__(_ValidatedPair, (tuple(sorted(objects.items())),))
 
 
 def _acquire(checkout_root, pack_id):
