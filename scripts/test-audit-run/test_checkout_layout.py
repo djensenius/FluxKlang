@@ -41,6 +41,125 @@ class CheckoutLayoutTests(unittest.TestCase):
             with path.open("wb") as stream:
                 stream.truncate(size)
 
+    def test_v2_pack_bucket_boundaries(self):
+        mib = 1024 * 1024
+        cases = (
+            (0, "le_8_mib"), (8 * mib, "le_8_mib"),
+            (8 * mib + 1, "gt_8_le_16_mib"), (16 * mib, "gt_8_le_16_mib"),
+            (16 * mib + 1, "gt_16_le_32_mib"), (32 * mib, "gt_16_le_32_mib"),
+            (32 * mib + 1, "gt_32_le_64_mib"), (64 * mib, "gt_32_le_64_mib"),
+            (64 * mib + 1, "gt_64_mib"),
+        )
+        for size, expected in cases:
+            with self.subTest(size=size):
+                self.add_pair(pack_size=size)
+                result = json.loads(census.observe_checkout_layout_v2(str(self.root), HEAD))
+                self.assertEqual(result["schema"], "checkout-layout-census-v2")
+                self.assertEqual(result["pack_size_buckets"], {
+                    key: int(key == expected) for key in (
+                        "le_8_mib", "gt_8_le_16_mib", "gt_16_le_32_mib",
+                        "gt_32_le_64_mib", "gt_64_mib",
+                    )
+                })
+                self.assertNotIn("pack_bytes_within_cap_total", result)
+
+    def test_v2_counts_all_matched_packs_without_identifying_or_selecting_them(self):
+        self.add_pair(pack_size=1234567)
+        self.add_pair(PACK_B, pack_size=17 * 1024 * 1024)
+        unpaired_oid = "3" * 40
+        (self.pack_directory / f"pack-{unpaired_oid}.pack").write_bytes(b"private-content")
+        private_name = "operator-private-pack-metadata"
+        (self.pack_directory / private_name).write_bytes(b"private-content")
+        result = census.observe_checkout_layout_v2(str(self.root), HEAD)
+        observed = json.loads(result)
+        self.assertEqual(observed["pack_size_buckets"], {
+            "le_8_mib": 2, "gt_8_le_16_mib": 0, "gt_16_le_32_mib": 1,
+            "gt_32_le_64_mib": 0, "gt_64_mib": 0,
+        })
+        self.assertEqual(observed["pack_file_count"], 3)
+        self.assertEqual(observed["candidate_classification"], "multiple-candidates")
+        self.assertIn("unexpected-pack-entry", observed["unsupported_features"])
+        self.assertNotIn("selected", result)
+        for private in (str(self.root), HEAD, PACK_A, PACK_B, unpaired_oid,
+                        private_name, "private-content", "1234567", "17825792"):
+            self.assertNotIn(private, result)
+        self.assertEqual(result, census.observe_checkout_layout_v2(str(self.root), HEAD))
+        self.assertLessEqual(len(result.encode()), census.OUTPUT_BYTES)
+
+    def test_v1_output_remains_exactly_unchanged(self):
+        self.add_pair()
+        expected = {
+            "schema": "checkout-layout-census-v1", "scope": "shape-and-metadata-only",
+            "acceptance": "not-assessed", "layout_status": "shape-only-observation",
+            "candidate_classification": "single-candidate-within-caps",
+            "unsupported_features": [], "loose_fanout_directory_count": 0,
+            "pack_directory_present": True, "pack_file_count": 1,
+            "index_file_count": 1, "pack_index_pair_count": 1,
+            "unpaired_pack_index_file_count": 0, "oversized_pack_file_count": 0,
+            "oversized_index_file_count": 0, "within_cap_pair_count": 1,
+            "pack_bytes_within_cap_total": 12, "index_bytes_within_cap_total": 16,
+        }
+        before = census.observe_checkout_layout(str(self.root), HEAD)
+        self.assertEqual(before, json.dumps(expected, sort_keys=True, separators=(",", ":")))
+        census.observe_checkout_layout_v2(str(self.root), HEAD)
+        self.assertEqual(census.observe_checkout_layout(str(self.root), HEAD), before)
+
+    def test_v2_closed_report_refusal_and_output_limits(self):
+        self.add_pair(pack_size=1234567)
+        report = census.observe_checkout_layout_v2_report(str(self.root), HEAD)
+        parsed = json.loads(report)
+        self.assertEqual(set(parsed), {"status", "census"})
+        self.assertEqual(parsed["status"], "observed")
+        self.assertEqual(parsed["census"]["schema"], "checkout-layout-census-v2")
+        for private in (str(self.root), HEAD, PACK_A, "1234567"):
+            self.assertNotIn(private, report)
+        refused = '{"diagnostic":"Refusal","status":"refused"}'
+        self.assertEqual(census.observe_checkout_layout_v2_report(str(self.root), "b" * 40),
+                         refused)
+        result = census.observe_checkout_layout_v2(str(self.root), HEAD)
+        with mock.patch.object(census, "OUTPUT_BYTES", len(result.encode())):
+            self.assertEqual(census.observe_checkout_layout_v2(str(self.root), HEAD), result)
+        with mock.patch.object(census, "OUTPUT_BYTES", len(result.encode()) - 1):
+            self.assertEqual(census.observe_checkout_layout_v2_report(str(self.root), HEAD),
+                             refused)
+        with mock.patch.object(census, "STATUS_OUTPUT_BYTES", len(report.encode())):
+            self.assertEqual(census.observe_checkout_layout_v2_report(str(self.root), HEAD),
+                             report)
+        with mock.patch.object(census, "STATUS_OUTPUT_BYTES", len(report.encode()) - 1):
+            self.assertEqual(census.observe_checkout_layout_v2_report(str(self.root), HEAD),
+                             refused)
+
+    def test_v2_uses_same_no_follow_race_and_interruption_boundary(self):
+        self.add_pair()
+        entry = self.pack_directory / f"pack-{PACK_A}.pack"
+        actual_stat = os.stat
+        changed = []
+
+        def mutate_entry(name, *args, **kwargs):
+            info = actual_stat(name, *args, **kwargs)
+            if name == entry.name and not changed:
+                changed.append(True)
+                current = entry.stat()
+                os.utime(entry, ns=(current.st_atime_ns, current.st_mtime_ns + 1_000_000))
+            return info
+
+        with mock.patch.object(census.os, "stat", side_effect=mutate_entry) as stat_patch, \
+                mock.patch.object(census.os, "supports_dir_fd",
+                                  census.os.supports_dir_fd | {stat_patch}):
+            self.assertEqual(json.loads(census.observe_checkout_layout_v2_report(
+                str(self.root), HEAD)), {"diagnostic": "Refusal", "status": "refused"})
+        entry.unlink()
+        entry.symlink_to(self.root)
+        self.assertEqual(json.loads(census.observe_checkout_layout_v2_report(
+            str(self.root), HEAD)), {"diagnostic": "Refusal", "status": "refused"})
+        entry.unlink()
+        with mock.patch.object(census.os, "scandir",
+                               side_effect=KeyboardInterrupt("stop")) as scandir_patch, \
+                mock.patch.object(census.os, "supports_fd",
+                                  census.os.supports_fd | {scandir_patch}):
+            with self.assertRaises(KeyboardInterrupt):
+                census.observe_checkout_layout_v2_report(str(self.root), HEAD)
+
     def test_single_pair_is_only_a_shape_observation_and_output_is_bounded(self):
         self.add_pair()
         private_name = "operator-private-pack-metadata"
@@ -173,10 +292,12 @@ class CheckoutLayoutTests(unittest.TestCase):
                                   census.os.supports_dir_fd | {opener}), \
                 mock.patch.object(census.os, "read", side_effect=head_only_read):
             result = self.observe()
+            v2_result = json.loads(census.observe_checkout_layout_v2(str(self.root), HEAD))
         self.assertEqual(result["layout_status"], "unsupported-observed-layout")
         self.assertIn("alternates", result["unsupported_features"])
         self.assertIn("http-alternates", result["unsupported_features"])
         self.assertIn("multi-pack-index", result["unsupported_features"])
+        self.assertEqual(v2_result["unsupported_features"], result["unsupported_features"])
         rendered = census.observe_checkout_layout(str(self.root), HEAD)
         self.assertNotIn("/private/path", rendered)
         self.assertNotIn("private.example", rendered)
@@ -308,6 +429,7 @@ class CheckoutLayoutTests(unittest.TestCase):
                 mock.patch.object(socket, "socket", side_effect=AssertionError("network")), \
                 mock.patch.object(os, "system", side_effect=AssertionError("native operation")):
             self.observe()
+            census.observe_checkout_layout_v2(str(self.root), HEAD)
 
     def test_interruptions_propagate(self):
         actual_open = os.open

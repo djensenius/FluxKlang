@@ -140,7 +140,7 @@ def _alternates_present(objects, stack, listed_info):
     return tuple(present)
 
 
-def _census(checkout_root, expected_oid):
+def _census(checkout_root, expected_oid, version="v1"):
     checkout_head.observe_checkout_head(checkout_root, expected_oid)
     pieces = checkout_head._checkout_path(checkout_root)
     features = set()
@@ -189,6 +189,13 @@ def _census(checkout_root, expected_oid):
             "pack_bytes_within_cap_total": 0,
             "index_bytes_within_cap_total": 0,
         }
+        pack_size_buckets = {
+            "le_8_mib": 0,
+            "gt_8_le_16_mib": 0,
+            "gt_16_le_32_mib": 0,
+            "gt_32_le_64_mib": 0,
+            "gt_64_mib": 0,
+        }
         candidate_classification = "no-candidates"
         if pack_present:
             pack_directory = git_loose_acquire._open_owned(
@@ -221,6 +228,19 @@ def _census(checkout_root, expected_oid):
                 sizes[oid] = info.st_size
                 if suffix == "pack":
                     pack_counts["pack_file_count"] += 1
+                    if version == "v2":
+                        size = info.st_size
+                        if size <= 8 * 1024 * 1024:
+                            bucket = "le_8_mib"
+                        elif size <= 16 * 1024 * 1024:
+                            bucket = "gt_8_le_16_mib"
+                        elif size <= 32 * 1024 * 1024:
+                            bucket = "gt_16_le_32_mib"
+                        elif size <= 64 * 1024 * 1024:
+                            bucket = "gt_32_le_64_mib"
+                        else:
+                            bucket = "gt_64_mib"
+                        pack_size_buckets[bucket] += 1
                     if info.st_size > git_pack.PACK_LIMIT:
                         pack_counts["oversized_pack_file_count"] += 1
                     else:
@@ -274,8 +294,8 @@ def _census(checkout_root, expected_oid):
         if _alternates_present(objects, stack, listed_info) != alternate_features:
             raise Refusal("alternates changed during census")
         checkout_head.observe_checkout_head(checkout_root, expected_oid)
-        return {
-            "schema": "checkout-layout-census-v1",
+        result = {
+            "schema": f"checkout-layout-census-{version}",
             "scope": "shape-and-metadata-only",
             "acceptance": "not-assessed",
             "layout_status": (
@@ -287,6 +307,11 @@ def _census(checkout_root, expected_oid):
             "pack_directory_present": pack_present,
             **pack_counts,
         }
+        if version == "v2":
+            # The v1 within-cap total can expose a single pack's exact size.
+            del result["pack_bytes_within_cap_total"]
+            result["pack_size_buckets"] = pack_size_buckets
+        return result
 
 
 def observe_checkout_layout(checkout_root, expected_oid):
@@ -295,6 +320,15 @@ def observe_checkout_layout(checkout_root, expected_oid):
     This is metadata-only shape observation. It neither validates Git objects
     nor selects a pack/index pair or establishes provider acceptance.
     """
+    return _observe_checkout_layout(checkout_root, expected_oid, "v1")
+
+
+def observe_checkout_layout_v2(checkout_root, expected_oid):
+    """Return the v2 aggregate size-bucket census without exact pack byte totals."""
+    return _observe_checkout_layout(checkout_root, expected_oid, "v2")
+
+
+def _observe_checkout_layout(checkout_root, expected_oid, version):
     failure_message = None
     interruption = None
     interruption_traceback = None
@@ -305,7 +339,7 @@ def observe_checkout_layout(checkout_root, expected_oid):
                 or not hasattr(os, "O_NONBLOCK") or os.open not in os.supports_dir_fd
                 or os.stat not in os.supports_dir_fd or os.scandir not in os.supports_fd):
             raise Refusal("descriptor-relative no-follow census unavailable")
-        observation = _census(checkout_root, expected_oid)
+        observation = _census(checkout_root, expected_oid, version)
         result = json.dumps(observation, sort_keys=True, separators=(",", ":"))
         if len(result.encode("utf-8")) > OUTPUT_BYTES:
             raise Refusal("census output size limit")
@@ -334,8 +368,21 @@ def observe_checkout_layout_report(checkout_root, expected_oid):
     Never serialize the raised exception object or its context. Interruptions
     still propagate and must not be exported by a caller's logger.
     """
+    return _observe_checkout_layout_report(
+        observe_checkout_layout, checkout_root, expected_oid,
+    )
+
+
+def observe_checkout_layout_v2_report(checkout_root, expected_oid):
+    """Return the closed status projection for the v2 aggregate census."""
+    return _observe_checkout_layout_report(
+        observe_checkout_layout_v2, checkout_root, expected_oid,
+    )
+
+
+def _observe_checkout_layout_report(observe, checkout_root, expected_oid):
     try:
-        census = json.loads(observe_checkout_layout(checkout_root, expected_oid))
+        census = json.loads(observe(checkout_root, expected_oid))
     except Refusal:
         return _REFUSAL_REPORT
     report = json.dumps(
