@@ -274,8 +274,8 @@ concurrent job. Filesystem changes around an observation can still race it, and
 matching the expected object ID does not establish who created or controls the
 checkout. It invokes no Git command, subprocess, network or native code; it
 does not inspect objects, verify repository integrity, or assert compatibility
-with hosted checkouts. It is not integrated into the envelope and grants no
-launch authority.
+with hosted checkouts. It is not integrated into the existing attribution
+envelope and grants no launch authority.
 
 Its controlled filesystem fixtures run without Git:
 
@@ -285,8 +285,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
 ```
 
 `source_snapshot_integration._observe_sources(checkout_root, tree, objects)` is
-a separate internal, opt-in prerequisite, not connected to the envelope or
-existing observe/validate paths. The caller supplies an exact absolute `str`
+a separate internal, opt-in prerequisite, not connected to the existing
+attribution observe/validate paths. The caller supplies an exact absolute `str`
 checkout root (with `checkout_head`'s path restrictions), a lowercase 40-hex
 tree SHA-1, and an existing exact `provider_attribution._Objects` instance.
 It calls `_Objects.files` on that instance once, sharing its existing object
@@ -322,8 +322,8 @@ remains the propagated exception if later closes fail; those errors are retained
 in its `cleanup_errors` tuple in close order, without retrying any descriptor.
 These checks detect some replacements and mutations but do not exclude races.
 
-The supplied tree is **not** tied to HEAD here; detached-HEAD verification and
-the full lifecycle are deferred. Caller-supplied context projection,
+The supplied tree is **not** tied to HEAD by this helper alone.
+Caller-supplied context projection,
 Python/stdlib, loaded bytecode, malicious same-job behavior, custody or
 authentication, hosted compatibility and launch authority are explicitly
 outside this observation. The synthetic fixtures use Git-format objects and
@@ -333,6 +333,49 @@ do not invoke Git, subprocesses, network, iOS tests or hardware:
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_source_snapshot_integration.py'
 ```
+
+#### Opt-in two-snapshot composition
+
+`source_snapshot_integration.observe(checkout_root, pack_id, context_reader)`
+returns bounded canonical JSON bytes. `validate(data, checkout_root, pack_id,
+context_reader)` performs a new full observation and compares bytes, never
+trusting or parsing the candidate. Both are separate from and leave unchanged
+the existing `provider_attribution.observe`/`validate` API and v1 schema.
+Inputs are an exact absolute checkout root string, one explicit lowercase
+40-hex pack ID, and a callable that freshly supplies the closed attribution
+context on each call. There is no ambient environment or event-file reader,
+pack enumeration, output writer, Git subprocess, command runner, or launch API.
+The caller is responsible for fresh, bounded context acquisition.
+
+One new `git_snapshot_reader.Invocation` provides two sequential fresh readers,
+one on either side of `ios_runtime.provider_verified_checker` and its cleanup.
+Each snapshot validates a freshly supplied context, observes canonical detached
+HEAD matching its checkout SHA before accessing objects, then uses a single
+`_Objects` for the unchanged attribution checks and all ten fixed sources.
+The source helper's exact module path and dependency-graph checks apply.
+The second snapshot and the provider output must match the first; failures,
+including cleanup failures, return no partial result. Interruptions propagate.
+Pack pairs are reacquired per snapshot, not cached across snapshots.
+
+The wrapper has exactly `schema` (`ios-source-snapshot-composition-observation-v1`),
+`assurance` (`same-job-unauthenticated-observation-not-custody-or-authority`),
+`attribution` (the unchanged complete v1 record), and `sources` (the ten fixed
+path/blob/SHA256 records). Both v1 and wrapper encodings are bounded by 32 KiB.
+The existing 32 object calls and 1 MiB aggregate object bytes per snapshot,
+and 64 invocation calls, are unchanged. A successful ordinary snapshot uses
+22 calls without a workflow and 27 with one: one checkout commit, eight for
+the two original single-file source walks, optionally five for workflow, and
+13 for the grouped sources. Thus a present workflow uses 54 of 64 calls across
+both snapshots; aggregate bytes can still refuse even when every object fits.
+No new caching is introduced into attribution's single-file walks.
+
+This is a same-job **unauthenticated observation**, not custody, provenance,
+authority, or qualification. Caller code and context acquisition, Python and
+stdlib, loaded bytecode, races, hostile job/provider behavior, and hosted layout
+compatibility are outside the claim. Module path/graph observations do not prove
+the integrity of executing code. The provider verifier may execute its fixed
+native probes when invoked in future; the synthetic tests mock it and deny
+process, network, enumeration and hardware probes. They do not launch iOS tests.
 
 `git_loose.read_object(compressed_bytes, oid)` is an independent, in-memory
 SHA-1 Git loose-object decoder. It accepts only plain immutable `bytes` and a
