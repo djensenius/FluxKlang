@@ -25,7 +25,7 @@ OBSERVATION = {"schema": "synthetic-provider-observation", "nested": {"build": "
 
 
 @contextmanager
-def authority():
+def authority(*, bounded_cleanup=False):
     yield [CHECKER], copy.deepcopy(OBSERVATION)
 
 
@@ -104,17 +104,6 @@ class BoundedMaterialTests(unittest.TestCase):
             self.source, self.pin, prepare.IOS_PROVIDER_RUNTIME_PROFILE,
             record["output"]["path"], record["intent_path"], bounded_material=True,
         ), record)
-        with self.assertRaises(TypeError):
-            prepare.prepare(self.source, self.pin, prepare.IOS_PROVIDER_RUNTIME_PROFILE,
-                            bounded_material=True)
-        before = set(self.directory.iterdir())
-        with mock.patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit) as result:
-            prepare.main([
-                "prepare", "--bounded-material", "--input", str(self.source),
-                "--expected-sha256", self.pin, "--profile", prepare.IOS_PROVIDER_RUNTIME_PROFILE,
-            ])
-        self.assertEqual(result.exception.code, 2)
-        self.assertEqual(set(self.directory.iterdir()), before)
 
     def test_pin_schema_siblings_observation_and_transformation(self):
         with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
@@ -355,7 +344,7 @@ class BoundedMaterialTests(unittest.TestCase):
 
     def test_replacement_and_mutation_at_validation_boundary(self):
         @contextmanager
-        def replace_file():
+        def replace_file(*, bounded_cleanup=False):
             replacement = self.directory / "replacement"
             replacement.write_bytes(self.output.read_bytes())
             os.replace(replacement, self.output)
@@ -366,7 +355,7 @@ class BoundedMaterialTests(unittest.TestCase):
                 self.validate()
 
         @contextmanager
-        def mutate():
+        def mutate(*, bounded_cleanup=False):
             self.intent.write_text(self.intent.read_text() + " ", encoding="utf-8")
             yield [CHECKER], copy.deepcopy(OBSERVATION)
 
@@ -376,7 +365,7 @@ class BoundedMaterialTests(unittest.TestCase):
 
     def test_metadata_change_on_provider_exit_refuses(self):
         @contextmanager
-        def mutate_on_exit():
+        def mutate_on_exit(*, bounded_cleanup=False):
             yield [CHECKER], copy.deepcopy(OBSERVATION)
             os.chmod(self.source, 0o600 if self.source.stat().st_mode & 0o777 != 0o600 else 0o644)
 

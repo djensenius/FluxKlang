@@ -7,13 +7,16 @@ preparation, not product closure, execution permission, or a runtime receipt.
 """
 
 import argparse
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 import copy
 import hashlib
+import io
 import json
+import os
 from pathlib import Path
 import plistlib
 import re
+import stat
 import sys
 import uuid
 import xml.etree.ElementTree as ET
@@ -419,7 +422,7 @@ def existing_file(selected):
 
 
 @contextmanager
-def _checked_input(selected, expected_sha256, profile, material=None):
+def _checked_input(selected, expected_sha256, profile, material=None, *, bounded_cleanup=False):
     expected, _, _, _ = _profile_definition(profile)
     if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         raise Refusal("expected SHA256 must be 64 lowercase hexadecimal digits")
@@ -435,11 +438,12 @@ def _checked_input(selected, expected_sha256, profile, material=None):
         # Lazy import: old profiles have no runtime/platform/tool dependency.
         import ios_runtime
 
-        authority = (
-            ios_runtime.verified_checker()
-            if profile == IOS_RUNTIME_PROFILE else
-            ios_runtime.provider_verified_checker()
-        )
+        if profile == IOS_RUNTIME_PROFILE:
+            authority = ios_runtime.verified_checker()
+        elif bounded_cleanup:
+            authority = ios_runtime.provider_verified_checker(bounded_cleanup=True)
+        else:
+            authority = ios_runtime.provider_verified_checker()
     provider_observation = None
     with authority as result:
         if profile == IOS_PROVIDER_RUNTIME_PROFILE:
@@ -555,6 +559,7 @@ def validate(input_path, expected_sha256, profile, output_path, intent_path, *,
     with materials as acquired:
         with _checked_input(
             input_path, expected_sha256, profile, None if acquired is None else acquired[0],
+            bounded_cleanup=bounded_material,
         ) as (source, original, provider_observation):
             return _validate(
                 source, original, expected_sha256, profile, output_path, intent_path,
@@ -594,8 +599,14 @@ def _validate(source, original, expected_sha256, profile, output_path, intent_pa
     return record
 
 
-def prepare(input_path, expected_sha256, profile):
+def prepare(input_path, expected_sha256, profile, *, bounded_material=False):
     """Create an exclusive sibling pair, publishing intent last; never launch."""
+    if type(bounded_material) is not bool:
+        raise Refusal("bounded material option must be boolean")
+    if bounded_material:
+        if profile != IOS_PROVIDER_RUNTIME_PROFILE:
+            raise Refusal("bounded material is only available for the provider profile")
+        return _bounded_prepare(input_path, expected_sha256, profile)
     created = []
     try:
         with _checked_input(input_path, expected_sha256, profile) as (
@@ -634,6 +645,135 @@ def _prepare(source, original, expected_sha256, profile, created, provider_obser
     return record
 
 
+def _bounded_scalars(value, limit):
+    """Bound each serializer token before either serializer can allocate it."""
+    if type(value) is str:
+        # JSON may expand one Unicode scalar to 12 ASCII bytes; plist XML
+        # escaping and UTF-8 use less. Leave room for quotes and markup.
+        if len(value) > limit // 16:
+            raise Refusal("material serialization scalar limit")
+    elif type(value) is int:
+        if value.bit_length() > 4096:
+            raise Refusal("material serialization integer limit")
+    elif type(value) is bool or value is None:
+        pass
+    elif type(value) is list:
+        for item in value:
+            _bounded_scalars(item, limit)
+    elif type(value) is dict:
+        for key, item in value.items():
+            if type(key) is not str:
+                raise Refusal("material serialization key type")
+            _bounded_scalars(key, limit)
+            _bounded_scalars(item, limit)
+    else:
+        raise Refusal("material serialization value type")
+
+
+class _BoundedBuffer:
+    def __init__(self, limit):
+        self.limit = limit
+        self.buffer = io.BytesIO()
+
+    def write(self, data):
+        if len(data) > self.limit - self.buffer.tell():
+            raise Refusal("material serialization byte limit")
+        return self.buffer.write(data)
+
+    def value(self):
+        return self.buffer.getvalue()
+
+
+def _bounded_serialization(value, limit, *, xml):
+    _bounded_scalars(value, limit)
+    buffer = _BoundedBuffer(limit)
+    if xml:
+        plistlib.dump(value, buffer, fmt=plistlib.FMT_XML, sort_keys=False)
+    else:
+        for chunk in json.JSONEncoder(indent=2, sort_keys=True).iterencode(value):
+            buffer.write(chunk.encode("utf-8"))
+        buffer.write(b"\n")
+    return buffer.value()
+
+
+def _bounded_prepare(input_path, expected_sha256, profile):
+    import bounded_material as acquisition
+
+    # Never unlink on failure: a name can be replaced between checking and
+    # unlinking. Callers must clean retained debris under their own authority.
+    created = []
+
+    def recheck(directory=None):
+        if directory is None:
+            directory = parent
+        for name, fd, identity in created:
+            if (acquisition._identity(os.fstat(fd), False) != identity or
+                    acquisition._identity(
+                        os.stat(name, dir_fd=directory, follow_symlinks=False), False,
+                    ) != identity):
+                raise Refusal("created material path changed")
+
+    with ExitStack() as descriptors:
+        with acquisition.acquire_input(input_path, retained_descriptors=descriptors) as (
+            material, parent, retain_anchors,
+        ):
+            with _checked_input(input_path, expected_sha256, profile, material, bounded_cleanup=True) as (
+                source, original, provider_observation,
+            ):
+                run_id = str(uuid.uuid4())
+                check_run_id(run_id)
+                output, intent = output_paths(source, run_id)
+                acquisition._path(output)
+                acquisition._path(intent)
+                prepared = transformed(original, run_id, profile)
+                data = _bounded_serialization(prepared, acquisition.MATERIAL_BYTES, xml=True)
+                require_equal(parse_plist(data), prepared, "serialized output")
+                record = intent_record(
+                    source, expected_sha256, output, digest(data), intent, run_id, profile,
+                    provider_observation,
+                )
+                intent_data = _bounded_serialization(record, acquisition.MATERIAL_BYTES, xml=False)
+                for path, content in ((output, data), (intent, intent_data)):
+                    fd = os.open(
+                        path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                        | os.O_NONBLOCK, 0o600, dir_fd=parent,
+                    )
+                    acquisition._register_close(descriptors, fd)
+                    initial = os.fstat(fd)
+                    if not stat.S_ISREG(initial.st_mode):
+                        raise Refusal("created material is not a regular file")
+                    offset = 0
+                    while offset < len(content):
+                        written = os.write(fd, memoryview(content)[offset:])
+                        if written <= 0 or written > len(content) - offset:
+                            raise Refusal("invalid material write")
+                        offset += written
+                    info = os.fstat(fd)
+                    if (acquisition._identity(info, True) != acquisition._identity(initial, True)
+                            or info.st_size != len(content)):
+                        raise Refusal("created material changed during write")
+                    created.append((path.name, fd, acquisition._identity(info, False)))
+                    recheck()
+                validated = validate(
+                    source, expected_sha256, profile, output, intent, bounded_material=True,
+                )
+                require_equal(validated, record, "validated intent")
+                recheck()
+            # The outer provider's exit recheck must finish before success.
+            recheck()
+            reopen_input = retain_anchors()
+        # Rewalk after ancestor closes: the held parent alone could be detached.
+        fresh_parent, recheck_chain = reopen_input()
+        if acquisition._identity(os.fstat(parent), True) != acquisition._identity(
+            os.fstat(fresh_parent), True,
+        ):
+            raise Refusal("material parent changed")
+        recheck(fresh_parent)
+        recheck_chain()
+        recheck(fresh_parent)
+    return record
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -645,14 +785,17 @@ def main(argv=None):
             PROFILE, IOS_PROFILE, RETENTION_PROFILE, IOS_RETENTION_PROFILE,
             IOS_RUNTIME_PROFILE, IOS_PROVIDER_RUNTIME_PROFILE,
         ])
+        command.add_argument("--bounded-material", action="store_true")
         if name == "validate":
             command.add_argument("--output", required=True)
             command.add_argument("--intent", required=True)
-            command.add_argument("--bounded-material", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
-            record = prepare(Path(args.input), args.expected_sha256, args.profile)
+            if args.bounded_material:
+                record = prepare(args.input, args.expected_sha256, args.profile, bounded_material=True)
+            else:
+                record = prepare(Path(args.input), args.expected_sha256, args.profile)
         else:
             record = validate(
                 args.input if args.bounded_material else Path(args.input),

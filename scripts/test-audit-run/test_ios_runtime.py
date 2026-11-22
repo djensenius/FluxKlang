@@ -341,6 +341,29 @@ class RuntimeTests(unittest.TestCase):
         self.host.nodes[LIBRARY].data = original
         self.assertFalse(self.host.fds)
 
+    def test_bounded_provider_snapshots_match_legacy_and_real_bounded_preparation(self):
+        with runtime.provider_verified_checker() as legacy:
+            pass
+        legacy_commands = list(self.host.commands)
+        self.host.commands.clear()
+        with mock.patch.object(runtime, "_bounded_command", side_effect=self.host.command):
+            with runtime.provider_verified_checker(bounded_cleanup=True) as bounded:
+                pass
+            self.assertEqual(bounded, legacy)
+            self.assertEqual(self.host.commands, legacy_commands)
+            self.host.commands.clear()
+            record = prepare.prepare(
+                self.source, self.pin, prepare.IOS_PROVIDER_RUNTIME_PROFILE, bounded_material=True,
+            )
+            self.assertEqual(len(self.host.commands), 24)
+            self.assertEqual(record["provider_observation"], legacy[1])
+            self.assertEqual(prepare.validate(
+                self.source, self.pin, prepare.IOS_PROVIDER_RUNTIME_PROFILE,
+                record["output"]["path"], record["intent_path"], bounded_material=True,
+            ), record)
+            self.assertEqual(len(self.host.commands), 36)
+        self.assertFalse(self.host.fds)
+
     def test_provider_validation_rejects_altered_input_and_intent(self):
         record = self.prepare_provider()
         original_input = self.source.read_bytes()

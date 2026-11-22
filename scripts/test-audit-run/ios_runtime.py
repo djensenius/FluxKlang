@@ -4,7 +4,7 @@ No context/receipt input, caching, destination selection, or launch capability.
 Only independently discovered paths reach filesystem or native-tool probes.
 """
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import os
@@ -115,6 +115,98 @@ def _command(argv, developer=None):
                         process.wait(timeout=TIMEOUT)
             finally:
                 process.stdout.close()
+    except (OSError, UnicodeError, subprocess.SubprocessError) as error:
+        raise Refusal("runtime verification command unavailable") from error
+
+
+def _register_cleanup(stack, action):
+    """Attempt cleanup without replacing a higher-priority active exception."""
+    def cleanup(exc_type, exc_value, traceback):
+        try:
+            action()
+        except BaseException as error:
+            if exc_type is None or (
+                isinstance(exc_value, Exception) and not isinstance(error, Exception)
+            ):
+                raise
+        return False
+
+    stack.push(cleanup)
+
+
+def _cleanup_error(active, error):
+    if active is None or (isinstance(active, Exception) and not isinstance(error, Exception)):
+        return error
+    return active
+
+
+def _cleanup_attempt(active, action):
+    """Return the higher-priority active or cleanup exception, if any."""
+    try:
+        action()
+    except BaseException as error:
+        return _cleanup_error(active, error)
+    return active
+
+
+def _cleanup_child(process, active):
+    running = True
+    try:
+        running = process.poll() is None
+    except BaseException as error:
+        active = _cleanup_error(active, error)
+    if running:
+        active = _cleanup_attempt(active, lambda: process.kill())
+        active = _cleanup_attempt(active, lambda: process.wait(timeout=TIMEOUT))
+    return active
+
+
+def _bounded_command(argv, developer=None):
+    """Same fixed command limits, with opt-in precedence-aware cleanup."""
+    env = dict(ENV)
+    if developer is not None:
+        env["DEVELOPER_DIR"] = developer
+    try:
+        active = None
+        process = subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, env=env, cwd="/", bufsize=0,
+        )
+        try:
+            data = bytearray()
+            deadline = time.monotonic() + TIMEOUT
+            selector_active = None
+            selector = selectors.DefaultSelector()
+            try:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while True:
+                    remaining = deadline - time.monotonic()
+                    require(remaining > 0, "runtime verification command timed out")
+                    require(selector.select(remaining), "runtime verification command timed out")
+                    chunk = os.read(process.stdout.fileno(), min(65536, OUTPUT_LIMIT + 1 - len(data)))
+                    if not chunk:
+                        break
+                    data.extend(chunk)
+                    require(len(data) <= OUTPUT_LIMIT, "runtime verification output limit")
+            except BaseException as error:
+                selector_active = error
+                raise
+            finally:
+                cleanup_error = _cleanup_attempt(selector_active, lambda: selector.close())
+                if cleanup_error is not selector_active:
+                    raise cleanup_error
+            remaining = deadline - time.monotonic()
+            require(remaining > 0, "runtime verification command timed out")
+            require(process.wait(timeout=remaining) == 0, "runtime verification command failed")
+            return data.decode("utf-8", errors="strict").strip()
+        except BaseException as error:
+            active = error
+            raise
+        finally:
+            cleanup_error = _cleanup_child(process, active)
+            cleanup_error = _cleanup_attempt(cleanup_error, lambda: process.stdout.close())
+            if cleanup_error is not active:
+                raise cleanup_error
     except (OSError, UnicodeError, subprocess.SubprocessError) as error:
         raise Refusal("runtime verification command unavailable") from error
 
@@ -320,12 +412,15 @@ def verified_checker():
         raise Refusal("live runtime verification unavailable") from error
 
 
-def _provider_inventory():
+def _provider_inventory(*, command=None):
     """Observe the fixed toolchain under the separately trusted-provider model.
 
     These observations are not independent provenance or custody evidence. The
     caller explicitly trusts the disposable hosted image and reviewed job.
     """
+    if command is None:
+        def command(*args, **kwargs):
+            return _command(*args, **kwargs)
     require(sys.platform == "darwin" and os.uname().machine == "arm64",
             "provider-trusted runtime requires Darwin arm64")
     developer = DEVELOPER
@@ -337,21 +432,21 @@ def _provider_inventory():
         info = os.stat(path, follow_symlinks=False)
         require(stat.S_ISREG(info.st_mode), "fixed Xcode tool is not a regular file")
         tools[path] = _identity(info)
-        _command(["/usr/bin/codesign", "--verify", "--strict", "-R", "=anchor apple", path])
-    version = _command([xcodebuild, "-version"], developer)
+        command(["/usr/bin/codesign", "--verify", "--strict", "-R", "=anchor apple", path])
+    version = command([xcodebuild, "-version"], developer)
     require(version == "Xcode 27.1\nBuild version 27A9275",
             "unreviewed Xcode version/build observation")
     xcode_version, build_line = version.splitlines()
     build_prefix = "Build version "
     require(build_line.startswith(build_prefix), "malformed Xcode build observation")
     xcode_build = build_line[len(build_prefix):]
-    sdk_version = _command(
+    sdk_version = command(
         [xcodebuild, "-version", "-sdk", "iphonesimulator", "SDKVersion"], developer,
     )
     require(sdk_version == "27.1", "unreviewed simulator SDK observation")
     try:
         inventory = json.loads(
-            _command([simctl, "list", "runtimes", "--json"], developer),
+            command([simctl, "list", "runtimes", "--json"], developer),
             object_pairs_hook=_json_pairs,
         )
     except (ValueError, TypeError) as error:
@@ -416,6 +511,26 @@ def _provider_file(path, limit):
             os.close(descriptor)
 
 
+def _bounded_provider_file(path, limit):
+    """The provider file probe with opt-in precedence-aware descriptor close."""
+    try:
+        path = _path(path)
+        with ExitStack() as cleanup:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            _register_cleanup(cleanup, lambda: os.close(descriptor))
+            info = os.fstat(descriptor)
+            require(stat.S_ISREG(info.st_mode) and info.st_size <= limit,
+                    "provider-trusted runtime file shape/size mismatch")
+            identity = _identity(info)
+            data = _read(descriptor, limit)
+            require(_identity(os.fstat(descriptor)) == identity and
+                    _identity(os.stat(path, follow_symlinks=False)) == identity,
+                    "provider-trusted runtime file changed during observation")
+            return data, identity
+    except OSError as error:
+        raise Refusal("provider-trusted runtime file unavailable") from error
+
+
 def _provider_alias(canonical):
     """Observe only the standard /var -> /private/var alias."""
     try:
@@ -437,22 +552,28 @@ def _provider_alias(canonical):
         raise Refusal("standard /var alias unavailable") from error
 
 
-def _provider_snapshot():
+def _provider_snapshot(*, command=None, file_reader=None):
     """Bounded fixed-path observations; trust, not these checks, is the boundary."""
-    inventory = _provider_inventory()
+    inventory = _provider_inventory() if command is None else _provider_inventory(command=command)
+    if command is None:
+        def command(*args, **kwargs):
+            return _command(*args, **kwargs)
+    if file_reader is None:
+        def file_reader(*args, **kwargs):
+            return _provider_file(*args, **kwargs)
     bundle = inventory["runtime"]["bundle_path"]
     root = inventory["runtime"]["runtime_root"]
     canonical = _path(root + "/usr/lib/libMainThreadChecker.dylib")
-    library, identity = _provider_file(canonical, LIBRARY_SIZE)
+    library, identity = file_reader(canonical, LIBRARY_SIZE)
     require(len(library) == LIBRARY_SIZE and
             hashlib.sha256(library).hexdigest() == LIBRARY_SHA256,
             "unreviewed checker digest observation")
     require(library[:8] == struct.pack("<II", 0xFEEDFACF, 0x0100000C),
             "checker observation must be thin arm64 Mach-O")
-    _command(["/usr/bin/codesign", "--verify", "--strict", "-R", REQUIREMENT, canonical])
-    require(_provider_file(canonical, LIBRARY_SIZE) == (library, identity),
+    command(["/usr/bin/codesign", "--verify", "--strict", "-R", REQUIREMENT, canonical])
+    require(file_reader(canonical, LIBRARY_SIZE) == (library, identity),
             "checker changed during provider-trusted signature observation")
-    plist_bytes, plist_identity = _provider_file(bundle + "/Contents/Info.plist", OUTPUT_LIMIT)
+    plist_bytes, plist_identity = file_reader(bundle + "/Contents/Info.plist", OUTPUT_LIMIT)
     try:
         info = plistlib.loads(plist_bytes)
     except (ValueError, plistlib.InvalidFileException) as error:
@@ -489,7 +610,7 @@ def _provider_snapshot():
 
 
 @contextmanager
-def provider_verified_checker():
+def provider_verified_checker(*, bounded_cleanup=False):
     """Yield fixed checker spellings under an explicit hosted-provider trust assumption.
 
     Filesystem, version, digest and signature results are observations on the
@@ -497,9 +618,14 @@ def provider_verified_checker():
     code/provider compromise. This remains a separate, lower-assurance profile.
     """
     try:
-        before = _provider_snapshot()
+        def snapshot():
+            if bounded_cleanup:
+                return _provider_snapshot(command=_bounded_command, file_reader=_bounded_provider_file)
+            return _provider_snapshot()
+
+        before = snapshot()
         yield (before[1], before[2]), before[0]
-        require(_provider_snapshot() == before,
+        require(snapshot() == before,
                 "provider-trusted runtime/toolchain observation changed")
     except OSError as error:
         raise Refusal("provider-trusted runtime verification unavailable") from error
