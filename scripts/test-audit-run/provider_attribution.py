@@ -266,6 +266,11 @@ def _source(path):
 def _snapshot(context_reader, object_reader):
     context = _context(context_reader())
     objects = _Objects(object_reader)
+    return _snapshot_objects(context, objects)
+
+
+def _snapshot_objects(context, objects):
+    """Observe an already validated context with the supplied object budget."""
     tree, parents = objects.commit(context["checkout_sha"])
     pr = context["pull_request"]
     if pr is not None:

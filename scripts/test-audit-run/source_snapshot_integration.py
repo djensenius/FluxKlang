@@ -1,4 +1,4 @@
-"""Opt-in fixed source observation; no HEAD, context, or launch authority."""
+"""Opt-in fixed source and same-job snapshot observations, not authority."""
 
 from contextlib import ExitStack
 import hashlib
@@ -24,6 +24,8 @@ _NAMES = (
 )
 _PATHS = tuple(sorted(f"{_DIRECTORY}/{name}" for name in _NAMES))
 _LIMIT = 128 * 1024
+SCHEMA = "ios-source-snapshot-composition-observation-v1"
+ASSURANCE = "same-job-unauthenticated-observation-not-custody-or-authority"
 
 
 def _module_graph():
@@ -183,3 +185,50 @@ def _observe_sources(checkout_root, tree, objects):
         raise
     except Exception as error:
         raise ios_runtime.Refusal("fixed source observation refused") from error
+
+
+def _snapshot(checkout_root, context_reader, reader):
+    context = provider_attribution._context(context_reader())
+    checkout_head.observe_checkout_head(checkout_root, context["checkout_sha"])
+    objects = provider_attribution._Objects(reader)
+    attribution = provider_attribution._snapshot_objects(context, objects)
+    sources = _observe_sources(checkout_root, attribution["checkout"]["tree"], objects)
+    ios_runtime.require(all(attribution["executing_sources"][path] == sources[path]
+                            for path in provider_attribution.SOURCES),
+                        "duplicate source observations differ")
+    return attribution, sources
+
+
+def observe(checkout_root, pack_id, context_reader):
+    """Observe two fresh snapshots around the fixed provider verifier."""
+    try:
+        invocation = git_snapshot_reader.Invocation(checkout_root, pack_id)
+        before, sources = _snapshot(checkout_root, context_reader, invocation.snapshot())
+        with ios_runtime.provider_verified_checker() as (spellings, observation):
+            provider = provider_attribution._provider(observation, spellings)
+        after, later_sources = _snapshot(checkout_root, context_reader, invocation.snapshot())
+        ios_runtime.require((after, later_sources) == (before, sources),
+                            "source/job observation changed")
+        ios_runtime.require(provider_attribution._provider(observation, spellings) == provider,
+                            "provider output mutated")
+        attribution = {"schema": provider_attribution.SCHEMA,
+                       "assurance": provider_attribution.ASSURANCE,
+                       **before, "provider_runtime": provider}
+        # Preserve the v1 envelope's own encoding/size check as well.
+        provider_attribution._encode(attribution)
+        return provider_attribution._encode({
+            "schema": SCHEMA, "assurance": ASSURANCE,
+            "attribution": attribution, "sources": sources,
+        })
+    except ios_runtime.Refusal:
+        raise
+    except (OSError, KeyError, ValueError) as error:
+        raise ios_runtime.Refusal("snapshot composition observation unavailable") from error
+
+
+def validate(data, checkout_root, pack_id, context_reader):
+    """Compare only with a fresh observation, never with parsed candidate claims."""
+    ios_runtime.require(type(data) is bytes and len(data) <= provider_attribution.ENVELOPE_LIMIT,
+                        "invalid composition output size/type")
+    ios_runtime.require(data == observe(checkout_root, pack_id, context_reader),
+                        "composition output differs from fresh observations")

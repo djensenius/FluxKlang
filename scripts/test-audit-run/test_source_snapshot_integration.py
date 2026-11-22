@@ -1,7 +1,9 @@
 """Synthetic fixed-source filesystem and real Git object-format fixtures."""
 
-from contextlib import ExitStack
+from contextlib import contextmanager, ExitStack
+import copy
 import hashlib
+import json
 import os
 from pathlib import Path
 import socket
@@ -21,7 +23,8 @@ import git_snapshot_reader
 import ios_runtime
 import provider_attribution
 import source_snapshot_integration as observer
-from test_provider_attribution import GitObjects
+from test_provider_attribution import GitObjects, provider_record
+import test_git_pack as pack_fixture
 
 
 MODULES = (observer, provider_attribution, ios_runtime, checkout_head,
@@ -529,6 +532,368 @@ class FixedSourceTests(unittest.TestCase):
         ):
             with self.subTest(root=root, tree=tree), self.assertRaises(ios_runtime.Refusal):
                 observer._observe_sources(root, tree, objects)
+
+
+class CompositionTests(unittest.TestCase):
+    def setUp(self):
+        FixedSourceTests.setUp(self)
+        git_dir = self.root / ".git"
+        self.pack_dir = git_dir / "objects" / "pack"
+        self.pack_dir.mkdir(parents=True)
+        self.head = git_dir / "HEAD"
+        workflow = self.git.tree({
+            "observe.yml": ("100644", self.git.add("blob", b"fixture workflow")),
+        })
+        github = self.git.tree({"workflows": ("40000", workflow)})
+        # Retain the same scripts subtree constructed by FixedSourceTests.
+        scripts = provider_attribution._Objects(self.git.read)._tree(self.tree)[b"scripts"][1]
+        self.tree = self.git.tree({".github": ("40000", github), "scripts": ("40000", scripts)})
+        self.commit = self.git.commit(self.tree)
+        self.context = {
+            "repository": "owner/repo", "event_name": "push",
+            "event_sha": self.commit, "checkout_sha": self.commit,
+            "event_ref": "refs/heads/main", "pull_request": None,
+            "workflow": None, "run_id": 42, "run_attempt": 1, "job": "observation",
+            "runner": {"name": "Hosted Runner 1", "environment": "github-hosted"},
+            "platform": {"os": "macOS", "arch": "ARM64"},
+        }
+        self.record = provider_record()
+        self.events = []
+        self.on_exit = lambda: None
+        self.head.write_text(self.commit + "\n")
+        self.write_pack()
+        self.git.requests.clear()
+        for module, names in (
+            (subprocess, ("Popen", "run", "call", "check_call", "check_output")),
+            (os, ("system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp",
+                  "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve",
+                  "spawnvp", "spawnvpe", "execl", "execle", "execlp", "execlpe",
+                  "execv", "execve", "execvp", "execvpe", "kill", "killpg")),
+            (socket, ("socket", "create_connection")),
+            (os, ("listdir", "scandir", "uname")),
+        ):
+            for name in names:
+                if hasattr(module, name):
+                    self.stack.enter_context(mock.patch.object(
+                        module, name, side_effect=AssertionError("forbidden operation"),
+                    ))
+        self.stack.enter_context(mock.patch.object(
+            ios_runtime, "_command", side_effect=AssertionError("native probe forbidden"),
+        ))
+
+        @contextmanager
+        def checker():
+            self.events.append("provider-enter")
+            try:
+                yield tuple(self.record["checker"]["accepted_paths"]), self.record
+            finally:
+                self.events.append("provider-exit")
+                self.on_exit()
+
+        self.stack.enter_context(mock.patch.object(
+            ios_runtime, "provider_verified_checker", side_effect=checker,
+        ))
+
+    def write_pack(self, omit=None):
+        types = {"commit": 1, "tree": 2, "blob": 3}
+        entries = [(bytes.fromhex(oid), pack_fixture.plain(types[kind], data))
+                   for oid, (kind, data) in self.git.objects.items() if oid != omit]
+        pack, index = pack_fixture.fixture(entries)
+        self.pack_id = pack[-20:].hex()
+        self.pack_path = self.pack_dir / f"pack-{self.pack_id}.pack"
+        self.index_path = self.pack_dir / f"pack-{self.pack_id}.idx"
+        self.pack_path.write_bytes(pack)
+        self.index_path.write_bytes(index)
+
+    def context_reader(self):
+        self.events.append("context")
+        return copy.deepcopy(self.context)
+
+    def observe(self):
+        return observer.observe(str(self.root), self.pack_id, self.context_reader)
+
+    def workflow(self):
+        self.context["workflow"] = {
+            "sha": self.commit, "path": ".github/workflows/observe.yml",
+            "ref": "owner/repo/.github/workflows/observe.yml@refs/heads/main",
+        }
+
+    def pr(self):
+        base = self.git.commit(self.tree, ["1" * 40])
+        head = self.git.commit(self.tree, [base])
+        merge = self.git.commit(self.tree, [base, head])
+        self.context.update(event_name="pull_request", event_ref="refs/pull/12/merge",
+                            event_sha=merge, checkout_sha=merge,
+                            pull_request={"number": 12, "base_sha": base, "head_sha": head})
+        self.head.write_text(merge + "\n")
+        self.write_pack()
+
+    def test_push_and_pr_workflow_modes_sequence_budgets_and_v1(self):
+        for pr in (False, True):
+            for workflow in (False, True):
+                with self.subTest(pr=pr, workflow=workflow):
+                    if pr and self.context["pull_request"] is None:
+                        self.pr()
+                    self.context["workflow"] = None
+                    if workflow:
+                        self.workflow()
+                    self.events.clear()
+                    actual_head = checkout_head.observe_checkout_head
+                    actual_loose = git_loose_acquire.read_object
+                    actual_sources = observer._observe_sources
+                    actual_source = provider_attribution._source
+                    actual_snapshot = git_snapshot_reader.Invocation.snapshot
+                    budgets = []
+
+                    def head(*args):
+                        self.events.append("head")
+                        return actual_head(*args)
+
+                    def loose(*args):
+                        self.events.append("object")
+                        return actual_loose(*args)
+
+                    def source(path):
+                        self.events.append("attribution-source")
+                        return actual_source(path)
+
+                    def sources(root, tree, objects):
+                        self.events.append("fixed-sources")
+                        result = actual_sources(root, tree, objects)
+                        budgets.append((objects.count, objects.total))
+                        return result
+
+                    def snapshot(invocation):
+                        self.events.append("snapshot")
+                        return actual_snapshot(invocation)
+
+                    with mock.patch.object(checkout_head, "observe_checkout_head", side_effect=head), \
+                            mock.patch.object(git_loose_acquire, "read_object", side_effect=loose), \
+                            mock.patch.object(provider_attribution, "_source", side_effect=source), \
+                            mock.patch.object(observer, "_observe_sources", side_effect=sources), \
+                            mock.patch.object(git_snapshot_reader.Invocation, "snapshot", snapshot), \
+                            mock.patch.object(git_pack_acquire, "acquire_validated_pair",
+                                              wraps=git_pack_acquire.acquire_validated_pair) as pairs:
+                        data = self.observe()
+                    result = json.loads(data)
+                    self.assertEqual(result["schema"], observer.SCHEMA)
+                    self.assertEqual(result["assurance"], observer.ASSURANCE)
+                    self.assertEqual(set(result["sources"]), set(EXPECTED_PATHS))
+                    self.assertEqual(result["attribution"]["checkout"]["kind"],
+                                     "pr-synthetic-merge" if pr else "event-commit")
+                    self.assertEqual(result["attribution"]["workflow"]["status"],
+                                     "observed" if workflow else "unavailable")
+                    self.assertEqual(pairs.call_count, 2)
+                    count = 27 if workflow else 22
+                    self.assertEqual([item[0] for item in budgets], [count, count])
+                    self.assertEqual(budgets[0][1], budgets[1][1])
+                    self.assertLessEqual(budgets[0][1], 1024 * 1024)
+                    self.assertEqual(self.events.count("object"), 2 * count)
+                    expected = ["snapshot", "context", "head"] + ["object"] * 5
+                    # Two attribution file walks: each has three trees and one blob.
+                    expected += ["attribution-source"] + ["object"] * 4 + ["attribution-source"]
+                    if workflow:
+                        expected += ["object"] * 5
+                    expected += ["fixed-sources"] + ["object"] * 13
+                    self.assertEqual(self.events, expected + ["provider-enter", "provider-exit"] + expected)
+                    old = provider_attribution.observe(self.context_reader, self.git.read)
+                    self.assertEqual(result["attribution"], json.loads(old))
+                    self.assertEqual(old, provider_attribution._encode(result["attribution"]))
+                    self.assertEqual(data, provider_attribution._encode(result))
+
+    def test_fresh_validation_and_candidate_tampering(self):
+        data = self.observe()
+        self.events.clear()
+        observer.validate(data, str(self.root), self.pack_id, self.context_reader)
+        self.assertEqual(self.events.count("context"), 2)
+        for candidate in (data + b" ", b"{}", data.replace(b"same-job", b"fake-job"),
+                          "not bytes", b"x" * (provider_attribution.ENVELOPE_LIMIT + 1)):
+            with self.subTest(candidate=str(candidate)[:20]), self.assertRaises(ios_runtime.Refusal):
+                observer.validate(candidate, str(self.root), self.pack_id, self.context_reader)
+
+    def test_duplicate_source_records_refuse_sequential_mutation(self):
+        actual_sources = observer._observe_sources
+        actual_files = provider_attribution._Objects.files
+        for path in provider_attribution.SOURCES:
+            for fault, snapshots in (("sha256", (1, 2)), ("sha256", (2,)),
+                                     ("blob", (1,))):
+                with self.subTest(path=path, fault=fault, snapshots=snapshots):
+                    target = self.root / path
+                    original = target.read_bytes()
+                    changed = original + b" changed"
+                    calls = []
+
+                    def observe_sources(root, tree, objects):
+                        calls.append(True)
+                        if len(calls) not in snapshots:
+                            return actual_sources(root, tree, objects)
+
+                        def files(instance, tree, paths):
+                            result = actual_files(instance, tree, paths)
+                            oid, data = result[path]
+                            # Simulate the object-reader boundary accepting a SHA-1
+                            # collision, without weakening the real object checks.
+                            result[path] = (oid if fault == "sha256" else "0" * 40,
+                                            changed if fault == "sha256" else data)
+                            return result
+
+                        try:
+                            if fault == "sha256":
+                                target.write_bytes(changed)
+                            with mock.patch.object(provider_attribution._Objects, "files", files):
+                                return actual_sources(root, tree, objects)
+                        finally:
+                            target.write_bytes(original)
+
+                    self.events.clear()
+                    with mock.patch.object(observer, "_observe_sources", observe_sources):
+                        with self.assertRaisesRegex(ios_runtime.Refusal,
+                                                    "duplicate source observations differ"):
+                            self.observe()
+                    self.assertEqual(len(calls), snapshots[0])
+                    self.assertEqual(self.events.count("provider-enter"), snapshots[0] - 1)
+
+    def test_changed_observations_and_provider_mutation(self):
+        for change in ("context", "head", "source", "workflow", "provider", "provider-valid"):
+            with self.subTest(change=change):
+                original_context = copy.deepcopy(self.context)
+                original_record = copy.deepcopy(self.record)
+                source = self.root / observer._PATHS[0]
+                original_source = source.read_bytes()
+                if change == "context":
+                    self.on_exit = lambda: self.context.update(run_id=43)
+                elif change == "head":
+                    self.on_exit = lambda: self.head.write_text("0" * 40 + "\n")
+                elif change == "source":
+                    self.on_exit = lambda: source.write_bytes(b"changed")
+                elif change == "workflow":
+                    self.on_exit = self.workflow
+                elif change == "provider":
+                    self.on_exit = lambda: self.record["xcode"].update(version="changed")
+                else:
+                    self.on_exit = lambda: self.record["xcode"]["simctl_file_identity"].__setitem__(0, 9)
+                with self.assertRaises(ios_runtime.Refusal):
+                    self.observe()
+                self.context = original_context
+                self.record = original_record
+                source.write_bytes(original_source)
+                self.head.write_text(self.commit + "\n")
+                self.on_exit = lambda: None
+
+    def test_missing_corrupt_pack_and_second_snapshot_freshness(self):
+        for fault in ("missing", "corrupt", "missing-object", "second-corrupt", "second-missing"):
+            with self.subTest(fault=fault):
+                self.write_pack(omit=self.commit if fault == "missing-object" else None)
+                if fault == "missing":
+                    self.index_path.unlink()
+                elif fault == "corrupt":
+                    self.pack_path.write_bytes(b"corrupt")
+                elif fault == "second-corrupt":
+                    self.on_exit = lambda: self.index_path.write_bytes(b"corrupt")
+                elif fault == "second-missing":
+                    self.on_exit = self.pack_path.unlink
+                with self.assertRaises(ios_runtime.Refusal):
+                    self.observe()
+                self.on_exit = lambda: None
+
+    def test_refusals_interruptions_and_cleanup(self):
+        for fault in (KeyError("reader"), ValueError("reader"), OSError("reader"),
+                      ios_runtime.Refusal("reader")):
+            with self.subTest(fault=type(fault)), \
+                    self.assertRaises(ios_runtime.Refusal):
+                observer.observe(str(self.root), self.pack_id, mock.Mock(side_effect=fault))
+        for bad in (None, {}, {**self.context, "checkout_sha": "A" * 40}):
+            with self.subTest(context=bad), self.assertRaises(ios_runtime.Refusal):
+                observer.observe(str(self.root), self.pack_id, lambda: bad)
+        for bad in ("ref: refs/heads/main\n", "a" * 40, "a" * 40 + "\n"):
+            self.head.write_text(bad)
+            with self.assertRaises(ios_runtime.Refusal):
+                self.observe()
+        self.head.write_text(self.commit + "\n")
+        for error in (ios_runtime.Refusal("cleanup"), KeyboardInterrupt("cleanup"),
+                      SystemExit("cleanup")):
+            self.on_exit = mock.Mock(side_effect=error)
+            with self.subTest(error=type(error)), self.assertRaises(type(error)):
+                self.observe()
+            self.on_exit.assert_called_once()
+        self.on_exit = lambda: None
+        with mock.patch.object(observer, "_observe_sources", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.observe()
+        self.events.clear()
+        with mock.patch.object(provider_attribution, "_provider", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.observe()
+        self.assertIn("provider-exit", self.events)
+        self.assertEqual(self.events.count("context"), 1)
+        with mock.patch.object(provider_attribution, "OBJECT_COUNT", 21):
+            with self.assertRaisesRegex(ios_runtime.Refusal, "count limit"):
+                self.observe()
+        with mock.patch.object(git_snapshot_reader, "OBJECT_CALL_LIMIT", 43):
+            with self.assertRaises(ios_runtime.Refusal):
+                self.observe()
+
+    def test_head_before_objects_and_reader_failures(self):
+        self.head.write_text("ref: refs/heads/main\n")
+        with mock.patch.object(git_loose_acquire, "read_object") as read:
+            with self.assertRaises(ios_runtime.Refusal):
+                self.observe()
+            read.assert_not_called()
+        self.head.write_text(self.commit + "\n")
+        for error in (KeyError("reader"), ValueError("reader"), OSError("reader")):
+            with self.subTest(error=type(error)), \
+                    mock.patch.object(git_snapshot_reader.Invocation, "snapshot",
+                                      return_value=mock.Mock(side_effect=error)):
+                with self.assertRaises(ios_runtime.Refusal):
+                    self.observe()
+
+    def test_pr_parent_mismatch_and_changed_valid_commit(self):
+        self.pr()
+        bad = self.git.commit(self.tree, [self.context["pull_request"]["head_sha"],
+                                          self.context["pull_request"]["base_sha"]])
+        self.context.update(event_sha=bad, checkout_sha=bad)
+        self.head.write_text(bad + "\n")
+        self.write_pack()
+        with self.assertRaisesRegex(ios_runtime.Refusal, "parents"):
+            self.observe()
+        self.pr()
+        other = self.git.commit(self.tree, [self.context["pull_request"]["base_sha"],
+                                            self.context["pull_request"]["head_sha"]])
+        # A distinct valid commit with the same parents and tree.
+        original = self.git.objects[other][1]
+        other = self.git.add("commit", original + b"extra")
+        self.write_pack()
+
+        def change():
+            self.context.update(event_sha=other, checkout_sha=other)
+            self.head.write_text(other + "\n")
+
+        self.on_exit = change
+        with self.assertRaisesRegex(ios_runtime.Refusal, "changed"):
+            self.observe()
+
+    def test_source_mismatch_and_shared_byte_budget(self):
+        target = self.root / observer._PATHS[0]
+        target.write_bytes(b"not tracked")
+        with self.assertRaises(ios_runtime.Refusal):
+            self.observe()
+        target.write_bytes(self.data[observer._PATHS[0]])
+
+        # Each blob is legal, but duplicate attribution reads plus the ten
+        # grouped reads must share the same 1 MiB aggregate budget.
+        entries = {}
+        for path in observer._PATHS:
+            data = (path.encode() * 4000)[:120000]
+            (self.root / path).write_bytes(data)
+            entries[path.rpartition("/")[2]] = ("100644", self.git.add("blob", data))
+        scripts = self.git.tree({"test-audit-run": ("40000", self.git.tree(entries))})
+        self.tree = self.git.tree({"scripts": ("40000", scripts)})
+        self.commit = self.git.commit(self.tree)
+        self.context.update(event_sha=self.commit, checkout_sha=self.commit)
+        self.head.write_text(self.commit + "\n")
+        self.write_pack()
+        with self.assertRaisesRegex(ios_runtime.Refusal, "total size limit"):
+            self.observe()
 
 
 if __name__ == "__main__":
