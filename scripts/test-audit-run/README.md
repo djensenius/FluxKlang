@@ -542,6 +542,19 @@ are never deliberately emitted. The separately reviewed manual workflow below
 is included; its presence does not mean it has been dispatched.
 Success is deliberately status-only: exact source, HEAD, runner and toolchain
 identity evidence is not emitted and remains separately unresolved for #893.
+The current runner verifies provider context but does **not** call the preparer's
+profile acceptance; even a successful provider observation is not acceptance.
+The earlier generic refusal does not establish its cause or profile refusal.
+
+Refusal and unexpected-failure reports include a closed execution-boundary
+stage: `input`, `project-checks`, `pack-discovery`, `snapshot-before`,
+`provider-enter`, `provider-record`, `provider-exit`, `snapshot-after`,
+`consistency`, `encoding`, or `final-check`. Invalid stage state falls back
+to `observation`. A stage is not a cause, a guarantee that earlier checks
+succeeded, an exact failed syscall, or proof that any provider command ran.
+Cleanup may mask an operation error, including during provider exit. No private
+exception, path, identity, event, environment, native output or envelope is
+included in these diagnostics.
 The provider verifier executes up to twelve fixed native commands when actually
 run; each has the existing 2 MiB output and 30-second execution limits, plus
 bounded cleanup. Synthetic tests mock it and deny subprocess, network and

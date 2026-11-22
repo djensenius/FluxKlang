@@ -304,9 +304,11 @@ def observe_v4(checkout_root, runner):
         checkout_head._checkout_path(checkout_root)
     except checkout_head.Refusal as error:
         raise ios_runtime.Refusal("invalid runner checkout root") from error
+    runner.set_stage("project-checks")
     graph()
     paths(checkout_root)
     runner.check_interrupted()
+    runner.set_stage("pack-discovery")
     pair = observation_acquisition.discover_pair(checkout_root)
 
     def check_pair():
@@ -329,21 +331,44 @@ def observe_v4(checkout_root, runner):
         return result
 
     result = _observe(checkout_root, pair[0], context_reader,
-                      git_snapshot_reader.InvocationV2, SCHEMA_V4, sources)
+                      git_snapshot_reader.InvocationV2, SCHEMA_V4, sources,
+                      runner.set_stage)
+    runner.set_stage("final-check")
     check_pair()
     return result
 
 
 def _observe(checkout_root, pack_id, context_reader, invocation_type, schema,
-             source_reader=None):
+             source_reader=None, set_stage=None):
+    def stage(value):
+        if set_stage is not None:
+            set_stage(value)
+
     try:
+        stage("snapshot-before")
         invocation = invocation_type(checkout_root, pack_id)
         before, sources = _snapshot(checkout_root, context_reader, invocation.snapshot(),
                                     source_reader)
-        with ios_runtime.provider_verified_checker() as (spellings, observation):
-            provider = provider_attribution._provider(observation, spellings)
+        stage("provider-enter")
+        operation_error = None
+        try:
+            with ios_runtime.provider_verified_checker() as (spellings, observation):
+                stage("provider-record")
+                try:
+                    provider = provider_attribution._provider(observation, spellings)
+                except BaseException as error:
+                    operation_error = error
+                    raise
+                finally:
+                    stage("provider-exit")
+        except BaseException as error:
+            if error is operation_error:
+                stage("provider-record")
+            raise
+        stage("snapshot-after")
         after, later_sources = _snapshot(checkout_root, context_reader, invocation.snapshot(),
                                          source_reader)
+        stage("consistency")
         ios_runtime.require((after, later_sources) == (before, sources),
                             "source/job observation changed")
         ios_runtime.require(provider_attribution._provider(observation, spellings) == provider,
@@ -352,6 +377,7 @@ def _observe(checkout_root, pack_id, context_reader, invocation_type, schema,
                        "assurance": provider_attribution.ASSURANCE,
                        **before, "provider_runtime": provider}
         # Preserve the v1 envelope's own encoding/size check as well.
+        stage("encoding")
         provider_attribution._encode(attribution)
         return provider_attribution._encode({
             "schema": schema, "assurance": ASSURANCE,
