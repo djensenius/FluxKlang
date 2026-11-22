@@ -539,6 +539,8 @@ acquisition to the separately versioned
 `{"status":"observed"}` or a fixed refusal/failure/interruption diagnostic;
 the envelope, paths, IDs, environment, exceptions and native command output
 are never deliberately emitted. No workflow or hosted execution is included.
+Success is deliberately status-only: exact source, HEAD, runner and toolchain
+identity evidence is not emitted and remains separately unresolved for #893.
 The provider verifier executes up to twelve fixed native commands when actually
 run; each has the existing 2 MiB output and 30-second execution limits, plus
 bounded cleanup. Synthetic tests mock it and deny subprocess, network and
@@ -582,8 +584,12 @@ held project `os.open` descriptors at 20 and verifies closure; interpreter,
 directory-iterator and native-probe descriptors are additional. Canonical path
 length remains bounded to 4096 bytes. Signal handling uses a non-raising SIGINT
 flag, checked at observation boundaries; an in-progress bounded operation may finish
-before interruption is reported. Cleanup failures refuse; output and signal
-timing limitations remain as described for the census entry point.
+before interruption is reported. The final flag read immediately before writing
+commits the chosen report and exit-status pair. A SIGINT after that read,
+including during or after a complete write, does not alter the committed status;
+an earlier SIGINT selects the interruption report and status 130. A short or
+failed write can still prevent or truncate a report and exits unsuccessfully.
+Cleanup failures refuse.
 
 Persistent replacements visible at the checks refuse, but transient
 mutate-and-restore races and changes between checks can escape detection.

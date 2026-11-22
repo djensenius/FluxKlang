@@ -285,6 +285,67 @@ class RunnerTests(unittest.TestCase):
                 mock.patch.object(os, "write", return_value=0):
             self.assertEqual(runner.main(), 1)
 
+    def test_signal_during_complete_write_preserves_committed_report_and_status(self):
+        cases = (
+            (None, 0, b'{"status":"observed"}\n'),
+            (ios_runtime.Refusal("private"), 1,
+             b'{"diagnostic":"Refusal","stage":"observation","status":"refused"}\n'),
+            (ValueError("private"), 1,
+             b'{"diagnostic":"Unexpected failure","stage":"observation","status":"failed"}\n'),
+            (KeyboardInterrupt("private"), 130,
+             b'{"diagnostic":"Interrupted","status":"failed"}\n'),
+        )
+        for error, expected_status, expected_output in cases:
+            with self.subTest(error=type(error)):
+                output = []
+
+                def observe(*_args):
+                    if error is not None:
+                        raise error
+                    return b"private envelope"
+
+                def write(fd, data):
+                    self.assertEqual(fd, 1)
+                    output.append(data)
+                    runner._sigint(None, None)
+                    return len(data)
+
+                with mock.patch.object(integration, "observe_v4", side_effect=observe), \
+                        mock.patch.object(os, "write", side_effect=write):
+                    status = runner.main()
+                self.assertEqual(status, expected_status)
+                self.assertEqual(output, [expected_output])
+                self.assertTrue(runner._interrupted)
+
+    def test_signal_before_commit_and_output_failures(self):
+        def interrupted(*_args):
+            runner._sigint(None, None)
+            return b"private envelope"
+
+        with mock.patch.object(integration, "observe_v4", side_effect=interrupted):
+            self.assertEqual(self.run_report(),
+                             (130, b'{"diagnostic":"Interrupted","status":"failed"}\n'))
+
+        def failed_write(_fd, _data):
+            runner._sigint(None, None)
+            raise OSError("private output failure")
+
+        with mock.patch.object(integration, "observe_v4", return_value=b"private envelope"), \
+                mock.patch.object(os, "write", side_effect=failed_write):
+            self.assertEqual(runner.main(), 130)
+        with mock.patch.object(integration, "observe_v4", return_value=b"private envelope"), \
+                mock.patch.object(os, "write", side_effect=OSError("private output failure")):
+            self.assertEqual(runner.main(), 1)
+
+        def short_write(_fd, data):
+            self.assertEqual(data, b'{"status":"observed"}\n')
+            runner._sigint(None, None)
+            return len(data) - 1
+
+        with mock.patch.object(integration, "observe_v4", return_value=b"private envelope"), \
+                mock.patch.object(os, "write", side_effect=short_write):
+            self.assertEqual(runner.main(), 1)
+
     def test_event_replacement_and_changed_projection(self):
         def replace_event():
             self.event_path.unlink()

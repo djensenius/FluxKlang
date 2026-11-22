@@ -55,6 +55,8 @@ def main():
                       b'{"diagnostic":"Unexpected failure","stage":"observation","status":"failed"}\n')
             status = 1
     try:
+        # This final flag read commits the report/status pair. A later SIGINT
+        # cannot change a successfully written report's exit status.
         if _interrupted:
             output = b'{"diagnostic":"Interrupted","status":"failed"}\n'
             status = 130
@@ -62,7 +64,7 @@ def main():
             return 1
     except BaseException:
         return 130 if _interrupted else 1
-    return 130 if _interrupted else status
+    return status
 
 
 if __name__ == "__main__":
