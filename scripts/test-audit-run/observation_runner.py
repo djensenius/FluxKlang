@@ -11,6 +11,7 @@ _STAGES = {
     "input": b"input",
     "project-checks": b"project-checks",
     "pack-discovery": b"pack-discovery",
+    "candidate-discovery": b"candidate-discovery",
     "snapshot-before": b"snapshot-before",
     "provider-enter": b"provider-enter",
     "provider-record": b"provider-record",
@@ -55,6 +56,12 @@ def main():
         if sys.argv[1:2] == ["--bounded-prepare-v1"]:
             integration.ios_runtime.require(len(sys.argv) == 4, "invalid explicit input")
             integration.observe_v5(root, sys.modules[__name__], sys.argv[2], sys.argv[3])
+        elif sys.argv[1:2] == ["--provider-products-v1"]:
+            integration.ios_runtime.require(len(sys.argv) == 3, "invalid Products input")
+            set_stage("candidate-discovery")
+            candidate, pin = acquisition.discover_candidate(sys.argv[2])
+            check_interrupted()
+            integration.observe_v5(root, sys.modules[__name__], candidate, pin)
         else:
             integration.ios_runtime.require(len(sys.argv) == 1, "unexpected arguments")
             integration.observe_v4(root, sys.modules[__name__])
