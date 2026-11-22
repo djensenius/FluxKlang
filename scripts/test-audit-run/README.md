@@ -284,6 +284,56 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_checkout_head.py'
 ```
 
+`source_snapshot_integration._observe_sources(checkout_root, tree, objects)` is
+a separate internal, opt-in prerequisite, not connected to the envelope or
+existing observe/validate paths. The caller supplies an exact absolute `str`
+checkout root (with `checkout_head`'s path restrictions), a lowercase 40-hex
+tree SHA-1, and an existing exact `provider_attribution._Objects` instance.
+It calls `_Objects.files` on that instance once, sharing its existing object
+count, byte and identity checks. Grouped lookup and tree parsing dispatch to
+the class implementations rather than instance-shadowed methods; tree parsing
+also uses class `get` in the existing single-file path. No API is changed.
+It returns a path-sorted dictionary mapping each fixed
+checkout-relative source path to `{"blob": <Git SHA-1>, "sha256": <hex>}` or
+raises `ios_runtime.Refusal`. There is no caller-selected path or module.
+The existing aggregate object budget can refuse even when each file fits its
+individual cap; acquisition bounds remain the caller's reader responsibility.
+
+The only sources are `source_snapshot_integration.py`,
+`provider_attribution.py`, `ios_runtime.py`, `checkout_head.py`,
+`git_snapshot_reader.py`, `git_loose.py`, `git_loose_acquire.py`,
+`git_pack.py`, `git_pack_acquire.py` and `git_delta.py`, all under
+`scripts/test-audit-run`. Each loaded module's exact `__file__` string must
+match its source path before and after the read. This is a path observation,
+not proof of loaded code integrity. The concrete project-module dependency
+references are also checked for identity before and after observation; these
+checks do not defend against hostile same-job Python introspection or mutation.
+Each call freshly opens the ten files
+through descriptor-relative no-follow directory traversal, requires regular
+files of at most 128 KiB each, checks before/after metadata and path identity,
+and compares every byte with its tracked blob. Cleanup errors refuse without
+retrying close; a cleanup refusal's `__cause__` is the close error and its
+`original_error` is the concurrent operation error (or `None`). Multiple
+cleanup failures nest through `original_error`. The local descriptor owners
+avoid helpers that suppress close failures while unwinding. Cleanup
+`KeyboardInterrupt` and `SystemExit` propagate with the same `original_error`
+attribute rather than being converted to refusals. An active interruption
+remains the propagated exception if later closes fail; those errors are retained
+in its `cleanup_errors` tuple in close order, without retrying any descriptor.
+These checks detect some replacements and mutations but do not exclude races.
+
+The supplied tree is **not** tied to HEAD here; detached-HEAD verification and
+the full lifecycle are deferred. Caller-supplied context projection,
+Python/stdlib, loaded bytecode, malicious same-job behavior, custody or
+authentication, hosted compatibility and launch authority are explicitly
+outside this observation. The synthetic fixtures use Git-format objects and
+do not invoke Git, subprocesses, network, iOS tests or hardware:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_source_snapshot_integration.py'
+```
+
 `git_loose.read_object(compressed_bytes, oid)` is an independent, in-memory
 SHA-1 Git loose-object decoder. It accepts only plain immutable `bytes` and a
 plain `str` containing a full lowercase 40-hex ID, returning `(kind, raw_bytes)`
