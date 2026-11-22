@@ -304,9 +304,9 @@ The output is explicitly `shape-and-metadata-only` with acceptance
 `not-assessed`. Candidate classifications do not select a pair, parse arbitrary
 blobs, validate pack/index content, assert object availability, or establish
 provider-profile acceptance. A size-fitting pair is not evidence that the pair
-is valid or supported on a hosted provider. This census is not connected to a
-workflow, dispatch, launch, native probe or acceptance gate. It invokes no Git
-command, subprocess, network, iOS test or hardware operation.
+is valid or supported on a hosted provider. The census invokes no Git command,
+subprocess, network, iOS test or hardware operation and is not an acceptance
+gate.
 
 Descriptor-held metadata and repeated directory entry snapshots detect only
 some concurrent changes. They cannot establish path custody or exclude
@@ -324,14 +324,35 @@ boundary. Python can attach an already-active caller exception as
 `__context__`, even when a raised exception uses `from None`; this helper does
 not claim to clear arbitrary caller context. `KeyboardInterrupt` and
 `SystemExit` propagate rather than becoming status reports. They, too, may
-carry caller context, so a later runner must preserve the interruption without
-exporting its exception object or traceback. Cleanup errors refuse without
-retrying a close.
+carry caller context, so a runner must not export its exception object or
+traceback. Cleanup errors refuse without retrying a close.
+
+The separate **Hosted checkout layout census (no acceptance)** workflow is
+manual-only: select it in GitHub Actions and use **Run workflow** on the
+desired ref. It has no user-supplied path, SHA or pack inputs. The pinned
+checkout action fetches the event SHA with depth 1 and without persisted
+credentials. That checkout uses network and mutates the workspace; it is not
+part of the subsequent read-only census. The observer uses only
+`GITHUB_WORKSPACE` and `GITHUB_SHA` and emits the closed aggregate report to
+the job log, with no artifact. Refusals exit nonzero; unexpected failures and
+interruptions emit only fixed diagnostics and also exit nonzero. No exception
+values or tracebacks are deliberately logged by the entry point.
+
+The workflow and checkout are trusted to supply their environment and code;
+the observer does not verify the provider, workflow identity, provenance or
+workspace custody. The report is layout-only, not acceptance, qualification,
+object integrity, availability or evidence of hosted compatibility. Provider
+logs, checkout/runtime failures outside the entry point, hostile same-job
+behavior and forced termination are outside its output boundary. Do not treat
+a successful job as an acceptance or qualification claim.
+
 Synthetic fixtures:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_checkout_layout.py'
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_hosted_layout_census.py'
 ```
 
 `source_snapshot_integration._observe_sources(checkout_root, tree, objects)` is
