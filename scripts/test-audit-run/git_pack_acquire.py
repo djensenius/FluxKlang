@@ -58,7 +58,13 @@ def acquire_validated_pair(checkout_root, pack_id):
     return tuple.__new__(_ValidatedPair, (tuple(sorted(objects.items())),))
 
 
-def _acquire(checkout_root, pack_id):
+def acquire_validated_pair_v2(checkout_root, pack_id):
+    """Like acquire_validated_pair, with the fixed 16 MiB parser profile."""
+    _, _, objects = _acquire(checkout_root, pack_id, git_pack._Profile.V2)
+    return tuple.__new__(_ValidatedPair, (tuple(sorted(objects.items())),))
+
+
+def _acquire(checkout_root, pack_id, profile=git_pack._Profile.V1):
     pieces = checkout_head._checkout_path(checkout_root)
     expected = checkout_head._expected_oid(pack_id)
     if (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY")
@@ -75,7 +81,7 @@ def _acquire(checkout_root, pack_id):
                     stack, checkout_head._open_directory, parent, component,
                 )
             files = []
-            for suffix, limit in (("pack", git_pack.PACK_LIMIT),
+            for suffix, limit in (("pack", git_pack._pack_limit(profile)),
                                   ("idx", git_pack.INDEX_LIMIT)):
                 descriptor = git_loose_acquire._open_owned(
                     stack, os.open, f"pack-{expected}.{suffix}",
@@ -98,7 +104,10 @@ def _acquire(checkout_root, pack_id):
             pack, index = contents
             if len(pack) < 20 or pack[-20:].hex() != expected:
                 raise Refusal("pack filename identity mismatch")
-            objects = git_pack._parse(pack, index)
+            if profile is git_pack._Profile.V1:
+                objects = git_pack._parse(pack, index)
+            else:
+                objects = git_pack._parse_profile(pack, index, profile)
             return pack, index, objects
     except Refusal:
         raise
