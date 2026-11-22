@@ -765,6 +765,58 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_bounded_observation_runner.py'
 ```
 
+#### Provider-trusted Products candidate handoff (#893; source-only opt-in)
+
+`observation_runner.py --provider-products-v1 ABSOLUTE_PRODUCTS_ROOT` is an
+additional explicit mode that selects the existing v5 composition. The caller
+must separately authorize and own a disposable **iOS-only** workspace and
+explicitly provide its canonical Products root. The root must be an absolute,
+canonical UTF-8 path no longer than 4096 bytes and at most 63 components, so the
+selected candidate path remains within 64 components; every path component is
+at most 255 UTF-8 bytes. The no-follow directory scan accepts at most 256
+entries and refuses on a 257th detection entry, with the same 255-byte name
+bound, and requires exactly
+one root-level name ending in `.xctestrun`. Zero or multiple candidates,
+candidate symlinks, hard links, special files, oversized paths, read errors,
+mutation, and candidates larger than the existing inclusive 2 MiB material
+limit refuse without trying another candidate. The selected candidate is
+opened no-follow, read once with a 2 MiB-plus-one detection bound, and hashed
+as lowercase SHA-256. Its canonical path and resulting pin are passed directly
+to the existing explicit v5 pipeline; there is no retry or fallback mode.
+Unknown arguments and extra inputs still refuse. The no-argument v4 mode and
+`--bounded-prepare-v1 ABSOLUTE_INPUT LOWERCASE_SHA256` mode retain their
+existing behavior.
+
+The Products enumeration and handoff add no tracked source module: the changed
+acquisition logic is already among the runner's snapshotted sources. The
+existing v5 source set remains 15 files, and its object budgets remain exactly
+32 calls per snapshot (64 total), with no extra source snapshot or object calls.
+The only successful runner output remains `{"status":"observed"}`; failures
+remain fixed status-only diagnostics. The candidate itself is not printed.
+
+This is only provider-trusted candidate selection, **not** a build operation or
+evidence that a candidate is fresh, compile-produced by this checkout, intended
+for this run, or has any verified provenance. The v5 provider observation and
+source snapshot do not prove Products-root custody, workspace isolation, or
+that a human authorized the iOS-only workspace. The caller must establish those
+conditions separately. The scan pins bytes, but its descriptors close before
+the v5 preparer reopens the path: an identical-byte replacement can occur in
+that handoff interval, and transient changes between checks can escape
+detection. The preparer's later bounded pin check refuses differing bytes but
+does not close all identity or filesystem races. Same-job code, Python,
+provider, filesystem semantics, and the caller-controlled workspace remain
+trusted; this is not custody, authentication, race freedom, qualification, or
+launch authority.
+
+Preparation may retain output and intent siblings on any later failure,
+including snapshot, provider-exit, or final-check failure. These files can
+contain sensitive metadata; this runner never removes them, retries, or
+cleans the workspace. Repeated attempts can accumulate unbounded disk use.
+Keep all use within the separately authorized disposable workspace and perform
+any cleanup under the caller's own authority. This source-only mode does not
+change or dispatch workflows, launch tests, access credentials, or use
+hardware.
+
 #### Manual hosted observation procedure
 
 `.github/workflows/ios-provider-observation.yml` permits only a manual

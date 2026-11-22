@@ -74,10 +74,12 @@ class BoundedRunnerTests(unittest.TestCase):
             path.unlink()
         self.write_pack()
 
-    def report(self, input_path=None, pin=None, *, arguments=None):
+    def report(self, input_path=None, pin=None, *, arguments=None, source=None):
         self.serial += 1
         run_id = str(uuid.UUID(int=self.serial, version=4))
-        self.output, self.intent = prepare.output_paths(self.source, run_id)
+        self.output, self.intent = prepare.output_paths(
+            self.source if source is None else source, run_id,
+        )
         output = []
         real_write = os.write
 
@@ -100,6 +102,173 @@ class BoundedRunnerTests(unittest.TestCase):
         self.assertFalse(self.host.fds)
         return status, output[0]
 
+    def products(self, name="candidate.xctestrun", data=None):
+        root = self.directory / "products"
+        root.mkdir(exist_ok=True)
+        path = root / name
+        path.write_bytes(
+            plistlib.dumps(runtime_fixture.fixture(), sort_keys=False) if data is None else data,
+        )
+        return root, path
+
+    def test_composed_products_handoff_uses_real_v5_and_exact_pin(self):
+        products_root, candidate = self.products()
+        pin = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        counts = []
+        original_sources = integration._observe_fixed_sources
+
+        def sources(*args):
+            result = original_sources(*args)
+            counts.append(args[2].count)
+            self.assertEqual(args[3], integration._PATHS_V5)
+            return result
+
+        with mock.patch.object(integration, "_observe_fixed_sources", side_effect=sources), \
+                mock.patch.object(acquisition, "discover_candidate",
+                                  wraps=acquisition.discover_candidate) as discover, \
+                mock.patch.object(integration, "observe_v5", wraps=integration.observe_v5) as v5:
+            self.assertEqual(self.report(
+                arguments=["--provider-products-v1", str(products_root)],
+                source=candidate,
+            ), (0, b'{"status":"observed"}\n'))
+        discover.assert_called_once_with(str(products_root))
+        self.assertEqual(v5.call_args.args[2:], (str(candidate), pin))
+        self.assertEqual(counts, [32, 32])
+        self.assertTrue(self.output.is_file())
+        self.assertTrue(self.intent.is_file())
+
+    def test_products_candidate_cardinality_and_path_policy_refuse_closed(self):
+        products_root, candidate = self.products()
+        candidate.unlink()
+        cases = (
+            (str(products_root), b"candidate-discovery"),
+            (str(products_root) + "/", b"candidate-discovery"),
+            ("relative/Products", b"candidate-discovery"),
+            ("/" + "x" * 4097, b"candidate-discovery"),
+            ("/" + "x" * 256, b"candidate-discovery"),
+        )
+        for root, stage in cases:
+            with self.subTest(root=root[:40]):
+                status, output = self.report(
+                    arguments=["--provider-products-v1", root],
+                    source=candidate,
+                )
+                self.assertEqual((status, output),
+                                 (1, b'{"diagnostic":"Refusal","stage":"' + stage
+                                  + b'","status":"refused"}\n'))
+                self.assertFalse(self.host.commands)
+        candidate.write_bytes(plistlib.dumps(runtime_fixture.fixture(), sort_keys=False))
+        second = products_root / "second.xctestrun"
+        second.write_bytes(candidate.read_bytes())
+        status, output = self.report(
+            arguments=["--provider-products-v1", str(products_root)],
+            source=candidate,
+        )
+        self.assertEqual((status, output),
+                         (1, b'{"diagnostic":"Refusal","stage":"candidate-discovery",'
+                          b'"status":"refused"}\n'))
+        self.assertFalse(self.host.commands)
+
+    def test_products_enumeration_and_component_inclusive_bounds(self):
+        products_root, candidate = self.products("x" * 245 + ".xctestrun")
+        for index in range(255):
+            (products_root / f"entry-{index:03d}").write_bytes(b"")
+        self.assertEqual(len(os.fsencode(candidate.name)), 255)
+        selected, pin = acquisition.discover_candidate(str(products_root))
+        self.assertEqual((selected, pin),
+                         (str(candidate), hashlib.sha256(candidate.read_bytes()).hexdigest()))
+        (products_root / "entry-255").write_bytes(b"")
+        with self.assertRaises(ios_runtime.Refusal):
+            acquisition.discover_candidate(str(products_root))
+
+    def test_products_candidate_shapes_size_and_mutation_refuse(self):
+        products_root, candidate = self.products()
+        candidate.unlink()
+        target = products_root / "not-candidate"
+        target.write_bytes(b"")
+        candidate.symlink_to(target)
+        with self.assertRaises(ios_runtime.Refusal):
+            acquisition.discover_candidate(str(products_root))
+        candidate.unlink()
+        os.link(target, candidate)
+        with self.assertRaises(ios_runtime.Refusal):
+            acquisition.discover_candidate(str(products_root))
+        candidate.unlink()
+        os.mkfifo(candidate)
+        with self.assertRaises(ios_runtime.Refusal):
+            acquisition.discover_candidate(str(products_root))
+        candidate.unlink()
+        candidate.write_bytes(b"x" * (bounded_material.MATERIAL_BYTES + 1))
+        with self.assertRaises(ios_runtime.Refusal):
+            acquisition.discover_candidate(str(products_root))
+        candidate.write_bytes(b"x" * bounded_material.MATERIAL_BYTES)
+        self.assertEqual(acquisition.discover_candidate(str(products_root))[1],
+                         hashlib.sha256(candidate.read_bytes()).hexdigest())
+        candidate.write_bytes(b"candidate")
+        real_read = os.read
+
+        def replace_after_read(fd, limit):
+            result = real_read(fd, limit)
+            if result:
+                replacement = products_root / "replacement"
+                replacement.write_bytes(b"candidate")
+                replacement.replace(candidate)
+            return result
+
+        with mock.patch.object(acquisition.os, "read", side_effect=replace_after_read):
+            with self.assertRaises(ios_runtime.Refusal):
+                acquisition.discover_candidate(str(products_root))
+
+    def test_products_handoff_pin_rejects_changed_candidate_without_retry(self):
+        products_root, candidate = self.products()
+        original = integration.observe_v5
+        calls = []
+
+        def mutate_then_observe(*args):
+            calls.append(args[2:])
+            candidate.write_bytes(candidate.read_bytes() + b"changed")
+            return original(*args)
+
+        with mock.patch.object(integration, "observe_v5", side_effect=mutate_then_observe):
+            status, output = self.report(
+                arguments=["--provider-products-v1", str(products_root)],
+                source=candidate,
+            )
+        self.assertEqual((status, output),
+                         (1, b'{"diagnostic":"Refusal","stage":"prepare","status":"refused"}\n'))
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(self.output.exists())
+        self.assertFalse(self.intent.exists())
+        self.assertEqual(len(self.host.commands), 6)
+
+    def test_products_candidate_descriptor_cleanup_on_success_and_failure(self):
+        products_root, candidate = self.products()
+        actual_open, actual_close = os.open, os.close
+        held = set()
+
+        def open_file(path, flags, mode=0o777, *, dir_fd=None):
+            descriptor = actual_open(path, flags, mode, dir_fd=dir_fd)
+            held.add(descriptor)
+            return descriptor
+
+        def close_file(descriptor):
+            actual_close(descriptor)
+            held.discard(descriptor)
+
+        with mock.patch.object(os, "open", side_effect=open_file) as opened, \
+                mock.patch.object(os, "supports_dir_fd", os.supports_dir_fd | {opened}), \
+                mock.patch.object(os, "close", side_effect=close_file):
+            acquisition.discover_candidate(str(products_root))
+            self.assertEqual(held, set())
+            with mock.patch.object(acquisition.os, "read", side_effect=OSError("read failed")):
+                with self.assertRaises(ios_runtime.Refusal):
+                    acquisition.discover_candidate(str(products_root))
+            self.assertEqual(held, set())
+            candidate.unlink()
+            with self.assertRaises(ios_runtime.Refusal):
+                acquisition.discover_candidate(str(products_root))
+            self.assertEqual(held, set())
+
     def test_unknown_missing_and_extra_arguments_refuse_before_observation(self):
         secret = "PRIVATE-argument"
         cases = (
@@ -109,6 +278,8 @@ class BoundedRunnerTests(unittest.TestCase):
             ["--bounded-prepare-v1"],
             ["--bounded-prepare-v1", str(self.source)],
             ["--bounded-prepare-v1", str(self.source), self.pin, secret],
+            ["--provider-products-v1"],
+            ["--provider-products-v1", secret, "extra"],
         )
         with mock.patch.object(prepare, "prepare", wraps=prepare.prepare) as producer, \
                 mock.patch.object(integration, "observe_v4", wraps=integration.observe_v4) as old_mode, \

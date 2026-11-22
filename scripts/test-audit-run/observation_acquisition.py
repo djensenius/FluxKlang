@@ -1,6 +1,7 @@
-"""Bounded runner inputs and private pack discovery; observations, not custody."""
+"""Bounded runner inputs and candidate/pack discovery; observations, not custody."""
 
 from contextlib import ExitStack
+import hashlib
 import os
 import re
 import stat
@@ -15,6 +16,11 @@ import source_snapshot_integration as integration
 
 _PACK = re.compile(r"pack-([0-9a-f]{40})\.(pack|idx)\Z")
 _metadata = git_loose_acquire._metadata
+_PRODUCT_ENTRIES = 256
+_PRODUCT_COMPONENT_BYTES = 255
+_PRODUCT_PATH_BYTES = 4096
+_PRODUCT_PATH_COMPONENTS = 64
+_CANDIDATE_BYTES = 2 * 1024 * 1024
 
 
 def _directories(stack, root, components):
@@ -91,6 +97,85 @@ def discover_pair(root):
         raise
     except Exception as error:
         raise ios_runtime.Refusal("pack discovery unavailable") from error
+
+
+def discover_candidate(products_root):
+    """Pin the one root-level xctestrun candidate under a canonical Products root."""
+    try:
+        pieces = checkout_head._checkout_path(products_root)
+        encoded_root = products_root.encode("utf-8")
+        ios_runtime.require(len(encoded_root) <= _PRODUCT_PATH_BYTES
+                            and len(pieces) + 1 <= _PRODUCT_PATH_COMPONENTS
+                            and all(len(piece.encode("utf-8")) <= _PRODUCT_COMPONENT_BYTES
+                                    for piece in pieces),
+                            "Products path limit")
+        ios_runtime.require(os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
+                            and os.stat in os.supports_follow_symlinks
+                            and os.scandir in os.supports_fd
+                            and all(hasattr(os, name) for name in
+                                    ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")),
+                            "descriptor operations unavailable")
+        with ExitStack() as stack:
+            path_pieces, directory, root_info, links = _directories(
+                stack, products_root, (),
+            )
+
+            def names():
+                result = []
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        name = entry.name
+                        ios_runtime.require(type(name) is str, "Products entry name shape")
+                        try:
+                            size = len(name.encode("utf-8"))
+                        except UnicodeError as error:
+                            raise ios_runtime.Refusal("Products entry name encoding") from error
+                        ios_runtime.require(0 < size <= _PRODUCT_COMPONENT_BYTES,
+                                            "Products entry component limit")
+                        result.append(name)
+                        ios_runtime.require(len(result) <= _PRODUCT_ENTRIES,
+                                            "Products entry limit")
+                return tuple(sorted(result))
+
+            entries = names()
+            candidates = tuple(name for name in entries if name.endswith(".xctestrun"))
+            ios_runtime.require(len(candidates) == 1, "expected exactly one candidate")
+            name = candidates[0]
+            candidate_path = products_root + "/" + name
+            ios_runtime.require(len(candidate_path.encode("utf-8")) <= _PRODUCT_PATH_BYTES,
+                                "candidate path limit")
+            before = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            ios_runtime.require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                                and 0 <= before.st_size <= _CANDIDATE_BYTES,
+                                "candidate shape or byte limit")
+            descriptor = integration._open_owned(
+                stack, os.open, name,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=directory,
+            ).fd
+            ios_runtime.require(_metadata(os.fstat(descriptor)) == _metadata(before),
+                                "candidate changed during open")
+            digest = hashlib.sha256()
+            total = 0
+            while True:
+                chunk = os.read(descriptor, min(65536, _CANDIDATE_BYTES + 1 - total))
+                if not chunk:
+                    break
+                total += len(chunk)
+                ios_runtime.require(total <= _CANDIDATE_BYTES, "candidate byte limit")
+                digest.update(chunk)
+            ios_runtime.require(total == before.st_size
+                                and _metadata(os.fstat(descriptor)) == _metadata(before)
+                                and _metadata(os.stat(name, dir_fd=directory,
+                                                      follow_symlinks=False)) == _metadata(before),
+                                "candidate changed during read")
+            ios_runtime.require(names() == entries, "Products entries changed")
+            _check_directories(stack, path_pieces, root_info, links)
+            return candidate_path, digest.hexdigest()
+    except ios_runtime.Refusal:
+        raise
+    except Exception as error:
+        raise ios_runtime.Refusal("candidate discovery unavailable") from error
 
 
 def read_inputs(root):
