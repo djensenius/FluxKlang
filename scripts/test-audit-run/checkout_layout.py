@@ -16,8 +16,10 @@ OBJECTS_ENTRY_LIMIT = 512
 PACK_ENTRY_LIMIT = 128
 ENTRY_NAME_BYTES = 64
 OUTPUT_BYTES = 2048
+STATUS_OUTPUT_BYTES = OUTPUT_BYTES + 128
 _PACK_NAME = re.compile(r"pack-([0-9a-f]{40})\.(pack|idx)\Z")
 _FANOUT_NAME = re.compile(r"[0-9a-f]{2}\Z")
+_REFUSAL_REPORT = '{"diagnostic":"Refusal","status":"refused"}'
 
 Refusal = checkout_head.Refusal
 
@@ -324,3 +326,22 @@ def observe_checkout_layout(checkout_root, expected_oid):
     if failure_message is not None:
         raise Refusal(failure_message) from None
     return result
+
+
+def observe_checkout_layout_report(checkout_root, expected_oid):
+    """Return a closed JSON status projection for normal output.
+
+    Never serialize the raised exception object or its context. Interruptions
+    still propagate and must not be exported by a caller's logger.
+    """
+    try:
+        census = json.loads(observe_checkout_layout(checkout_root, expected_oid))
+    except Refusal:
+        return _REFUSAL_REPORT
+    report = json.dumps(
+        {"status": "observed", "census": census},
+        sort_keys=True, separators=(",", ":"),
+    )
+    if len(report.encode("utf-8")) > STATUS_OUTPUT_BYTES:
+        return _REFUSAL_REPORT
+    return report

@@ -413,6 +413,42 @@ class CheckoutLayoutTests(unittest.TestCase):
         with mock.patch.object(census, "OUTPUT_BYTES", exact_bound - 1):
             with self.assertRaisesRegex(census.Refusal, "output size limit"):
                 self.observe()
+        report = census.observe_checkout_layout_report(str(self.root), HEAD)
+        report_bound = len(report.encode("utf-8"))
+        with mock.patch.object(census, "STATUS_OUTPUT_BYTES", report_bound):
+            self.assertEqual(census.observe_checkout_layout_report(str(self.root), HEAD),
+                             report)
+        with mock.patch.object(census, "STATUS_OUTPUT_BYTES", report_bound - 1):
+            refused_report = census.observe_checkout_layout_report(str(self.root), HEAD)
+        self.assertEqual(refused_report, '{"diagnostic":"Refusal","status":"refused"}')
+        self.assertLessEqual(len(refused_report.encode("utf-8")), report_bound - 1)
+
+    def test_status_report_does_not_export_refusal_inside_caller_exception(self):
+        private_context = f"caller-private-{self.root}-{PACK_A}"
+        report = None
+        try:
+            raise RuntimeError(private_context)
+        except RuntimeError:
+            report = census.observe_checkout_layout_report(str(self.root), "b" * 40)
+        self.assertEqual(report, '{"diagnostic":"Refusal","status":"refused"}')
+        self.assertNotIn(private_context, report)
+        self.assertNotIn(str(self.root), report)
+        self.assertIsInstance(report, str)
+
+    def test_status_report_propagates_interrupt_inside_caller_exception(self):
+        private_context = f"caller-private-{self.root}-{PACK_A}"
+        report = None
+        try:
+            raise RuntimeError(private_context)
+        except RuntimeError as caller_exception:
+            with mock.patch.object(census.os, "scandir",
+                                   side_effect=KeyboardInterrupt("stop")) as scandir_patch, \
+                    mock.patch.object(census.os, "supports_fd",
+                                      census.os.supports_fd | {scandir_patch}):
+                with self.assertRaisesRegex(KeyboardInterrupt, "stop") as raised:
+                    report = census.observe_checkout_layout_report(str(self.root), HEAD)
+            self.assertIs(raised.exception.__context__, caller_exception)
+        self.assertIsNone(report)
 
 
 if __name__ == "__main__":

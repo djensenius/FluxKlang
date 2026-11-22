@@ -312,9 +312,21 @@ Descriptor-held metadata and repeated directory entry snapshots detect only
 some concurrent changes. They cannot establish path custody or exclude
 transient changes, hostile same-job behavior, filesystem/provider semantics or
 all races; matching metadata is not provenance, isolation or qualification.
-Filesystem and cleanup errors become path-free refusals without exception
-chains; interrupts propagate without attached filesystem-error context, and
-cleanup errors refuse without retrying a close.
+Filesystem and cleanup errors become fixed-message `Refusal`s without
+filesystem details. For later hosted output, use
+`observe_checkout_layout_report`, which returns only a closed JSON projection:
+an observed census, or `{"diagnostic":"Refusal","status":"refused"}`. Emit/log
+that returned string, never a caught exception object, its `__context__`,
+`__cause__`, or formatted traceback.
+
+The raising `observe_checkout_layout` API is not itself a safe logging
+boundary. Python can attach an already-active caller exception as
+`__context__`, even when a raised exception uses `from None`; this helper does
+not claim to clear arbitrary caller context. `KeyboardInterrupt` and
+`SystemExit` propagate rather than becoming status reports. They, too, may
+carry caller context, so a later runner must preserve the interruption without
+exporting its exception object or traceback. Cleanup errors refuse without
+retrying a close.
 Synthetic fixtures:
 
 ```sh
