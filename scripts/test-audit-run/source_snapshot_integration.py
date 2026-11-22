@@ -25,10 +25,13 @@ _NAMES = (
 _PATHS = tuple(sorted(f"{_DIRECTORY}/{name}" for name in _NAMES))
 _CONTEXT_NAME = "github_context.py"
 _PATHS_V3 = tuple(sorted((*_PATHS, f"{_DIRECTORY}/{_CONTEXT_NAME}")))
+_RUNNER_NAMES = ("observation_runner.py", "observation_acquisition.py")
+_PATHS_V4 = tuple(sorted((*_PATHS_V3, *(f"{_DIRECTORY}/{name}" for name in _RUNNER_NAMES))))
 _LIMIT = 128 * 1024
 SCHEMA = "ios-source-snapshot-composition-observation-v1"
 SCHEMA_V2 = "ios-source-snapshot-composition-observation-v2"
 SCHEMA_V3 = "ios-source-snapshot-composition-observation-v3"
+SCHEMA_V4 = "ios-source-snapshot-composition-observation-v4"
 ASSURANCE = "same-job-unauthenticated-observation-not-custody-or-authority"
 
 
@@ -265,6 +268,70 @@ def observe_v3(checkout_root, pack_id, input_reader):
     return _observe(checkout_root, pack_id, context_reader,
                     git_snapshot_reader.InvocationV2, SCHEMA_V3,
                     sources)
+
+
+def observe_v4(checkout_root, runner):
+    """Integrated runner-only composition, with persistent pair identity checks."""
+    import github_context
+    import observation_acquisition
+    import sys
+    import types
+
+    def graph():
+        _context_module_graph(github_context)
+        ios_runtime.require(type(runner) is types.ModuleType
+                            and sys.modules.get(runner.__name__) is runner
+                            and runner.integration is sys.modules[__name__]
+                            and runner.acquisition is observation_acquisition
+                            and observation_acquisition.integration is sys.modules[__name__]
+                            and observation_acquisition.checkout_head is checkout_head
+                            and observation_acquisition.git_loose_acquire is git_loose_acquire
+                            and observation_acquisition._metadata is git_loose_acquire._metadata
+                            and observation_acquisition.git_pack is git_pack
+                            and observation_acquisition.github_context is github_context
+                            and observation_acquisition.ios_runtime is ios_runtime,
+                            "project module dependency differs")
+
+    def paths(root):
+        _context_module_paths(root, github_context)
+        for module, name in ((runner, _RUNNER_NAMES[0]),
+                             (observation_acquisition, _RUNNER_NAMES[1])):
+            ios_runtime.require(type(module.__file__) is str
+                                and module.__file__ == f"{root}/{_DIRECTORY}/{name}",
+                                "loaded module path differs from fixed source")
+
+    try:
+        checkout_head._checkout_path(checkout_root)
+    except checkout_head.Refusal as error:
+        raise ios_runtime.Refusal("invalid runner checkout root") from error
+    graph()
+    paths(checkout_root)
+    runner.check_interrupted()
+    pair = observation_acquisition.discover_pair(checkout_root)
+
+    def check_pair():
+        runner.check_interrupted()
+        graph()
+        paths(checkout_root)
+        ios_runtime.require(observation_acquisition.discover_pair(checkout_root) == pair,
+                            "selected pair changed")
+        runner.check_interrupted()
+
+    def context_reader():
+        check_pair()
+        inputs = observation_acquisition.read_inputs(checkout_root)
+        check_pair()
+        return github_context.read_context(*inputs)
+
+    def sources(root, tree, objects):
+        result = _observe_fixed_sources(root, tree, objects, _PATHS_V4, graph, paths)
+        check_pair()
+        return result
+
+    result = _observe(checkout_root, pair[0], context_reader,
+                      git_snapshot_reader.InvocationV2, SCHEMA_V4, sources)
+    check_pair()
+    return result
 
 
 def _observe(checkout_root, pack_id, context_reader, invocation_type, schema,
