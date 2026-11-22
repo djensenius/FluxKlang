@@ -357,16 +357,17 @@ Do not treat a successful job as an acceptance or qualification claim.
 For resource design, the separate `observe_checkout_layout_v2` and
 `observe_checkout_layout_v2_report` APIs use the same observation and closed
 report boundaries. The v2 schema is `checkout-layout-census-v2`; it retains
-the v1 shape, counts, classifications and index within-cap byte total, but
-omits `pack_bytes_within_cap_total` (which could expose one pack's exact size).
+the v1 shape, counts and classifications, but omits
+`pack_bytes_within_cap_total` and `index_bytes_within_cap_total` (which could
+expose an individual pack or index's exact size).
 Instead, `pack_size_buckets` is a fixed object of aggregate counts:
 `le_8_mib` (0 through 8 MiB), `gt_8_le_16_mib`,
 `gt_16_le_32_mib`, `gt_32_le_64_mib`, and `gt_64_mib`. Each upper
 boundary is inclusive; MiB is 1,048,576 bytes. Every regular file matching the
 pack filename pattern is counted once, including unpaired packs; index and
 unexpected files are not. No filenames, IDs, paths, contents or exact
-individual pack sizes are emitted. Fixed unsupported-feature labels do not
-identify or classify the exact unexpected entry.
+individual pack or index sizes are emitted. Fixed unsupported-feature labels
+do not identify or classify the exact unexpected entry.
 
 V2 retains the descriptor, entry and output bounds, no-follow and race checks,
 refusal and interruption behavior described above. It does not choose a pack,

@@ -104,6 +104,19 @@ class CheckoutLayoutTests(unittest.TestCase):
         census.observe_checkout_layout_v2(str(self.root), HEAD)
         self.assertEqual(census.observe_checkout_layout(str(self.root), HEAD), before)
 
+    def test_v2_single_index_does_not_expose_its_size(self):
+        self.add_pair(index_size=79248)
+        v1 = census.observe_checkout_layout(str(self.root), HEAD)
+        self.assertEqual(json.loads(v1)["index_bytes_within_cap_total"], 79248)
+        result = census.observe_checkout_layout_v2(str(self.root), HEAD)
+        report = census.observe_checkout_layout_v2_report(str(self.root), HEAD)
+        self.assertEqual(json.loads(result)["index_file_count"], 1)
+        self.assertEqual(json.loads(report)["census"], json.loads(result))
+        for output in (result, report):
+            self.assertNotIn("index_bytes_within_cap_total", output)
+            self.assertNotIn("79248", output)
+        self.assertEqual(census.observe_checkout_layout(str(self.root), HEAD), v1)
+
     def test_v2_closed_report_refusal_and_output_limits(self):
         self.add_pair(pack_size=1234567)
         report = census.observe_checkout_layout_v2_report(str(self.root), HEAD)

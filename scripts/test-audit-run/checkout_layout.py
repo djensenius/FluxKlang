@@ -308,8 +308,9 @@ def _census(checkout_root, expected_oid, version="v1"):
             **pack_counts,
         }
         if version == "v2":
-            # The v1 within-cap total can expose a single pack's exact size.
+            # The v1 totals can expose a single pack or index's exact size.
             del result["pack_bytes_within_cap_total"]
+            del result["index_bytes_within_cap_total"]
             result["pack_size_buckets"] = pack_size_buckets
         return result
 
@@ -324,7 +325,7 @@ def observe_checkout_layout(checkout_root, expected_oid):
 
 
 def observe_checkout_layout_v2(checkout_root, expected_oid):
-    """Return the v2 aggregate size-bucket census without exact pack byte totals."""
+    """Return the v2 aggregate census without pack or index byte totals."""
     return _observe_checkout_layout(checkout_root, expected_oid, "v2")
 
 
