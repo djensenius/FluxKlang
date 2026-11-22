@@ -335,16 +335,24 @@ credentials. That checkout uses network and mutates the workspace; it is not
 part of the subsequent read-only census. The observer uses only
 `GITHUB_WORKSPACE` and `GITHUB_SHA` and emits the closed aggregate report to
 the job log, with no artifact. Refusals exit nonzero; unexpected failures and
-interruptions emit only fixed diagnostics and also exit nonzero. No exception
-values or tracebacks are deliberately logged by the entry point.
+explicit interruptions emit fixed diagnostics and also exit nonzero. The
+entry point installs a non-raising SIGINT handler before observing; a SIGINT
+sets a flag even while another exception is being handled. It is not an
+immediate cancellation: the current operation may finish before the flag is
+checked. A signal seen at the pre-write check produces an interruption
+diagnostic; a later one can leave the original closed report or failure
+diagnostic in the log, with exit status 130 when seen at the final check. No
+exception values or tracebacks are deliberately logged by the entry point.
 
 The workflow and checkout are trusted to supply their environment and code;
 the observer does not verify the provider, workflow identity, provenance or
 workspace custody. The report is layout-only, not acceptance, qualification,
 object integrity, availability or evidence of hosted compatibility. Provider
-logs, checkout/runtime failures outside the entry point, hostile same-job
-behavior and forced termination are outside its output boundary. Do not treat
-a successful job as an acceptance or qualification claim.
+logs, checkout/runtime failures before SIGINT handler installation or outside
+the entry point, hostile same-job behavior and forced termination are outside
+its output boundary. A signal after the final status check can be too late to
+change the exit status; output failures can also prevent or truncate a report.
+Do not treat a successful job as an acceptance or qualification claim.
 
 Synthetic fixtures:
 

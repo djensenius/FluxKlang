@@ -1,9 +1,24 @@
 """Manual hosted entry point for the closed checkout layout report."""
 
 import os
+import signal
+
+
+_interrupted = False
+
+
+def _record_sigint(signum, frame):
+    # Do not raise asynchronously, including while handling another exception.
+    global _interrupted
+    _interrupted = True
 
 
 def main():
+    global _interrupted
+    _interrupted = False
+    # This process entry point runs on the main thread. Keep the handler
+    # installed through process exit, including exception reporting.
+    signal.signal(signal.SIGINT, _record_sigint)
     try:
         import json
         import checkout_layout
@@ -14,10 +29,15 @@ def main():
         status = json.loads(report)["status"]
         if status not in ("observed", "refused"):
             raise ValueError("unexpected report status")
-        output = (report + "\n").encode("utf-8")
+        status = 0 if status == "observed" else 1
+        if _interrupted:
+            output = b'{"diagnostic":"Interrupted","status":"failed"}\n'
+            status = 130
+        else:
+            output = (report + "\n").encode("utf-8")
         if os.write(1, output) != len(output):
             raise OSError("incomplete report write")
-        return 0 if status == "observed" else 1
+        return 130 if _interrupted else status
     except KeyboardInterrupt:
         diagnostic = b'{"diagnostic":"Interrupted","status":"failed"}\n'
         status = 130
@@ -29,7 +49,7 @@ def main():
         os.write(1, diagnostic)
     except BaseException:
         pass
-    return status
+    return 130 if _interrupted else status
 
 
 if __name__ == "__main__":

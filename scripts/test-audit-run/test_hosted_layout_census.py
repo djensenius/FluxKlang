@@ -3,6 +3,8 @@
 import json
 import os
 from pathlib import Path
+import signal
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -16,6 +18,8 @@ HEAD = "a" * 40
 
 class HostedLayoutCensusTests(unittest.TestCase):
     def setUp(self):
+        previous_handler = signal.getsignal(signal.SIGINT)
+        self.addCleanup(signal.signal, signal.SIGINT, previous_handler)
         temporary = tempfile.TemporaryDirectory(prefix="hosted-layout-private-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
@@ -75,6 +79,60 @@ class HostedLayoutCensusTests(unittest.TestCase):
         }, clear=True), mock.patch.object(os, "write",
                                         side_effect=OSError("private-output-error")):
             self.assertEqual(hosted_layout_census.main(), 1)
+
+    def test_sigint_during_unexpected_exception_handling_stays_closed(self):
+        delivered = False
+        escaped = False
+        result = None
+
+        def trace(frame, event, arg):
+            nonlocal delivered
+            if (not delivered and frame.f_code is hosted_layout_census.main.__code__
+                    and event == "line" and isinstance(sys.exc_info()[1], RuntimeError)):
+                delivered = True
+                os.kill(os.getpid(), signal.SIGINT)
+            return trace
+
+        with mock.patch.object(checkout_layout, "observe_checkout_layout_report",
+                               side_effect=RuntimeError("private-error")):
+            previous_trace = sys.gettrace()
+            try:
+                sys.settrace(trace)
+                try:
+                    result = self.run_entry()
+                except BaseException:
+                    escaped = True
+            finally:
+                sys.settrace(previous_trace)
+        self.assertTrue(delivered, "SIGINT was not sent during exception handling")
+        self.assertFalse(escaped, "SIGINT escaped the output boundary")
+        self.assertEqual(result, (130, {
+            "diagnostic": "Unexpected failure", "status": "failed",
+        }))
+
+    def test_sigint_during_observation_reports_interruption(self):
+        observe = checkout_layout.observe_checkout_layout_report
+
+        def interrupted_observation(root, sha):
+            os.kill(os.getpid(), signal.SIGINT)
+            return observe(root, sha)
+
+        with mock.patch.object(checkout_layout, "observe_checkout_layout_report",
+                               side_effect=interrupted_observation):
+            self.assertEqual(self.run_entry(), (130, {
+                "diagnostic": "Interrupted", "status": "failed",
+            }))
+
+    def test_sigint_during_report_write_still_fails(self):
+        def interrupted_write(fd, data):
+            os.kill(os.getpid(), signal.SIGINT)
+            return len(data)
+
+        with mock.patch.dict(os.environ, {
+            "GITHUB_WORKSPACE": str(self.root), "GITHUB_SHA": HEAD,
+        }, clear=True), mock.patch.object(os, "write", side_effect=interrupted_write) as write:
+            self.assertEqual(hosted_layout_census.main(), 130)
+        self.assertEqual(json.loads(write.call_args.args[1])["status"], "observed")
 
     def test_missing_environment_refuses(self):
         with mock.patch.dict(os.environ, {}, clear=True), \
