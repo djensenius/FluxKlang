@@ -1,0 +1,21 @@
+name: Hosted checkout layout census (no acceptance)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  layout:
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (peeled commit)
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Observe checkout layout only
+        run: python3 -B scripts/test-audit-run/hosted_layout_census.py
