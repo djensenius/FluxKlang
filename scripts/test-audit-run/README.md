@@ -699,6 +699,29 @@ acquisition and does not detect intervening or reverted changes. It provides no 
 observation-wide work/call budget, source routing, error translation or envelope
 integration; those remain the future caller's responsibility.
 
+`git_pack_acquire.acquire_validated_pair_v2(checkout_root, pack_id)` is a
+separate source-only opt-in with the same explicit-pair, fresh-acquisition and
+validated-lookup contract, but uses the fixed v2 parser and its inclusive
+16 MiB pack cap. The index cap remains 1 MiB and all other parser limits remain
+unchanged. Both initial sizes are checked before either read; each read requests
+at most its cap plus one detection byte, so a pair can deliver at most
+17,825,794 bytes including both detection bytes. Both held files are checked
+after both reads. There is no adjustable limit, discovery, selection, fallback,
+snapshot adapter or hosted dispatch. Existing acquisition and snapshot APIs
+remain v1 and retain the 8 MiB cap. The v2 result is parsed once per acquisition,
+not per lookup; a fresh acquisition is needed for each future snapshot.
+
+Logical memory accounting is not a hard RSS bound: each read can temporarily
+hold an `os.read` bytes chunk and a growing bytearray, then a bytes copy; the
+pack bytes remain live while reading the index and during validation. Parser
+buffers and possible malformed-stream copies are described in the v2 parser
+accounting above. Python allocation, object, interpreter and zlib overhead are
+unmeasured and not bounded as a hard process-memory claim; caller-held copies
+and concurrent calls are additional. Metadata checks and SHA-1 do not establish
+custody or provenance. Synthetic source coverage does not establish hosted
+acceptance; the eventual explicit caller identity and the hosted pack's
+unexpected entry remain unresolved.
+
 Ownership/cleanup patterns are shared with `git_loose_acquire`, with the same
 asynchronous interruption and failed-close limitations described above.
 Before/after descriptor metadata detects some changes, not all races or path
@@ -716,6 +739,8 @@ fixtures exercise this source-only API without invoking Git:
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_git_pack_acquire.py'
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_git_pack_acquire_v2.py'
 ```
 
 `git_snapshot_reader.Invocation(checkout_root, pack_id)` is an opt-in,
