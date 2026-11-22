@@ -711,6 +711,48 @@ class CompositionTests(unittest.TestCase):
             with self.subTest(candidate=str(candidate)[:20]), self.assertRaises(ios_runtime.Refusal):
                 observer.validate(candidate, str(self.root), self.pack_id, self.context_reader)
 
+    def test_duplicate_source_records_refuse_sequential_mutation(self):
+        actual_sources = observer._observe_sources
+        actual_files = provider_attribution._Objects.files
+        for path in provider_attribution.SOURCES:
+            for fault, snapshots in (("sha256", (1, 2)), ("sha256", (2,)),
+                                     ("blob", (1,))):
+                with self.subTest(path=path, fault=fault, snapshots=snapshots):
+                    target = self.root / path
+                    original = target.read_bytes()
+                    changed = original + b" changed"
+                    calls = []
+
+                    def observe_sources(root, tree, objects):
+                        calls.append(True)
+                        if len(calls) not in snapshots:
+                            return actual_sources(root, tree, objects)
+
+                        def files(instance, tree, paths):
+                            result = actual_files(instance, tree, paths)
+                            oid, data = result[path]
+                            # Simulate the object-reader boundary accepting a SHA-1
+                            # collision, without weakening the real object checks.
+                            result[path] = (oid if fault == "sha256" else "0" * 40,
+                                            changed if fault == "sha256" else data)
+                            return result
+
+                        try:
+                            if fault == "sha256":
+                                target.write_bytes(changed)
+                            with mock.patch.object(provider_attribution._Objects, "files", files):
+                                return actual_sources(root, tree, objects)
+                        finally:
+                            target.write_bytes(original)
+
+                    self.events.clear()
+                    with mock.patch.object(observer, "_observe_sources", observe_sources):
+                        with self.assertRaisesRegex(ios_runtime.Refusal,
+                                                    "duplicate source observations differ"):
+                            self.observe()
+                    self.assertEqual(len(calls), snapshots[0])
+                    self.assertEqual(self.events.count("provider-enter"), snapshots[0] - 1)
+
     def test_changed_observations_and_provider_mutation(self):
         for change in ("context", "head", "source", "workflow", "provider", "provider-valid"):
             with self.subTest(change=change):

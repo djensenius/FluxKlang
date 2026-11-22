@@ -193,6 +193,9 @@ def _snapshot(checkout_root, context_reader, reader):
     objects = provider_attribution._Objects(reader)
     attribution = provider_attribution._snapshot_objects(context, objects)
     sources = _observe_sources(checkout_root, attribution["checkout"]["tree"], objects)
+    ios_runtime.require(all(attribution["executing_sources"][path] == sources[path]
+                            for path in provider_attribution.SOURCES),
+                        "duplicate source observations differ")
     return attribution, sources
 
 
