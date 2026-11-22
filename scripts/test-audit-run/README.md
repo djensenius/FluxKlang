@@ -292,10 +292,11 @@ files are refused. Descriptor-relative no-follow traversal bounds the objects
 directory to 512 entries and its pack directory to 128 entries, with each name
 bounded before metadata inspection. It counts only loose fanout directories
 (without visiting their contents), pack/index name pairs, unpaired files, and
-metadata sizes/counts within the existing pack and index size caps. Alternates,
-multi-pack-index, mismatched pairs, and unexpected entries are reported only as
-fixed feature labels. Its compact deterministic JSON omits paths, entry names,
-object IDs, file contents and environment values; symlinks, special files,
+metadata sizes/counts within the existing pack and index size caps. Both
+`alternates` and `http-alternates`, multi-pack-index, mismatched pairs, and
+unexpected entries are reported only as fixed feature labels. Its compact
+deterministic JSON omits paths, entry names, object IDs, file contents and
+environment values; symlinks, special files,
 overflows, traversal errors, detected metadata changes and cleanup errors
 refuse.
 
@@ -311,7 +312,9 @@ Descriptor-held metadata and repeated directory entry snapshots detect only
 some concurrent changes. They cannot establish path custody or exclude
 transient changes, hostile same-job behavior, filesystem/provider semantics or
 all races; matching metadata is not provenance, isolation or qualification.
-Interrupts propagate, and cleanup errors refuse without retrying a close.
+Filesystem and cleanup errors become path-free refusals without exception
+chains; interrupts propagate without attached filesystem-error context, and
+cleanup errors refuse without retrying a close.
 Synthetic fixtures:
 
 ```sh

@@ -103,37 +103,39 @@ def _alternates_present(objects, stack, listed_info):
     if info is None:
         if listed_info is not None:
             raise Refusal("info directory changed during census")
-        return False
+        return ()
     before = os.fstat(info)
     if (not stat.S_ISDIR(before.st_mode) or listed_info is None
             or _entry_metadata(listed_info) != _entry_metadata(before)):
         raise Refusal("expected a real directory")
-    try:
-        entry = os.stat("alternates", dir_fd=info, follow_symlinks=False)
-    except OSError as error:
-        if error.errno == errno.ENOENT:
-            try:
-                os.stat("alternates", dir_fd=info, follow_symlinks=False)
-            except OSError as second_error:
-                if second_error.errno != errno.ENOENT:
-                    raise Refusal("alternates entry changed during census") from second_error
-            else:
-                raise Refusal("alternates entry changed during census")
-            after = os.fstat(info)
-            if _entry_metadata(before) != _entry_metadata(after):
-                raise Refusal("alternates metadata changed during census")
-            return False
-        raise
-    if stat.S_ISLNK(entry.st_mode):
-        raise Refusal("symbolic-link alternates entry refused")
-    if not stat.S_ISREG(entry.st_mode):
-        raise Refusal("nonregular alternates entry refused")
-    current = os.stat("alternates", dir_fd=info, follow_symlinks=False)
+    present = []
+    for name in ("alternates", "http-alternates"):
+        try:
+            entry = os.stat(name, dir_fd=info, follow_symlinks=False)
+        except OSError as error:
+            if error.errno == errno.ENOENT:
+                try:
+                    os.stat(name, dir_fd=info, follow_symlinks=False)
+                except OSError as second_error:
+                    if second_error.errno != errno.ENOENT:
+                        raise Refusal("alternates entry changed during census") from second_error
+                else:
+                    raise Refusal("alternates entry changed during census")
+                continue
+            raise
+        if stat.S_ISLNK(entry.st_mode):
+            raise Refusal("symbolic-link alternates entry refused")
+        if not stat.S_ISREG(entry.st_mode):
+            raise Refusal("nonregular alternates entry refused")
+        current = os.stat(name, dir_fd=info, follow_symlinks=False)
+        if _entry_metadata(entry) != _entry_metadata(current):
+            raise Refusal("alternates metadata changed during census")
+        present.append(name)
+
     after = os.fstat(info)
-    if (_entry_metadata(entry) != _entry_metadata(current)
-            or _entry_metadata(before) != _entry_metadata(after)):
+    if _entry_metadata(before) != _entry_metadata(after):
         raise Refusal("alternates metadata changed during census")
-    return True
+    return tuple(present)
 
 
 def _census(checkout_root, expected_oid):
@@ -171,9 +173,8 @@ def _census(checkout_root, expected_oid):
         listed_info = next(
             (info for name, info in object_entries if name == "info"), None,
         )
-        alternates_present = _alternates_present(objects, stack, listed_info)
-        if alternates_present:
-            features.add("alternates")
+        alternate_features = _alternates_present(objects, stack, listed_info)
+        features.update(alternate_features)
 
         pack_counts = {
             "pack_file_count": 0,
@@ -268,7 +269,7 @@ def _census(checkout_root, expected_oid):
                            for (name, info), (original_name, original_info)
                            in zip(final_pack, pack_entries))):
                 raise Refusal("pack directory changed during census")
-        if _alternates_present(objects, stack, listed_info) != alternates_present:
+        if _alternates_present(objects, stack, listed_info) != alternate_features:
             raise Refusal("alternates changed during census")
         checkout_head.observe_checkout_head(checkout_root, expected_oid)
         return {
@@ -292,19 +293,34 @@ def observe_checkout_layout(checkout_root, expected_oid):
     This is metadata-only shape observation. It neither validates Git objects
     nor selects a pack/index pair or establishes provider acceptance.
     """
-    checkout_head._checkout_path(checkout_root)
-    checkout_head._expected_oid(expected_oid)
-    if (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY")
-            or not hasattr(os, "O_NONBLOCK") or os.open not in os.supports_dir_fd
-            or os.stat not in os.supports_dir_fd or os.scandir not in os.supports_fd):
-        raise Refusal("descriptor-relative no-follow census unavailable")
+    failure_message = None
+    interruption = None
+    interruption_traceback = None
     try:
+        checkout_head._checkout_path(checkout_root)
+        checkout_head._expected_oid(expected_oid)
+        if (not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY")
+                or not hasattr(os, "O_NONBLOCK") or os.open not in os.supports_dir_fd
+                or os.stat not in os.supports_dir_fd or os.scandir not in os.supports_fd):
+            raise Refusal("descriptor-relative no-follow census unavailable")
         observation = _census(checkout_root, expected_oid)
         result = json.dumps(observation, sort_keys=True, separators=(",", ":"))
         if len(result.encode("utf-8")) > OUTPUT_BYTES:
             raise Refusal("census output size limit")
-        return result
-    except Refusal:
-        raise
-    except (OSError, TypeError, ValueError) as error:
-        raise Refusal("checkout layout census refused") from error
+    except Refusal as error:
+        failure_message = str(error)
+    except (OSError, TypeError, ValueError):
+        failure_message = "checkout layout census refused"
+    except (KeyboardInterrupt, SystemExit) as error:
+        interruption = error
+        interruption_traceback = error.__traceback__
+
+    if interruption is not None:
+        # Keep the original interruption and traceback, but not a filesystem
+        # exception attached by a failing cleanup operation.
+        interruption.__cause__ = None
+        interruption.__context__ = None
+        raise interruption.with_traceback(interruption_traceback)
+    if failure_message is not None:
+        raise Refusal(failure_message) from None
+    return result

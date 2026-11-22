@@ -7,6 +7,7 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
+import traceback
 import unittest
 from unittest import mock
 
@@ -87,6 +88,32 @@ class CheckoutLayoutTests(unittest.TestCase):
         self.assertEqual(result["unpaired_pack_index_file_count"], 1)
         self.assertIn("mismatched-pack-index-pair", result["unsupported_features"])
 
+    def test_exact_pack_and_index_caps_are_accepted(self):
+        self.add_pair(
+            pack_size=census.git_pack.PACK_LIMIT,
+            index_size=census.git_pack.INDEX_LIMIT,
+        )
+        result = self.observe()
+        self.assertEqual(result["candidate_classification"],
+                         "single-candidate-within-caps")
+        self.assertEqual(result["within_cap_pair_count"], 1)
+        self.assertEqual(result["pack_bytes_within_cap_total"],
+                         census.git_pack.PACK_LIMIT)
+        self.assertEqual(result["index_bytes_within_cap_total"],
+                         census.git_pack.INDEX_LIMIT)
+
+    def test_each_pack_and_index_cap_plus_one_is_classified_oversized(self):
+        self.add_pair(
+            pack_size=census.git_pack.PACK_LIMIT + 1,
+            index_size=census.git_pack.INDEX_LIMIT + 1,
+        )
+        result = self.observe()
+        self.assertEqual(result["candidate_classification"],
+                         "oversized-single-candidate")
+        self.assertEqual(result["oversized_pack_file_count"], 1)
+        self.assertEqual(result["oversized_index_file_count"], 1)
+        self.assertEqual(result["within_cap_pair_count"], 0)
+
     def test_missing_pairs_and_absent_pack_directory_are_explicit(self):
         (self.pack_directory / f"pack-{PACK_A}.pack").write_bytes(b"pack")
         result = self.observe()
@@ -108,13 +135,40 @@ class CheckoutLayoutTests(unittest.TestCase):
     def test_alternates_and_multi_pack_index_are_explicitly_unsupported(self):
         (self.objects / "info").mkdir()
         (self.objects / "info" / "alternates").write_text("/private/path\n")
+        (self.objects / "info" / "http-alternates").write_text(
+            "https://private.example/repository\n",
+        )
         (self.pack_directory / "multi-pack-index").write_bytes(b"opaque")
-        result = self.observe()
+        actual_open = os.open
+        head_descriptors = set()
+
+        def track_open(name, flags, mode=0o777, *, dir_fd=None):
+            if name in ("alternates", "http-alternates"):
+                raise AssertionError("alternate file opened")
+            descriptor = actual_open(name, flags, mode, dir_fd=dir_fd)
+            if name == "HEAD":
+                head_descriptors.add(descriptor)
+            return descriptor
+
+        actual_read = os.read
+
+        def head_only_read(descriptor, size):
+            if descriptor not in head_descriptors:
+                raise AssertionError("non-HEAD file read")
+            return actual_read(descriptor, size)
+
+        with mock.patch.object(census.os, "open", side_effect=track_open) as opener, \
+                mock.patch.object(census.os, "supports_dir_fd",
+                                  census.os.supports_dir_fd | {opener}), \
+                mock.patch.object(census.os, "read", side_effect=head_only_read):
+            result = self.observe()
         self.assertEqual(result["layout_status"], "unsupported-observed-layout")
         self.assertIn("alternates", result["unsupported_features"])
+        self.assertIn("http-alternates", result["unsupported_features"])
         self.assertIn("multi-pack-index", result["unsupported_features"])
         rendered = census.observe_checkout_layout(str(self.root), HEAD)
         self.assertNotIn("/private/path", rendered)
+        self.assertNotIn("private.example", rendered)
 
     def test_linked_worktree_symlinks_and_special_entries_refuse(self):
         moved_git = self.root / "real-git"
@@ -170,6 +224,26 @@ class CheckoutLayoutTests(unittest.TestCase):
             with self.assertRaisesRegex(census.Refusal, "pack directory entry limit"):
                 self.observe()
 
+    def test_exact_objects_and_pack_entry_limits_are_accepted(self):
+        for index in range(census.OBJECTS_ENTRY_LIMIT - 1):
+            (self.objects / f"x{index:03d}").mkdir()
+        objects_result = self.observe()
+        self.assertEqual(len(list(self.objects.iterdir())), census.OBJECTS_ENTRY_LIMIT)
+        self.assertTrue(objects_result["pack_directory_present"])
+
+        for path in self.objects.iterdir():
+            if path.name != "pack":
+                path.rmdir()
+        for index in range(census.PACK_ENTRY_LIMIT // 2):
+            oid = f"{index:040x}"
+            (self.pack_directory / f"pack-{oid}.pack").write_bytes(b"")
+            (self.pack_directory / f"pack-{oid}.idx").write_bytes(b"")
+        pack_result = self.observe()
+        self.assertEqual(len(list(self.pack_directory.iterdir())),
+                         census.PACK_ENTRY_LIMIT)
+        self.assertEqual(pack_result["pack_index_pair_count"],
+                         census.PACK_ENTRY_LIMIT // 2)
+
     def test_long_entry_names_refuse_before_metadata_work(self):
         (self.pack_directory / ("x" * (census.ENTRY_NAME_BYTES + 1))).write_bytes(b"")
         actual_stat = os.stat
@@ -215,12 +289,62 @@ class CheckoutLayoutTests(unittest.TestCase):
             self.observe()
 
     def test_interruptions_propagate(self):
-        with mock.patch.object(census.os, "scandir",
-                               side_effect=KeyboardInterrupt("stop")) as scandir_patch, \
+        actual_open = os.open
+        actual_close = os.close
+        opened = []
+        close_attempts = {}
+        secret = str(self.root / f"pack-{PACK_A}.pack")
+        interrupt_started = []
+        cleanup_target = []
+
+        def track_open(name, flags, mode=0o777, *, dir_fd=None):
+            descriptor = actual_open(name, flags, mode, dir_fd=dir_fd)
+            opened.append(descriptor)
+            return descriptor
+
+        def fail_cleanup_close(descriptor):
+            close_attempts[descriptor] = close_attempts.get(descriptor, 0) + 1
+            actual_close(descriptor)
+            if interrupt_started and descriptor == cleanup_target[0]:
+                raise OSError(errno.EIO, "cleanup failure", secret)
+
+        def interrupt_during_scan(descriptor):
+            interrupt_started.append(True)
+            cleanup_target.append(descriptor)
+            close_attempts.clear()
+            raise KeyboardInterrupt("stop")
+
+        with mock.patch.object(census.os, "open", side_effect=track_open) as opener, \
+                mock.patch.object(census.os, "supports_dir_fd",
+                                  census.os.supports_dir_fd | {opener}), \
+                mock.patch.object(census.os, "close", side_effect=fail_cleanup_close), \
+                mock.patch.object(census.os, "scandir",
+                                  side_effect=interrupt_during_scan) as scandir_patch, \
                 mock.patch.object(census.os, "supports_fd",
                                   census.os.supports_fd | {scandir_patch}):
-            with self.assertRaisesRegex(KeyboardInterrupt, "stop"):
+            with self.assertRaisesRegex(KeyboardInterrupt, "stop") as raised:
                 self.observe()
+        interruption = raised.exception
+        rendered = "".join(traceback.format_exception(interruption))
+        self.assertNotIn(secret, rendered)
+        self.assertNotIn(str(self.root), rendered)
+        self.assertIsNone(interruption.__cause__)
+        self.assertIsNone(interruption.__context__)
+        self.assertTrue(opened)
+        self.assertEqual(close_attempts[cleanup_target[0]], 1)
+        for descriptor in opened:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_system_exit_propagates_without_filesystem_context(self):
+        with mock.patch.object(census.os, "scandir",
+                               side_effect=SystemExit("stop")) as scandir_patch, \
+                mock.patch.object(census.os, "supports_fd",
+                                  census.os.supports_fd | {scandir_patch}):
+            with self.assertRaisesRegex(SystemExit, "stop") as raised:
+                self.observe()
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
 
     def test_close_failure_refuses_without_retry(self):
         self.add_pair()
@@ -228,6 +352,8 @@ class CheckoutLayoutTests(unittest.TestCase):
         actual_close = os.close
         opened = []
         close_attempts = {}
+        secret = str(self.root / f"private-pack-{PACK_A}.pack")
+        caught = []
 
         def track_open(name, flags, mode=0o777, *, dir_fd=None):
             descriptor = actual_open(name, flags, mode, dir_fd=dir_fd)
@@ -238,15 +364,55 @@ class CheckoutLayoutTests(unittest.TestCase):
             close_attempts[descriptor] = close_attempts.get(descriptor, 0) + 1
             actual_close(descriptor)
             if descriptor == opened[-1]:
-                raise OSError(errno.EIO, "injected close failure")
+                raise OSError(errno.EIO, "injected close failure", secret)
 
         with mock.patch.object(census.os, "open", side_effect=track_open) as opener, \
                 mock.patch.object(census.os, "supports_dir_fd",
                                   census.os.supports_dir_fd | {opener}), \
                 mock.patch.object(census.os, "close", side_effect=fail_once):
-            with self.assertRaises(census.Refusal):
+            with self.assertRaises(census.Refusal) as raised:
                 self.observe()
+            caught.append(raised.exception)
         self.assertEqual(close_attempts[opened[-1]], 1)
+        rendered = "".join(traceback.format_exception(caught[0]))
+        self.assertNotIn(secret, rendered)
+        self.assertNotIn(str(self.root), rendered)
+        self.assertNotIn(PACK_A, rendered)
+        self.assertIsNone(caught[0].__cause__)
+        self.assertIsNone(caught[0].__context__)
+
+    def test_filesystem_failure_traceback_omits_root_and_entry_names(self):
+        self.add_pair()
+        secret = str(self.root / f"pack-{PACK_A}.pack")
+        actual_stat = os.stat
+
+        def fail_pack_stat(name, *args, **kwargs):
+            if name == "pack":
+                raise OSError(errno.EIO, "injected stat failure", secret)
+            return actual_stat(name, *args, **kwargs)
+
+        with mock.patch.object(census.os, "stat",
+                               side_effect=fail_pack_stat) as stat_patch, \
+                mock.patch.object(census.os, "supports_dir_fd",
+                                  census.os.supports_dir_fd | {stat_patch}):
+            with self.assertRaises(census.Refusal) as raised:
+                self.observe()
+        rendered = "".join(traceback.format_exception(raised.exception))
+        self.assertNotIn(secret, rendered)
+        self.assertNotIn(str(self.root), rendered)
+        self.assertNotIn(PACK_A, rendered)
+        self.assertEqual(str(raised.exception), "checkout layout census refused")
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+
+    def test_output_cap_accepts_exact_bound_and_refuses_one_byte_less(self):
+        result = census.observe_checkout_layout(str(self.root), HEAD)
+        exact_bound = len(result.encode("utf-8"))
+        with mock.patch.object(census, "OUTPUT_BYTES", exact_bound):
+            self.assertEqual(census.observe_checkout_layout(str(self.root), HEAD), result)
+        with mock.patch.object(census, "OUTPUT_BYTES", exact_bound - 1):
+            with self.assertRaisesRegex(census.Refusal, "output size limit"):
+                self.observe()
 
 
 if __name__ == "__main__":
