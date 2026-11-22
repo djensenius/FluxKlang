@@ -231,14 +231,20 @@ creates its UUID-linked output and schema-3 intent siblings relative to the
 held parent directory. It caps serialization before publication, handles short
 and zero writes, holds the created descriptors, and invokes the real bounded
 validator. Both provider contexts must complete their exit rechecks and the
-complete fresh observations must agree before success. There is no legacy
+complete fresh observations must agree before success. Created paths are
+rechecked after the input walk's exit check and ancestor closes, while its input
+and parent and both created descriptors remain held. There is no legacy
 input/output path-read fallback. Serialized scalar strings are additionally
 limited to 131072 characters and integers to 4096 bits; the closed metadata and
 provider observation are expected to be far smaller.
 Both bounded preparation and validation use precedence-aware provider-file,
 selector, owned-child and stdout cleanup. They attempt all registered cleanup
 and apply the same exception precedence described above; the bounded child
-cleanup wait remains limited to 30 seconds. Legacy provider cleanup is unchanged.
+cleanup wait remains limited to 30 seconds. Child cleanup is protected directly
+after `Popen` returns, without callback registration. Interruption between a
+resource acquisition and entering its cleanup-protected region, interruption
+during cleanup, or a spawn failure before a child handle is returned can still
+prevent complete cleanup. Legacy provider cleanup is unchanged.
 
 On **any failure**, this opt-in producer never unlinks created files. Partial or
 complete output/intent siblings can remain, possibly containing sensitive
@@ -1237,8 +1243,10 @@ for both preparation and validation. Keep the corresponding original input
 path and reviewed pin; do not chain preparation through an existing output.
 The profile is required on both commands and unknown choices are refused.
 
-On caught preparation failures, newly created files are removed (intent first);
-preexisting paths are never removed. Use a stable caller-controlled directory.
+On caught **legacy** preparation failures, newly created files are removed
+(intent first); preexisting paths are never removed. Bounded provider
+preparation instead retains created files on failure, as described above.
+Use a stable caller-controlled directory.
 This is not a concurrent-writer, crash-atomic two-file transaction or a durability
 guarantee: abrupt termination or filesystem cleanup errors may leave artifacts.
 They must not be treated as prepared without separate successful validation.

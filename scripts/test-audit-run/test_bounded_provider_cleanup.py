@@ -155,6 +155,72 @@ class BoundedProviderCleanupTests(unittest.TestCase):
         self.assertEqual([name for name, _, _ in events][-4:], ["poll", "kill", "wait", "stdout"])
         self.assertEqual(events[-2][2], {"timeout": runtime.TIMEOUT})
 
+    def test_acquisition_and_selector_registration_failure_reap_owned_child(self):
+        for phase in ("clock", "selector-acquisition", "selector-registration"):
+            for kind in (KeyboardInterrupt, ValueError):
+                with self.subTest(phase=phase, kind=kind):
+                    active = kind(phase)
+                    events = []
+                    process = mock.Mock()
+                    process.poll.side_effect = lambda: events.append("poll")
+                    process.kill.side_effect = lambda: events.append("kill")
+                    process.wait.side_effect = lambda **kwargs: events.append(("wait", kwargs))
+                    process.stdout.close.side_effect = lambda: events.append("stdout")
+                    selector = mock.Mock()
+                    selector.register.side_effect = active if phase == "selector-registration" else None
+                    selector.close.side_effect = lambda: events.append("selector-close")
+                    factory = mock.Mock(return_value=selector)
+                    if phase == "selector-acquisition":
+                        factory.side_effect = active
+                    # The bounded command no longer registers child cleanup callbacks.
+                    clock = mock.Mock(side_effect=active) if phase == "clock" else runtime.time.monotonic
+                    with mock.patch.object(runtime.subprocess, "Popen", return_value=process), \
+                         mock.patch.object(runtime.selectors, "DefaultSelector", factory), \
+                         mock.patch.object(runtime.time, "monotonic", clock), \
+                         mock.patch.object(runtime, "_register_cleanup",
+                                           side_effect=AssertionError("unexpected registration")):
+                        with self.assertRaises(kind) as caught:
+                            runtime._bounded_command(["synthetic"])
+                    self.assertIs(caught.exception, active)
+                    expected = ["poll", "kill", ("wait", {"timeout": runtime.TIMEOUT}), "stdout"]
+                    if phase == "selector-registration":
+                        expected.insert(0, "selector-close")
+                    self.assertEqual(events, expected)
+
+    def test_popen_failure_has_no_owned_child_and_preserves_interrupt(self):
+        interrupt = KeyboardInterrupt("spawn interrupted")
+        for error in (interrupt, OSError("spawn unavailable")):
+            with self.subTest(error=type(error)):
+                with mock.patch.object(runtime.subprocess, "Popen", side_effect=error), \
+                     mock.patch.object(runtime.selectors, "DefaultSelector") as selector:
+                    expected = KeyboardInterrupt if error is interrupt else runtime.Refusal
+                    with self.assertRaises(expected) as caught:
+                        runtime._bounded_command(["synthetic"])
+                if error is interrupt:
+                    self.assertIs(caught.exception, interrupt)
+                else:
+                    self.assertIs(caught.exception.__cause__, error)
+                selector.assert_not_called()
+
+    def test_no_active_command_error_does_not_inherit_callers_exception(self):
+        process = mock.Mock()
+        process.poll.return_value = 0
+        process.wait.return_value = 0
+        process.stdout.close.side_effect = OSError("stdout close")
+        selector = mock.Mock()
+        selector.select.return_value = [True]
+        with mock.patch.object(runtime.subprocess, "Popen", return_value=process), \
+             mock.patch.object(runtime.selectors, "DefaultSelector", return_value=selector), \
+             mock.patch.object(runtime.os, "read", return_value=b""):
+            try:
+                raise KeyboardInterrupt("unrelated caller exception")
+            except KeyboardInterrupt:
+                with self.assertRaises(runtime.Refusal) as caught:
+                    runtime._bounded_command(["synthetic"])
+        self.assertIsInstance(caught.exception.__cause__, OSError)
+        selector.close.assert_called_once()
+        process.stdout.close.assert_called_once()
+
     def test_command_detection_byte_and_timeout_remain_bounded(self):
         process = mock.Mock()
         process.poll.return_value = None

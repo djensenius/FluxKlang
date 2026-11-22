@@ -701,18 +701,18 @@ def _bounded_prepare(input_path, expected_sha256, profile):
 
     # Never unlink on failure: a name can be replaced between checking and
     # unlinking. Callers must clean retained debris under their own authority.
+    created = []
+
+    def recheck():
+        for name, fd, identity in created:
+            if (acquisition._identity(os.fstat(fd), False) != identity or
+                    acquisition._identity(
+                        os.stat(name, dir_fd=parent, follow_symlinks=False), False,
+                    ) != identity):
+                raise Refusal("created material path changed")
+
     with ExitStack() as descriptors:
-        with acquisition.acquire_input(input_path) as (material, parent):
-            created = []
-
-            def recheck():
-                for name, fd, identity in created:
-                    if (acquisition._identity(os.fstat(fd), False) != identity or
-                            acquisition._identity(
-                                os.stat(name, dir_fd=parent, follow_symlinks=False), False,
-                            ) != identity):
-                        raise Refusal("created material path changed")
-
+        with acquisition.acquire_input(input_path, retained_descriptors=descriptors) as (material, parent):
             with _checked_input(input_path, expected_sha256, profile, material, bounded_cleanup=True) as (
                 source, original, provider_observation,
             ):
@@ -757,6 +757,9 @@ def _bounded_prepare(input_path, expected_sha256, profile):
                 recheck()
             # The outer provider's exit recheck must finish before success.
             recheck()
+        # Recheck after the input walk's exit check and ancestor closes, while
+        # the input, parent and created descriptors remain held.
+        recheck()
     return record
 
 

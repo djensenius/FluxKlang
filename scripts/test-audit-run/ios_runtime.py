@@ -134,37 +134,50 @@ def _register_cleanup(stack, action):
     stack.push(cleanup)
 
 
+def _cleanup_error(active, error):
+    if active is None or (isinstance(active, Exception) and not isinstance(error, Exception)):
+        return error
+    return active
+
+
+def _cleanup_attempt(active, action):
+    """Return the higher-priority active or cleanup exception, if any."""
+    try:
+        action()
+    except BaseException as error:
+        return _cleanup_error(active, error)
+    return active
+
+
+def _cleanup_child(process, active):
+    running = True
+    try:
+        running = process.poll() is None
+    except BaseException as error:
+        active = _cleanup_error(active, error)
+    if running:
+        active = _cleanup_attempt(active, lambda: process.kill())
+        active = _cleanup_attempt(active, lambda: process.wait(timeout=TIMEOUT))
+    return active
+
+
 def _bounded_command(argv, developer=None):
     """Same fixed command limits, with opt-in precedence-aware cleanup."""
     env = dict(ENV)
     if developer is not None:
         env["DEVELOPER_DIR"] = developer
     try:
+        active = None
         process = subprocess.Popen(
             argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, env=env, cwd="/", bufsize=0,
         )
-        with ExitStack() as cleanup:
-            _register_cleanup(cleanup, process.stdout.close)
-
-            def cleanup_child():
-                with ExitStack() as child:
-                    try:
-                        running = process.poll() is None
-                    except BaseException:
-                        _register_cleanup(child, lambda: process.wait(timeout=TIMEOUT))
-                        _register_cleanup(child, process.kill)
-                        raise
-                    if running:
-                        _register_cleanup(child, lambda: process.wait(timeout=TIMEOUT))
-                        _register_cleanup(child, process.kill)
-
-            _register_cleanup(cleanup, cleanup_child)
+        try:
             data = bytearray()
             deadline = time.monotonic() + TIMEOUT
-            with ExitStack() as selectors_cleanup:
-                selector = selectors.DefaultSelector()
-                _register_cleanup(selectors_cleanup, selector.close)
+            selector_active = None
+            selector = selectors.DefaultSelector()
+            try:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 while True:
                     remaining = deadline - time.monotonic()
@@ -175,10 +188,25 @@ def _bounded_command(argv, developer=None):
                         break
                     data.extend(chunk)
                     require(len(data) <= OUTPUT_LIMIT, "runtime verification output limit")
+            except BaseException as error:
+                selector_active = error
+                raise
+            finally:
+                cleanup_error = _cleanup_attempt(selector_active, lambda: selector.close())
+                if cleanup_error is not selector_active:
+                    raise cleanup_error
             remaining = deadline - time.monotonic()
             require(remaining > 0, "runtime verification command timed out")
             require(process.wait(timeout=remaining) == 0, "runtime verification command failed")
             return data.decode("utf-8", errors="strict").strip()
+        except BaseException as error:
+            active = error
+            raise
+        finally:
+            cleanup_error = _cleanup_child(process, active)
+            cleanup_error = _cleanup_attempt(cleanup_error, lambda: process.stdout.close())
+            if cleanup_error is not active:
+                raise cleanup_error
     except (OSError, UnicodeError, subprocess.SubprocessError) as error:
         raise Refusal("runtime verification command unavailable") from error
 

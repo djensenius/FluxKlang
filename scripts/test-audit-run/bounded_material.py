@@ -68,28 +68,29 @@ def acquire(selected):
 
 
 @contextmanager
-def acquire_input(selected):
+def acquire_input(selected, *, retained_descriptors=None):
     """Hold one input and its parent directory across bounded production."""
-    with _acquire((selected,)) as (materials, parents):
+    with _acquire((selected,), retained_descriptors=retained_descriptors) as (materials, parents):
         yield materials[0], parents[0]
 
 
 @contextmanager
-def _acquire(selected):
+def _acquire(selected, *, retained_descriptors=None):
     paths = [_path(path) for path in selected]
     with ExitStack() as stack:
         links = []
         files = []
         parents = []
         for path in paths:
+            parts = path.split("/")[1:]
             root = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            _register_close(stack, root)
+            root_stack = retained_descriptors if retained_descriptors is not None and len(parts) == 1 else stack
+            _register_close(root_stack, root)
             root_identity = _identity(os.fstat(root), True)
             _require(root_identity == _identity(os.stat("/", follow_symlinks=False), True),
                      "material root changed")
             links.append((None, "/", root, root_identity, True))
             current = root
-            parts = path.split("/")[1:]
             for index, part in enumerate(parts):
                 directory = index < len(parts) - 1
                 before = os.stat(part, dir_fd=current, follow_symlinks=False)
@@ -99,7 +100,8 @@ def _acquire(selected):
                 if directory:
                     flags |= os.O_DIRECTORY
                 child = os.open(part, flags, dir_fd=current)
-                _register_close(stack, child)
+                retain = retained_descriptors is not None and index >= len(parts) - 2
+                _register_close(retained_descriptors if retain else stack, child)
                 identity = _identity(before, directory)
                 _require(_identity(os.fstat(child), directory) == identity,
                          "material path changed during open")

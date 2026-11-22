@@ -414,6 +414,77 @@ class BoundedPrepareTests(unittest.TestCase):
                     self.output.unlink()
                     self.intent.unlink()
 
+    def test_created_replacement_during_input_exit_recheck_is_refused(self):
+        for selected in (self.output, self.intent):
+            with self.subTest(selected=selected):
+                self.events.clear()
+                replacement = self.directory / "replacement"
+                replacement.write_bytes(b"replacement")
+                stat_file = os.stat
+                replaced = False
+
+                def replacing(path, *args, **kwargs):
+                    nonlocal replaced
+                    result = stat_file(path, *args, **kwargs)
+                    if (path == self.source.name and kwargs.get("dir_fd") is not None
+                            and len(self.events) == 4 and not replaced):
+                        os.replace(replacement, selected)
+                        replaced = True
+                    return result
+
+                with mock.patch.object(os, "stat", side_effect=replacing), \
+                     mock.patch("sys.stdout", new_callable=io.StringIO) as stdout, \
+                     mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    result = prepare.main([
+                        "prepare", "--bounded-material", "--input", str(self.source),
+                        "--expected-sha256", self.pin, "--profile", prepare.IOS_PROVIDER_RUNTIME_PROFILE,
+                    ])
+                self.assertTrue(replaced)
+                self.assertEqual(result, 1)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertIn("created material path changed", stderr.getvalue())
+                self.assertEqual(selected.read_bytes(), b"replacement")
+                self.assertTrue(self.output.exists())
+                self.assertTrue(self.intent.exists())
+                self.output.unlink()
+                self.intent.unlink()
+
+    def test_created_replacement_during_input_ancestor_close_is_refused(self):
+        replacement = self.directory / "replacement"
+        replacement.write_bytes(b"replacement")
+        open_fd, close_fd = os.open, os.close
+        root = None
+        replaced = False
+
+        def opening(path, flags, *args, **kwargs):
+            nonlocal root
+            fd = open_fd(path, flags, *args, **kwargs)
+            if path == "/" and root is None:
+                root = fd
+            return fd
+
+        def closing(fd):
+            nonlocal replaced
+            close_fd(fd)
+            if fd == root and len(self.events) == 4 and not replaced:
+                os.replace(replacement, self.output)
+                replaced = True
+
+        with mock.patch.object(os, "open", side_effect=opening), \
+             mock.patch.object(os, "close", side_effect=closing), \
+             mock.patch("sys.stdout", new_callable=io.StringIO) as stdout, \
+             mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            result = prepare.main([
+                "prepare", "--bounded-material", "--input", str(self.source),
+                "--expected-sha256", self.pin, "--profile", prepare.IOS_PROVIDER_RUNTIME_PROFILE,
+            ])
+        self.assertTrue(replaced)
+        self.assertEqual(result, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("created material path changed", stderr.getvalue())
+        self.assertEqual(self.output.read_bytes(), b"replacement")
+        self.assertTrue(self.intent.exists())
+
     def test_maximum_nested_material_descriptors(self):
         prefix = len(str(self.directory).split("/")) - 1
         directory = self.directory
