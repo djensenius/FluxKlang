@@ -587,8 +587,9 @@ the 8 MiB cap. Unsupported, even otherwise valid, larger packs refuse.
 source-only prototype with the same full-pack validation and return/refusal
 contract, but a fixed inclusive 16 MiB pack cap. It takes explicit plain bytes;
 there is no caller-selected limit, cache, acquisition, discovery, pair routing,
-or integration with `BoundedReader`, snapshot readers, or the incomplete fixed
-source observer. All other limits above remain unchanged, including the 1 MiB
+or integration with `BoundedReader` or the incomplete fixed source observer.
+The separate v2 snapshot adapter uses the v2 acquisition API, not this direct
+API. All other limits above remain unchanged, including the 1 MiB
 index and both 8 MiB aggregate budgets. OFS distances are bounded by the
 profile's pack cap before each decoding shift and must point to an earlier
 indexed entry; v1 retains its original 8 MiB bound. Large-offset index entries
@@ -706,8 +707,8 @@ validated-lookup contract, but uses the fixed v2 parser and its inclusive
 unchanged. Both initial sizes are checked before either read; each read requests
 at most its cap plus one detection byte, so a pair can deliver at most
 17,825,794 bytes including both detection bytes. Both held files are checked
-after both reads. There is no adjustable limit, discovery, selection, fallback,
-snapshot adapter or hosted dispatch. Existing acquisition and snapshot APIs
+after both reads. There is no adjustable limit, discovery, selection, fallback
+or hosted dispatch. Existing acquisition and snapshot APIs
 remain v1 and retain the 8 MiB cap. The v2 result is parsed once per acquisition,
 not per lookup; a fresh acquisition is needed for each future snapshot.
 
@@ -780,9 +781,31 @@ snapshot acquires again only if needed. Loose and pack acquisition retain the
 race, cleanup and SHA-1 limitations described above. This is not authenticated
 provenance, custody, broad checkout compatibility or launch authority.
 
+`git_snapshot_reader.InvocationV2(checkout_root, pack_id)` is a separate
+source-only opt-in with the same lifecycle, refusal and loose-first behavior,
+but uses `acquire_validated_pair_v2` for the one explicit caller-named pair.
+Existing integrations remain on `Invocation` and its 8 MiB cap; v2 is not
+selected automatically. Its fixed reservation across at most two snapshots
+and 64 object calls is 17,301,568 loose bytes and 35,651,588 pack/index bytes,
+52,953,156 bytes combined. Each loose attempt reserves 270,337 bytes and each
+of at most two pair attempts reserves 17,825,794 bytes before attempting I/O,
+including one detection byte per file even on failure. These are conservative
+I/O reservations, not RSS or elapsed-time limits.
+
+The v2 acquisition and parser memory caveats above also apply: acquisition
+can hold chunks, bytearrays and copies alongside the pack, index, retained
+validated results and parser buffers; interpreter overhead, caller-held data
+and concurrent invocations are additional. Cached results persist within a
+snapshot; previously returned objects can be retained by callers. Fresh reads
+and metadata checks do not prove custody or provenance or detect all races or
+reverted changes. Synthetic source tests are not hosted acceptance or
+qualification and confer no launch authority.
+
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_git_snapshot_reader.py'
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_git_snapshot_reader_v2.py'
 ```
 
 `git_delta.apply_delta(base, program)` is a separate pure byte-to-byte primitive,
