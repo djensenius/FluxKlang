@@ -89,6 +89,8 @@ class BoundedPrepareTests(unittest.TestCase):
         self.assertEqual(self.events, ["snapshot"] * 4)
         self.assertEqual(record["provider_observation"], OBSERVATION)
         self.assertEqual(json.loads(self.intent.read_text()), record)
+        self.assertEqual(read_total, 2 * self.source.stat().st_size +
+                         self.output.stat().st_size + self.intent.stat().st_size)
         self.assertLessEqual(read_total, 4 * (bounded.MATERIAL_BYTES + 1))
         self.assertLessEqual(write_total, 2 * bounded.MATERIAL_BYTES)
 
@@ -485,6 +487,178 @@ class BoundedPrepareTests(unittest.TestCase):
         self.assertEqual(self.output.read_bytes(), b"replacement")
         self.assertTrue(self.intent.exists())
 
+    def test_input_and_ancestor_replacement_during_ancestor_close_are_refused(self):
+        source_data = self.source.read_bytes()
+        parent = self.directory / "parent"
+        nested = parent / "inside"
+        nested.mkdir(parents=True)
+        self.source = nested / "fixture.xctestrun"
+        self.source.write_bytes(source_data)
+        self.output, self.intent = prepare.output_paths(self.source, RUN_ID)
+
+        for scenario in ("input", "ancestor"):
+            with self.subTest(scenario=scenario):
+                self.events.clear()
+                replacement = self.directory / "replacement"
+                if scenario == "input":
+                    replacement.write_bytes(source_data)
+                else:
+                    replacement_nested = replacement / "inside"
+                    replacement_nested.mkdir(parents=True)
+                    (replacement_nested / self.source.name).write_bytes(source_data)
+                    (replacement_nested / self.output.name).write_bytes(b"replacement output")
+                    (replacement_nested / self.intent.name).write_bytes(b"replacement intent")
+                open_fd, close_fd, dup_fd = os.open, os.close, os.dup
+                root = None
+                root_identity = None
+                root_anchor = None
+                changed = False
+
+                def opening(path, flags, *args, **kwargs):
+                    nonlocal root, root_identity
+                    fd = open_fd(path, flags, *args, **kwargs)
+                    if path == "/" and root is None:
+                        root = fd
+                        root_identity = bounded._identity(os.fstat(fd), True)
+                    return fd
+
+                def duplicating(fd):
+                    nonlocal root_anchor
+                    duplicate = dup_fd(fd)
+                    if fd == root:
+                        root_anchor = duplicate
+                    return duplicate
+
+                def closing(fd):
+                    nonlocal changed
+                    close_fd(fd)
+                    if fd == root and len(self.events) == 4 and not changed:
+                        self.assertIsNotNone(root_anchor)
+                        self.assertEqual(bounded._identity(os.fstat(root_anchor), True), root_identity)
+                        if scenario == "input":
+                            os.replace(replacement, self.source)
+                        else:
+                            os.rename(parent, self.directory / "parked")
+                            os.rename(replacement, parent)
+                        changed = True
+
+                with mock.patch.object(os, "open", side_effect=opening), \
+                     mock.patch.object(os, "close", side_effect=closing), \
+                     mock.patch.object(os, "dup", side_effect=duplicating), \
+                     mock.patch("sys.stdout", new_callable=io.StringIO) as stdout, \
+                     mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    result = prepare.main([
+                        "prepare", "--bounded-material", "--input", str(self.source),
+                        "--expected-sha256", self.pin, "--profile", prepare.IOS_PROVIDER_RUNTIME_PROFILE,
+                    ])
+                self.assertTrue(changed)
+                self.assertEqual(result, 1)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertIn("material path changed", stderr.getvalue())
+                self.assertEqual(self.source.read_bytes(), source_data)
+                self.assertTrue(self.output.exists())
+                self.assertTrue(self.intent.exists())
+                if scenario == "ancestor":
+                    self.assertEqual(self.output.read_bytes(), b"replacement output")
+                    self.assertEqual(self.intent.read_bytes(), b"replacement intent")
+                    parked = self.directory / "parked" / "inside"
+                    self.assertTrue((parked / self.output.name).exists())
+                    self.assertTrue((parked / self.intent.name).exists())
+                else:
+                    self.output.unlink()
+                    self.intent.unlink()
+
+    def test_rewalk_failure_preserves_exception_precedence_and_attempts_all_closes(self):
+        for active_control in (False, True):
+            with self.subTest(active_control=active_control):
+                self.events.clear()
+                active = KeyboardInterrupt("rewalk") if active_control else ValueError("rewalk")
+                cleanup = OSError("close") if active_control else SystemExit("close")
+                expected = active if active_control else cleanup
+                opened, closed = [], []
+                final_walk = False
+                open_fd, close_fd, dup_fd = os.open, os.close, os.dup
+
+                def opening(path, flags, *args, **kwargs):
+                    nonlocal final_walk
+                    if path == "/" and len(self.events) == 4:
+                        final_walk = True
+                    elif final_walk:
+                        raise active
+                    fd = open_fd(path, flags, *args, **kwargs)
+                    opened.append(fd)
+                    return fd
+
+                def closing(fd):
+                    closed.append(fd)
+                    close_fd(fd)
+                    if final_walk and len(closed) <= len(opened):
+                        raise cleanup
+
+                def duplicating(fd):
+                    duplicate = dup_fd(fd)
+                    opened.append(duplicate)
+                    return duplicate
+
+                with mock.patch.object(os, "open", side_effect=opening), \
+                     mock.patch.object(os, "close", side_effect=closing), \
+                     mock.patch.object(os, "dup", side_effect=duplicating):
+                    with self.assertRaises(type(expected)) as caught:
+                        self.produce()
+                self.assertIs(caught.exception, expected)
+                self.assertTrue(final_walk)
+                self.assertEqual(sorted(opened), sorted(closed))
+                self.assertTrue(self.output.exists())
+                self.assertTrue(self.intent.exists())
+                self.output.unlink()
+                self.intent.unlink()
+
+    def test_anchor_duplication_failure_attempts_closes_and_preserves_precedence(self):
+        for active_control in (False, True):
+            with self.subTest(active_control=active_control):
+                self.events.clear()
+                active = KeyboardInterrupt("dup") if active_control else ValueError("dup")
+                cleanup = OSError("close") if active_control else SystemExit("close")
+                expected = active if active_control else cleanup
+                acquired, closed = [], []
+                duplications = 0
+                failed = False
+                open_fd, close_fd, dup_fd = os.open, os.close, os.dup
+
+                def opening(*args, **kwargs):
+                    fd = open_fd(*args, **kwargs)
+                    acquired.append(fd)
+                    return fd
+
+                def duplicating(fd):
+                    nonlocal duplications, failed
+                    duplications += 1
+                    if duplications == 2:
+                        failed = True
+                        raise active
+                    duplicate = dup_fd(fd)
+                    acquired.append(duplicate)
+                    return duplicate
+
+                def closing(fd):
+                    closed.append(fd)
+                    close_fd(fd)
+                    if failed:
+                        raise cleanup
+
+                with mock.patch.object(os, "open", side_effect=opening), \
+                     mock.patch.object(os, "dup", side_effect=duplicating), \
+                     mock.patch.object(os, "close", side_effect=closing):
+                    with self.assertRaises(type(expected)) as caught:
+                        self.produce()
+                self.assertIs(caught.exception, expected)
+                self.assertEqual(duplications, 2)
+                self.assertEqual(sorted(acquired), sorted(closed))
+                self.assertTrue(self.output.exists())
+                self.assertTrue(self.intent.exists())
+                self.output.unlink()
+                self.intent.unlink()
+
     def test_maximum_nested_material_descriptors(self):
         prefix = len(str(self.directory).split("/")) - 1
         directory = self.directory
@@ -494,13 +668,16 @@ class BoundedPrepareTests(unittest.TestCase):
         self.source = directory / "fixture.xctestrun"
         self.source.write_bytes((self.directory / "fixture.xctestrun").read_bytes())
         self.output, self.intent = prepare.output_paths(self.source, RUN_ID)
-        open_fd, close_fd = os.open, os.close
+        open_fd, close_fd, dup_fd = os.open, os.close, os.dup
         held = set()
         highwater = 0
+        open_count = 0
+        dup_count = 0
 
         def opening(*args, **kwargs):
-            nonlocal highwater
+            nonlocal highwater, open_count
             fd = open_fd(*args, **kwargs)
+            open_count += 1
             held.add(fd)
             highwater = max(highwater, len(held))
             return fd
@@ -509,10 +686,21 @@ class BoundedPrepareTests(unittest.TestCase):
             close_fd(fd)
             held.remove(fd)
 
+        def duplicating(fd):
+            nonlocal highwater, dup_count
+            duplicate = dup_fd(fd)
+            held.add(duplicate)
+            dup_count += 1
+            highwater = max(highwater, len(held))
+            return duplicate
+
         with mock.patch.object(os, "open", side_effect=opening), \
-             mock.patch.object(os, "close", side_effect=closing):
+             mock.patch.object(os, "close", side_effect=closing), \
+             mock.patch.object(os, "dup", side_effect=duplicating):
             self.produce()
         self.assertEqual(highwater, 4 * (bounded.PATH_COMPONENTS + 1) + 2)
+        self.assertEqual(open_count, 5 * (bounded.PATH_COMPONENTS + 1) + 1)
+        self.assertEqual(dup_count, bounded.PATH_COMPONENTS)
         self.assertEqual(held, set())
 
     def test_close_failures_attempt_all_and_preserve_control_precedence(self):

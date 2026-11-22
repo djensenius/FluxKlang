@@ -231,10 +231,13 @@ creates its UUID-linked output and schema-3 intent siblings relative to the
 held parent directory. It caps serialization before publication, handles short
 and zero writes, holds the created descriptors, and invokes the real bounded
 validator. Both provider contexts must complete their exit rechecks and the
-complete fresh observations must agree before success. Created paths are
-rechecked after the input walk's exit check and ancestor closes, while its input
-and parent and both created descriptors remain held. There is no legacy
-input/output path-read fallback. Serialized scalar strings are additionally
+complete fresh observations must agree before success. After the input walk's
+exit check and ancestor closes, a fresh no-follow walk compares the whole path
+chain and held input identity to the original, then rechecks both created paths
+relative to the reopened parent. Duplicated original directory descriptors keep
+their identities alive across ancestor closes and the fresh walk; the input,
+original parent, created files and reopened directories also remain held.
+There is no legacy input/output path-read fallback. Serialized scalar strings are additionally
 limited to 131072 characters and integers to 4096 bits; the closed metadata and
 provider observation are expected to be far smaller.
 Both bounded preparation and validation use precedence-aware provider-file,
@@ -258,11 +261,16 @@ These checks do not establish custody or race freedom.
 
 For one successful bounded preparation, at most 262 material descriptors are
 simultaneously held: 65 for the outer input, two created files and 195 for the
-nested validator. Interpreter and provider descriptors are additional. The
-input is acquired twice and each sibling once, for at most 8,388,612 material
-read bytes including detection bytes. Each of four provider snapshots separately
-reads the checker twice and its plist once, at most 11,099,660 bytes in total
-including detection bytes. They run at most 24 fixed commands, each with a
+nested validator. Up to 64 duplicated directory anchors are retained before
+ancestor closes; the final rewalk opens up to 64 additional directory
+descriptors and holds at most 132 material descriptors at that later stage.
+At most 326 material opens and 64 descriptor duplications occur over a
+successful invocation. The rewalk does not reread material bytes. Interpreter
+and provider descriptors are additional. The input is acquired twice and each
+sibling once, for at most 8,388,612 material read bytes including detection bytes.
+Each of four provider snapshots separately reads the checker twice and its
+plist once, at most 11,099,660 bytes in total including detection bytes. They
+run at most 24 fixed commands, each with a
 2 MiB plus one detection-byte output limit. These counts do not bound XML/JSON
 parser or serializer heap use or time, interpreter overhead, child-process
 resources, or filesystem operations.

@@ -703,16 +703,20 @@ def _bounded_prepare(input_path, expected_sha256, profile):
     # unlinking. Callers must clean retained debris under their own authority.
     created = []
 
-    def recheck():
+    def recheck(directory=None):
+        if directory is None:
+            directory = parent
         for name, fd, identity in created:
             if (acquisition._identity(os.fstat(fd), False) != identity or
                     acquisition._identity(
-                        os.stat(name, dir_fd=parent, follow_symlinks=False), False,
+                        os.stat(name, dir_fd=directory, follow_symlinks=False), False,
                     ) != identity):
                 raise Refusal("created material path changed")
 
     with ExitStack() as descriptors:
-        with acquisition.acquire_input(input_path, retained_descriptors=descriptors) as (material, parent):
+        with acquisition.acquire_input(input_path, retained_descriptors=descriptors) as (
+            material, parent, retain_anchors,
+        ):
             with _checked_input(input_path, expected_sha256, profile, material, bounded_cleanup=True) as (
                 source, original, provider_observation,
             ):
@@ -757,9 +761,16 @@ def _bounded_prepare(input_path, expected_sha256, profile):
                 recheck()
             # The outer provider's exit recheck must finish before success.
             recheck()
-        # Recheck after the input walk's exit check and ancestor closes, while
-        # the input, parent and created descriptors remain held.
-        recheck()
+            reopen_input = retain_anchors()
+        # Rewalk after ancestor closes: the held parent alone could be detached.
+        fresh_parent, recheck_chain = reopen_input()
+        if acquisition._identity(os.fstat(parent), True) != acquisition._identity(
+            os.fstat(fresh_parent), True,
+        ):
+            raise Refusal("material parent changed")
+        recheck(fresh_parent)
+        recheck_chain()
+        recheck(fresh_parent)
     return record
 
 
