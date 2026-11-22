@@ -459,7 +459,9 @@ one on either side of `ios_runtime.provider_verified_checker` and its cleanup.
 Each snapshot validates a freshly supplied context, observes canonical detached
 HEAD matching its checkout SHA before accessing objects, then uses a single
 `_Objects` for the unchanged attribution checks and all ten fixed sources.
-The source helper's exact module path and dependency-graph checks apply.
+The two attribution source records must also match their duplicate fixed-source
+records in each snapshot. The source helper's exact module path and
+dependency-graph checks apply.
 The second snapshot and the provider output must match the first; failures,
 including cleanup failures, return no partial result. Interruptions propagate.
 Pack pairs are reacquired per snapshot, not cached across snapshots.
@@ -475,6 +477,23 @@ the two original single-file source walks, optionally five for workflow, and
 13 for the grouped sources. Thus a present workflow uses 54 of 64 calls across
 both snapshots; aggregate bytes can still refuse even when every object fits.
 No new caching is introduced into attribution's single-file walks.
+
+`observe_v2(checkout_root, pack_id, context_reader)` and `validate_v2(data,
+checkout_root, pack_id, context_reader)` are separately versioned opt-ins with
+the same fixed checks, provider verifier, envelope encoding and attribution
+record. Their outer schema is `ios-source-snapshot-composition-observation-v2`;
+validation of either version refuses the other's bytes. One shared
+`InvocationV2` supplies both fresh snapshots and considers only the explicit
+caller-named pair, with a 16 MiB pack cap. There is no pack selection or
+discovery. The ten-source set is unchanged: in particular `github_context.py`
+and any future runner are not covered.
+
+The same per-snapshot object and source bounds apply. Across both snapshots
+v2 reserves at most 17,301,568 loose bytes and 35,651,588 pair bytes
+(52,953,156 combined), including detection bytes, with at most 64 object
+calls and two pair acquisitions. These are logical I/O reservations, not
+peak RSS or elapsed-time limits; the v2 parser/acquisition memory and race
+caveats below apply. No hosted acceptance is claimed.
 
 This is a same-job **unauthenticated observation**, not custody, provenance,
 authority, or qualification. Caller code and context acquisition, Python and
@@ -773,9 +792,9 @@ cannot repeat expensive work. The existing per-object and parser limits above
 remain unchanged. These are conservative work and byte bounds, not a wall-clock
 deadline.
 
-The adapter is not integrated into `observe` or `validate`; their existing APIs
-and freshness behavior are unchanged. A future integration must explicitly
-mark each snapshot and share one invocation across them. Pair contents may
+The adapter is not integrated into `provider_attribution.observe` or `validate`;
+their existing APIs and freshness behavior are unchanged. Composition explicitly
+marks each snapshot and shares one invocation across them. Pair contents may
 change between reads within a snapshot without being re-acquired; a later
 snapshot acquires again only if needed. Loose and pack acquisition retain the
 race, cleanup and SHA-1 limitations described above. This is not authenticated
@@ -784,7 +803,7 @@ provenance, custody, broad checkout compatibility or launch authority.
 `git_snapshot_reader.InvocationV2(checkout_root, pack_id)` is a separate
 source-only opt-in with the same lifecycle, refusal and loose-first behavior,
 but uses `acquire_validated_pair_v2` for the one explicit caller-named pair.
-Existing integrations remain on `Invocation` and its 8 MiB cap; v2 is not
+The original composition remains on `Invocation` and its 8 MiB cap; v2 is not
 selected automatically. Its fixed reservation across at most two snapshots
 and 64 object calls is 17,301,568 loose bytes and 35,651,588 pack/index bytes,
 52,953,156 bytes combined. Each loose attempt reserves 270,337 bytes and each
