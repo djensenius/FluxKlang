@@ -531,6 +531,78 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_source_snapshot_integration_v3.py'
 ```
 
+#### Integrated no-launch runner (source-only)
+
+`observation_runner.py` connects private bounded discovery and fresh input
+acquisition to the separately versioned
+`ios-source-snapshot-composition-observation-v4`. It emits only
+`{"status":"observed"}` or a fixed refusal/failure/interruption diagnostic;
+the envelope, paths, IDs, environment, exceptions and native command output
+are never deliberately emitted. No workflow or hosted execution is included.
+Success is deliberately status-only: exact source, HEAD, runner and toolchain
+identity evidence is not emitted and remains separately unresolved for #893.
+The provider verifier executes up to twelve fixed native commands when actually
+run; each has the existing 2 MiB output and 30-second execution limits, plus
+bounded cleanup. Synthetic tests mock it and deny subprocess, network and
+hardware probes.
+It does not launch iOS tests. Output failures can prevent or truncate a report;
+interpreter startup, forced termination, hostile same-job code and failures
+outside the entry point are not an output boundary.
+
+The runner reads only the closed GitHub context environment keys plus
+`GITHUB_WORKSPACE`, `RUNNER_TEMP` and `GITHUB_EVENT_PATH`. It requires the event
+path to be exactly `RUNNER_TEMP/_github_workflow/event.json`, with canonical
+absolute no-follow directory traversal and a regular file bounded to 1 MiB.
+Environment values are bounded before reading; the event file and relevant
+environment are freshly read on both snapshots. File and directory metadata,
+including path identity, are checked around each read. These checks are a path
+policy and observations, not authentication: the same job controls the inputs
+and filesystem. Only the projected context is compared across snapshots;
+unprojected event changes can be ignored. The reported `GITHUB_SHA` must match
+the detached HEAD under the existing HEAD observer.
+
+Each discovery accepts exactly one regular `pack-<sha>.pack` and matching
+`.idx`, with no other entries, symlinks or special files, and inclusive 16 MiB
+pack and 1 MiB index limits. Names and metadata are checked before and after
+the directory scan. The selected pair and its root, directory and entry
+metadata are rechecked before and after each snapshot and after composition;
+a persistent directory or pair replacement refuses, including between snapshots.
+Successful execution uses eight bounded discoveries, each performing at most
+two scans of at most three entries. The existing v2 reader still acquires and
+validates that pair only when a loose object is absent. Unknown entries are
+never whitelisted: the earlier hosted census observed one unexplained extra pack entry, so this path
+may honestly refuse that layout. Discovery does not establish pair validity.
+
+V4 covers the runner and acquisition module alongside the eleven v3 sources
+and checks their project-module relationships. The existing object limits
+remain 32 calls and 1 MiB per snapshot, 64 calls per invocation; the ordinary
+workflow case uses 30 and 60 calls respectively. V2's two-pair/64-call I/O
+reservations remain 52,953,156 bytes, plus at most 2,097,154 event bytes
+including detection bytes and bounded discovery metadata. These are not hard
+RSS or elapsed-time limits. The synthetic descriptor test bounds simultaneously
+held project `os.open` descriptors at 20 and verifies closure; interpreter,
+directory-iterator and native-probe descriptors are additional. Canonical path
+length remains bounded to 4096 bytes. Signal handling uses a non-raising SIGINT
+flag, checked at observation boundaries; an in-progress bounded operation may finish
+before interruption is reported. The final flag read immediately before writing
+commits the chosen report and exit-status pair. A SIGINT after that read,
+including during or after a complete write, does not alter the committed status;
+an earlier SIGINT selects the interruption report and status 130. A short or
+failed write can still prevent or truncate a report and exits unsuccessfully.
+Cleanup failures refuse.
+
+Persistent replacements visible at the checks refuse, but transient
+mutate-and-restore races and changes between checks can escape detection.
+The existing HEAD, loose-object and fixed-source primitives retain their
+documented race and cleanup limitations; this does not establish universal
+replacement detection, custody, authentication, isolation or qualification.
+Same-job code, Python, the provider and toolchain remain trusted assumptions.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_observation_runner.py'
+```
+
 `git_loose.read_object(compressed_bytes, oid)` is an independent, in-memory
 SHA-1 Git loose-object decoder. It accepts only plain immutable `bytes` and a
 plain `str` containing a full lowercase 40-hex ID, returning `(kind, raw_bytes)`
