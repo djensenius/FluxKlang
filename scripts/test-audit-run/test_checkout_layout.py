@@ -114,6 +114,17 @@ class CheckoutLayoutTests(unittest.TestCase):
         self.assertEqual(result["oversized_index_file_count"], 1)
         self.assertEqual(result["within_cap_pair_count"], 0)
 
+    def test_index_only_cap_plus_one_is_classified_oversized(self):
+        self.add_pair(index_size=census.git_pack.INDEX_LIMIT + 1)
+        result = self.observe()
+        self.assertEqual(result["candidate_classification"],
+                         "oversized-single-candidate")
+        self.assertEqual(result["oversized_pack_file_count"], 0)
+        self.assertEqual(result["oversized_index_file_count"], 1)
+        self.assertEqual(result["within_cap_pair_count"], 0)
+        self.assertEqual(result["pack_bytes_within_cap_total"], 12)
+        self.assertEqual(result["index_bytes_within_cap_total"], 0)
+
     def test_missing_pairs_and_absent_pack_directory_are_explicit(self):
         (self.pack_directory / f"pack-{PACK_A}.pack").write_bytes(b"pack")
         result = self.observe()
@@ -190,7 +201,8 @@ class CheckoutLayoutTests(unittest.TestCase):
             self.observe()
 
     def test_entry_limits_refuse_before_stat_traversal(self):
-        for index in range(census.OBJECTS_ENTRY_LIMIT + 1):
+        # 512 loose entries plus the fixed pack directory is 513 total.
+        for index in range(census.OBJECTS_ENTRY_LIMIT):
             (self.objects / f"x{index:03d}").mkdir()
         actual_stat = os.stat
 
@@ -259,6 +271,15 @@ class CheckoutLayoutTests(unittest.TestCase):
                                   census.os.supports_dir_fd | {stat_patch}):
             with self.assertRaisesRegex(census.Refusal, "directory entry name limit"):
                 self.observe()
+
+    def test_exact_entry_name_byte_limit_is_accepted(self):
+        exact_name = "x" * census.ENTRY_NAME_BYTES
+        (self.pack_directory / exact_name).write_bytes(b"")
+        result = self.observe()
+        self.assertEqual(result["layout_status"], "unsupported-observed-layout")
+        self.assertIn("unexpected-pack-entry", result["unsupported_features"])
+        rendered = census.observe_checkout_layout(str(self.root), HEAD)
+        self.assertNotIn(exact_name, rendered)
 
     def test_directory_and_entry_mutations_refuse(self):
         original_stat = os.stat
