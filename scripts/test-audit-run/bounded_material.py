@@ -8,6 +8,7 @@ import stat
 
 MATERIAL_BYTES = 2 * 1024 * 1024
 PATH_BYTES = 4096
+PATH_COMPONENTS = 64
 
 
 class Refusal(ValueError):
@@ -28,9 +29,23 @@ def _path(value):
         raise Refusal("invalid material path") from error
     _require(len(encoded) <= PATH_BYTES and value.startswith("/") and "\0" not in value,
              "invalid material path")
-    _require(all(part not in ("", ".", "..") for part in value.split("/")[1:]),
+    parts = value.split("/")[1:]
+    _require(all(part not in ("", ".", "..") for part in parts),
              "noncanonical material path")
+    _require(len(parts) <= PATH_COMPONENTS, "material path component limit")
     return value
+
+
+def _register_close(stack, descriptor):
+    def close_on_exit(exc_type, exc_value, traceback):
+        try:
+            os.close(descriptor)
+        except BaseException:
+            if exc_type is None:
+                raise
+        return False
+
+    stack.push(close_on_exit)
 
 
 def _identity(info, directory):
@@ -50,7 +65,7 @@ def acquire(selected):
         files = []
         for path in paths:
             root = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            stack.callback(os.close, root)
+            _register_close(stack, root)
             root_identity = _identity(os.fstat(root), True)
             _require(root_identity == _identity(os.stat("/", follow_symlinks=False), True),
                      "material root changed")
@@ -66,7 +81,7 @@ def acquire(selected):
                 if directory:
                     flags |= os.O_DIRECTORY
                 child = os.open(part, flags, dir_fd=current)
-                stack.callback(os.close, child)
+                _register_close(stack, child)
                 identity = _identity(before, directory)
                 _require(_identity(os.fstat(child), directory) == identity,
                          "material path changed during open")

@@ -296,6 +296,41 @@ class BoundedMaterialTests(unittest.TestCase):
             ]), 1)
             self.assertIn("noncanonical", stderr.getvalue())
 
+    def test_component_limit_and_maximum_held_descriptors(self):
+        prefix = len(str(self.directory).split("/")) - 1
+        directory = self.directory
+        for _ in range(bounded.PATH_COMPONENTS - prefix - 1):
+            directory = directory / "d"
+            directory.mkdir()
+        file = directory / "file"
+        file.write_bytes(b"x")
+        self.assertEqual(len(str(file).split("/")) - 1, bounded.PATH_COMPONENTS)
+        open_fd, close_fd = os.open, os.close
+        held = set()
+        highwater = 0
+
+        def opening(*args, **kwargs):
+            nonlocal highwater
+            fd = open_fd(*args, **kwargs)
+            held.add(fd)
+            highwater = max(highwater, len(held))
+            return fd
+
+        def closing(fd):
+            close_fd(fd)
+            held.remove(fd)
+
+        with mock.patch.object(bounded.os, "open", side_effect=opening), \
+             mock.patch.object(bounded.os, "close", side_effect=closing):
+            with bounded.acquire([file] * 3) as values:
+                self.assertEqual([data for _, data in values], [b"x"] * 3)
+            self.assertEqual(highwater, 3 * (bounded.PATH_COMPONENTS + 1))
+            self.assertEqual(held, set())
+        with mock.patch.object(bounded.os, "open", side_effect=AssertionError("opened")):
+            with self.assertRaisesRegex(ValueError, "component limit"):
+                with bounded.acquire([file, str(file) + "/extra", file]):
+                    pass
+
     def test_replacement_during_open_and_read_error_refuse(self):
         open_fd = os.open
         replacement = self.directory / "replacement"
@@ -372,6 +407,87 @@ class BoundedMaterialTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "cleanup"):
                 self.validate()
         self.assertGreater(len(calls), 3)
+
+    def test_cleanup_preserves_active_interrupts_and_attempts_every_close(self):
+        for phase in ("acquisition", "validation"):
+            for kind in (KeyboardInterrupt, SystemExit, ValueError):
+                with self.subTest(phase=phase, kind=kind):
+                    error = kind("original")
+                    open_fd, close_fd = os.open, os.close
+                    opened, closed = [], []
+
+                    def opening(*args, **kwargs):
+                        fd = open_fd(*args, **kwargs)
+                        opened.append(fd)
+                        return fd
+
+                    def closing(fd):
+                        closed.append(fd)
+                        close_fd(fd)
+                        if len(closed) <= 2:
+                            raise OSError("synthetic cleanup failure")
+
+                    with ExitStack() as stack:
+                        stack.enter_context(mock.patch.object(bounded.os, "open", side_effect=opening))
+                        stack.enter_context(mock.patch.object(bounded.os, "close", side_effect=closing))
+                        if phase == "acquisition":
+                            stack.enter_context(mock.patch.object(bounded.os, "read", side_effect=error))
+                        else:
+                            stack.enter_context(mock.patch.object(
+                                ios_runtime, "provider_verified_checker", side_effect=error,
+                            ))
+                        with self.assertRaises(kind) as caught:
+                            if kind is ValueError:
+                                self.validate()
+                            else:
+                                prepare.main([
+                                    "validate", "--bounded-material", "--input", str(self.source),
+                                    "--expected-sha256", self.pin, "--profile",
+                                    prepare.IOS_PROVIDER_RUNTIME_PROFILE,
+                                    "--output", str(self.output), "--intent", str(self.intent),
+                                ])
+                    self.assertIs(caught.exception, error)
+                    self.assertGreater(len(opened), 2)
+                    self.assertEqual(closed, list(reversed(opened)))
+
+    def test_cleanup_failure_without_active_exception_attempts_every_close(self):
+        open_fd, close_fd = os.open, os.close
+        opened, closed = [], []
+        first_error = OSError("first cleanup failure")
+
+        def opening(*args, **kwargs):
+            fd = open_fd(*args, **kwargs)
+            opened.append(fd)
+            return fd
+
+        def closing(fd):
+            closed.append(fd)
+            close_fd(fd)
+            if len(closed) == 1:
+                raise first_error
+            if len(closed) == 2:
+                raise OSError("second cleanup failure")
+
+        with mock.patch.object(bounded.os, "open", side_effect=opening), \
+             mock.patch.object(bounded.os, "close", side_effect=closing):
+            with self.assertRaises(OSError) as caught:
+                self.validate()
+        self.assertIs(caught.exception, first_error)
+        self.assertGreater(len(opened), 2)
+        self.assertEqual(closed, list(reversed(opened)))
+
+        opened.clear()
+        closed.clear()
+        with mock.patch.object(bounded.os, "open", side_effect=opening), \
+             mock.patch.object(bounded.os, "close", side_effect=closing), \
+             mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.assertEqual(prepare.main([
+                "validate", "--bounded-material", "--input", str(self.source),
+                "--expected-sha256", self.pin, "--profile", prepare.IOS_PROVIDER_RUNTIME_PROFILE,
+                "--output", str(self.output), "--intent", str(self.intent),
+            ]), 1)
+            self.assertIn("refused: first cleanup failure", stderr.getvalue())
+        self.assertEqual(closed, list(reversed(opened)))
 
 
 if __name__ == "__main__":

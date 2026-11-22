@@ -205,14 +205,22 @@ immutable bytes and applies the same pin, original XML, transformation, UUID,
 sibling, intent schema, and fresh provider-observation checks to those bytes.
 There is no legacy path-read fallback. Each file has a 2 MiB limit plus one
 detection byte; at most 6,291,459 bytes are acquired across all three. Every
-selected path must be a canonical absolute UTF-8 path of at most 4096 bytes.
+selected path must be a canonical absolute UTF-8 path of at most 4096 bytes
+and 64 components, including its filename. At most 195 material-walk
+descriptors are held (three paths, each with a root and 64 components);
+provider and interpreter descriptors are additional. The component cap is a
+conservative refusal limit, not a measured hosted path depth.
 These are conservative refusal limits based on existing `build_receipt`
 precedents, **not** measured iOS candidate sizes or evidence an actual pair
 fits. Descriptor-relative no-follow walks refuse symlinks and special files;
 file and directory identities are checked at acquisition and validation
 boundaries. Growth, visible replacement or mutation, read failures, and cleanup
-failures refuse. Transient changes between checks can still escape detection;
-this is not custody, race freedom, or a hard RSS bound.
+failures refuse. All registered closes are attempted; an active exception,
+including an interruption, takes precedence over close failures. Asynchronous
+interruption between opening and registering a descriptor or during cleanup
+can still prevent complete cleanup, and a failed close is not retried.
+Transient changes between checks can still escape detection; this is not
+custody, race freedom, or a hard RSS bound.
 
 Bounded **preparation is unsupported**: `prepare` has no bounded option, and
 `prepare --bounded-material` is rejected. Legacy preparation and its internal
