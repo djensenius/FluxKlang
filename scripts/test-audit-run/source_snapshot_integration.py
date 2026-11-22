@@ -25,6 +25,7 @@ _NAMES = (
 _PATHS = tuple(sorted(f"{_DIRECTORY}/{name}" for name in _NAMES))
 _LIMIT = 128 * 1024
 SCHEMA = "ios-source-snapshot-composition-observation-v1"
+SCHEMA_V2 = "ios-source-snapshot-composition-observation-v2"
 ASSURANCE = "same-job-unauthenticated-observation-not-custody-or-authority"
 
 
@@ -201,8 +202,19 @@ def _snapshot(checkout_root, context_reader, reader):
 
 def observe(checkout_root, pack_id, context_reader):
     """Observe two fresh snapshots around the fixed provider verifier."""
+    return _observe(checkout_root, pack_id, context_reader,
+                    git_snapshot_reader.Invocation, SCHEMA)
+
+
+def observe_v2(checkout_root, pack_id, context_reader):
+    """Observe using the explicit 16 MiB pair profile."""
+    return _observe(checkout_root, pack_id, context_reader,
+                    git_snapshot_reader.InvocationV2, SCHEMA_V2)
+
+
+def _observe(checkout_root, pack_id, context_reader, invocation_type, schema):
     try:
-        invocation = git_snapshot_reader.Invocation(checkout_root, pack_id)
+        invocation = invocation_type(checkout_root, pack_id)
         before, sources = _snapshot(checkout_root, context_reader, invocation.snapshot())
         with ios_runtime.provider_verified_checker() as (spellings, observation):
             provider = provider_attribution._provider(observation, spellings)
@@ -217,7 +229,7 @@ def observe(checkout_root, pack_id, context_reader):
         # Preserve the v1 envelope's own encoding/size check as well.
         provider_attribution._encode(attribution)
         return provider_attribution._encode({
-            "schema": SCHEMA, "assurance": ASSURANCE,
+            "schema": schema, "assurance": ASSURANCE,
             "attribution": attribution, "sources": sources,
         })
     except ios_runtime.Refusal:
@@ -231,4 +243,12 @@ def validate(data, checkout_root, pack_id, context_reader):
     ios_runtime.require(type(data) is bytes and len(data) <= provider_attribution.ENVELOPE_LIMIT,
                         "invalid composition output size/type")
     ios_runtime.require(data == observe(checkout_root, pack_id, context_reader),
+                        "composition output differs from fresh observations")
+
+
+def validate_v2(data, checkout_root, pack_id, context_reader):
+    """Compare v2 bytes only with a fresh v2 observation."""
+    ios_runtime.require(type(data) is bytes and len(data) <= provider_attribution.ENVELOPE_LIMIT,
+                        "invalid composition output size/type")
+    ios_runtime.require(data == observe_v2(checkout_root, pack_id, context_reader),
                         "composition output differs from fresh observations")
