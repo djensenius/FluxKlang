@@ -192,12 +192,13 @@ or a compromised provider. Do not use this profile to make the strict
 profile's stronger filesystem-authority claim; the strict implementation and
 its acceptance/refusal semantics are unchanged.
 
-### Opt-in bounded provider material validation
+### Opt-in bounded provider material preparation and validation
 
-The provider profile alone supports `validate(..., bounded_material=True)`,
-or `prepare.py validate --bounded-material` with the usual explicit `--input`,
-`--expected-sha256`, `--profile`, `--output`, and `--intent` arguments. Other
-profiles refuse this option. It is not the default: existing prepare and
+The provider profile alone supports `prepare(..., bounded_material=True)` and
+`validate(..., bounded_material=True)`, or `prepare.py prepare --bounded-material`
+and `prepare.py validate --bounded-material`. Both require the explicit input,
+expected SHA256 and profile; validation also requires output and intent paths.
+Other profiles refuse this option. It is not the default: existing prepare and
 validate APIs and profiles retain their legacy behavior.
 
 This option acquires exactly the selected original, output, and intent as
@@ -225,12 +226,46 @@ can still prevent complete cleanup, and a failed close is not retried.
 Transient changes between checks can still escape detection; this is not
 custody, race freedom, or a hard RSS bound.
 
-Bounded **preparation is unsupported**: `prepare` has no bounded option, and
-`prepare --bounded-material` is rejected. Legacy preparation and its internal
-validation use unbounded path reads, including for the provider profile.
-Bounded validation does not make that earlier preparation bounded. Exact
-compile-produced candidate selection, material production, checker
-path/handoff, source coverage, and hosted integration remain separate work.
+Bounded preparation holds and rechecks the explicit pinned input and exclusively
+creates its UUID-linked output and schema-3 intent siblings relative to the
+held parent directory. It caps serialization before publication, handles short
+and zero writes, holds the created descriptors, and invokes the real bounded
+validator. Both provider contexts must complete their exit rechecks and the
+complete fresh observations must agree before success. There is no legacy
+input/output path-read fallback. Serialized scalar strings are additionally
+limited to 131072 characters and integers to 4096 bits; the closed metadata and
+provider observation are expected to be far smaller.
+Both bounded preparation and validation use precedence-aware provider-file,
+selector, owned-child and stdout cleanup. They attempt all registered cleanup
+and apply the same exception precedence described above; the bounded child
+cleanup wait remains limited to 30 seconds. Legacy provider cleanup is unchanged.
+
+On **any failure**, this opt-in producer never unlinks created files. Partial or
+complete output/intent siblings can remain, possibly containing sensitive
+metadata. Collisions and replacements are never overwritten or removed. Use an
+authorized disposable workspace and clean it separately under the caller's own
+namespace authority. Each invocation writes at most 4 MiB, but repeated failed
+attempts can accumulate unbounded debris and disk use. Publication is neither
+atomic nor durable; asynchronous interruption, crashes, transient changes
+between checks, and descriptor registration/close failures remain possible.
+These checks do not establish custody or race freedom.
+
+For one successful bounded preparation, at most 262 material descriptors are
+simultaneously held: 65 for the outer input, two created files and 195 for the
+nested validator. Interpreter and provider descriptors are additional. The
+input is acquired twice and each sibling once, for at most 8,388,612 material
+read bytes including detection bytes. Each of four provider snapshots separately
+reads the checker twice and its plist once, at most 11,099,660 bytes in total
+including detection bytes. They run at most 24 fixed commands, each with a
+2 MiB plus one detection-byte output limit. These counts do not bound XML/JSON
+parser or serializer heap use or time, interpreter overhead, child-process
+resources, or filesystem operations.
+
+Legacy preparation and its internal validation still use unbounded path reads,
+including for the provider profile. Bounded validation does not make earlier
+legacy preparation bounded. Exact compile-produced candidate selection, checker
+path/handoff, source coverage, real candidate acceptance and hosted integration
+remain separate work.
 
 This preparation slice does **not** claim source commit/head, runner identity,
 workflow/job provenance, or that those values are bound to this observation.

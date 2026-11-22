@@ -63,10 +63,24 @@ def _identity(info, directory):
 def acquire(selected):
     """Hold and recheck all path components across acquisition and validation."""
     _require(len(selected) == 3, "three material paths required")
+    with _acquire(selected) as (materials, _):
+        yield materials
+
+
+@contextmanager
+def acquire_input(selected):
+    """Hold one input and its parent directory across bounded production."""
+    with _acquire((selected,)) as (materials, parents):
+        yield materials[0], parents[0]
+
+
+@contextmanager
+def _acquire(selected):
     paths = [_path(path) for path in selected]
     with ExitStack() as stack:
         links = []
         files = []
+        parents = []
         for path in paths:
             root = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             _register_close(stack, root)
@@ -90,6 +104,8 @@ def acquire(selected):
                 _require(_identity(os.fstat(child), directory) == identity,
                          "material path changed during open")
                 links.append((current, part, child, identity, directory))
+                if not directory:
+                    parents.append(current)
                 current = child
             _require(before.st_size <= MATERIAL_BYTES, "material byte limit")
             files.append((Path(path), current, before.st_size))
@@ -117,5 +133,5 @@ def acquire(selected):
                          "material path changed")
 
         recheck()
-        yield tuple(materials)
+        yield tuple(materials), tuple(parents)
         recheck()
