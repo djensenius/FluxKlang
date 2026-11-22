@@ -354,6 +354,34 @@ its output boundary. A signal after the final status check can be too late to
 change the exit status; output failures can also prevent or truncate a report.
 Do not treat a successful job as an acceptance or qualification claim.
 
+For resource design, the separate `observe_checkout_layout_v2` and
+`observe_checkout_layout_v2_report` APIs use the same observation and closed
+report boundaries. The v2 schema is `checkout-layout-census-v2`; it retains
+the v1 shape, counts and classifications, but omits
+`pack_bytes_within_cap_total` and `index_bytes_within_cap_total` (which could
+expose an individual pack or index's exact size).
+Instead, `pack_size_buckets` is a fixed object of aggregate counts:
+`le_8_mib` (0 through 8 MiB), `gt_8_le_16_mib`,
+`gt_16_le_32_mib`, `gt_32_le_64_mib`, and `gt_64_mib`. Each upper
+boundary is inclusive; MiB is 1,048,576 bytes. Every regular file matching the
+pack filename pattern is counted once, including unpaired packs; index and
+unexpected files are not. No filenames, IDs, paths, contents or exact
+individual pack or index sizes are emitted. Fixed unsupported-feature labels
+do not identify or classify the exact unexpected entry.
+
+V2 retains the descriptor, entry and output bounds, no-follow and race checks,
+refusal and interruption behavior described above. It does not choose a pack,
+raise reader caps, inspect pack contents or establish acceptance. Bucket counts
+help inform resource design only; they do not justify a reader limit or show
+that a hosted checkout is supported.
+
+For a manual hosted v2 observation, select `v2` in the workflow's
+`census_version` choice; the default `v1` preserves the existing hosted
+output. Both paths use the same pinned checkout and output boundary, with no
+additional tests, verifier or observer network activity. Checkout's network
+and workspace mutation remain outside the observer. No dispatch is implied by
+these instructions.
+
 Synthetic fixtures:
 
 ```sh

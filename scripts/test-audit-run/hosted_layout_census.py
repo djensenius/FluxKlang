@@ -13,7 +13,7 @@ def _record_sigint(signum, frame):
     _interrupted = True
 
 
-def main():
+def main(v2=False):
     global _interrupted
     _interrupted = False
     # This process entry point runs on the main thread. Keep the handler
@@ -23,7 +23,9 @@ def main():
         import json
         import checkout_layout
 
-        report = checkout_layout.observe_checkout_layout_report(
+        observe = (checkout_layout.observe_checkout_layout_v2_report if v2
+                   else checkout_layout.observe_checkout_layout_report)
+        report = observe(
             os.environ.get("GITHUB_WORKSPACE"), os.environ.get("GITHUB_SHA"),
         )
         status = json.loads(report)["status"]
