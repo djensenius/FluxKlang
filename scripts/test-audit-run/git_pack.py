@@ -4,6 +4,7 @@ import hashlib
 import re
 import struct
 import zlib
+from enum import Enum
 
 import git_delta
 
@@ -20,6 +21,19 @@ READER_PARSE_LIMIT = 2
 KINDS = {1: "commit", 2: "tree", 3: "blob", 4: "tag"}
 
 
+class _Profile(Enum):
+    V1 = 1
+    V2 = 2
+
+
+def _pack_limit(profile):
+    if profile is _Profile.V1:
+        return PACK_LIMIT
+    if profile is _Profile.V2:
+        return 16 * 1024 * 1024
+    raise ValueError("invalid internal pack profile")
+
+
 def _u32(data, position):
     return struct.unpack_from(">I", data, position)[0]
 
@@ -28,7 +42,7 @@ def _fail(message):
     raise ValueError(message)
 
 
-def _entry_header(pack, start, end):
+def _entry_header(pack, start, end, profile=_Profile.V1):
     position = start
     byte = pack[position]
     position += 1
@@ -62,7 +76,9 @@ def _entry_header(pack, start, end):
         position += 1
         distance = byte & 127
         while byte & 128:
-            if position == end or distance >= PACK_LIMIT:
+            # Bound the intermediate before shifting; the final distance must
+            # also point to an earlier entry inside this particular pack.
+            if position == end or distance >= _pack_limit(profile):
                 _fail("invalid offset base")
             byte = pack[position]
             position += 1
@@ -75,10 +91,10 @@ def _entry_header(pack, start, end):
     return kind, size, base, position
 
 
-def _inputs(pack, index):
+def _inputs(pack, index, profile=_Profile.V1):
     if type(pack) is not bytes or type(index) is not bytes:
         _fail("pack and index must be bytes")
-    if len(pack) > PACK_LIMIT or len(index) > INDEX_LIMIT:
+    if len(pack) > _pack_limit(profile) or len(index) > INDEX_LIMIT:
         _fail("input size limit")
 
 
@@ -89,7 +105,11 @@ def _oid(oid):
 
 
 def _parse(pack, index):
-    _inputs(pack, index)
+    return _parse_profile(pack, index, _Profile.V1)
+
+
+def _parse_profile(pack, index, profile):
+    _inputs(pack, index, profile)
     if len(pack) < 32 or pack[:8] != b"PACK\0\0\0\2":
         _fail("unsupported pack header")
     if len(index) < 8 + 1024 + 40 or index[:8] != b"\xfftOc\0\0\0\2":
@@ -155,7 +175,7 @@ def _parse(pack, index):
         i = by_offset[start]
         if zlib.crc32(view[start:end]) != _u32(index, crc_start + 4 * i):
             _fail("object CRC mismatch")
-        kind, size, base, position = _entry_header(pack, start, end)
+        kind, size, base, position = _entry_header(pack, start, end, profile)
         inflated += size
         if inflated > INFLATE_LIMIT:
             _fail("aggregate inflate limit")
@@ -226,6 +246,13 @@ def read_object(pack, index, oid):
     _inputs(pack, index)
     _oid(oid)
     return _lookup(_parse(pack, index), oid)
+
+
+def read_object_v2(pack, index, oid):
+    """Like read_object, with a fixed 16 MiB pack cap; no acquisition or cache."""
+    _inputs(pack, index, _Profile.V2)
+    _oid(oid)
+    return _lookup(_parse_profile(pack, index, _Profile.V2), oid)
 
 
 class BoundedReader:

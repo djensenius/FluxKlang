@@ -583,6 +583,36 @@ instruction work; a single delta's temporary output can add up to two copies of
 independently. Large-offset index entries cannot describe an accepted pack under
 the 8 MiB cap. Unsupported, even otherwise valid, larger packs refuse.
 
+`git_pack.read_object_v2(pack_bytes, index_bytes, oid)` is a separate, opt-in
+source-only prototype with the same full-pack validation and return/refusal
+contract, but a fixed inclusive 16 MiB pack cap. It takes explicit plain bytes;
+there is no caller-selected limit, cache, acquisition, discovery, pair routing,
+or integration with `BoundedReader`, snapshot readers, or the incomplete fixed
+source observer. All other limits above remain unchanged, including the 1 MiB
+index and both 8 MiB aggregate budgets. OFS distances are bounded by the
+profile's pack cap before each decoding shift and must point to an earlier
+indexed entry; v1 retains its original 8 MiB bound. Large-offset index entries
+still cannot describe an accepted pack. Repeated direct calls reparse the pair.
+
+Logical buffer accounting per v2 call, not a hard RSS bound: the caller's pack
+and index may occupy 16 MiB and 1 MiB respectively and remain live throughout.
+Pack slices used for CRC, checksumming and decompression are views, not full
+pack copies. Retained inflated entries total at most 8 MiB; retained resolved
+results total at most 8 MiB, with non-delta results sharing their inflated bytes.
+An in-progress delta can additionally hold a 256 KiB output bytearray and its
+256 KiB bytes copy, including when a result-budget refusal occurs. Inflate may
+produce one byte beyond a declared size before refusing; malformed streams may
+also materialize `unconsumed_tail` or `unused_data` copies, each bounded by the
+compressed entry (at most the pack size). Names, offsets, records, dictionaries,
+zlib state and Python object/allocation overhead are additional and unmeasured;
+these logical bounds neither measure peak memory nor include caller-held copies
+or concurrent calls.
+
+A hosted v2 census observed one pack in the >8–16 MiB bucket, but its content,
+availability, unexpected entries, identity and acceptance here are unknown.
+These synthetic parser tests do not establish hosted acceptance, qualification,
+provenance or hardware behavior, and do not authorize hosted dispatch.
+
 `git_pack.BoundedReader` is an optional synchronous, in-memory adapter for one
 `observe` or `validate` invocation, encompassing both envelope snapshots. Its
 `read(pack_bytes, index_bytes, oid)` takes fresh, explicitly supplied bytes on
@@ -625,6 +655,8 @@ not invoke Git:
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_git_pack.py'
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_git_pack_v2.py'
 ```
 
 `git_pack_acquire.acquire_pair(checkout_root, pack_id)` separately returns fresh
