@@ -56,6 +56,7 @@ def main():
             integration.ios_runtime.require(len(sys.argv) == 4, "invalid explicit input")
             integration.observe_v5(root, sys.modules[__name__], sys.argv[2], sys.argv[3])
         else:
+            integration.ios_runtime.require(len(sys.argv) == 1, "unexpected arguments")
             integration.observe_v4(root, sys.modules[__name__])
         set_stage("final-check")
         check_interrupted()

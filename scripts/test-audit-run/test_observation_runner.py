@@ -60,6 +60,7 @@ class RunnerTests(unittest.TestCase):
                                 GITHUB_EVENT_PATH=str(self.event_path))
         self.stack.enter_context(mock.patch.dict(os.environ, self.environment, clear=True))
         self.stack.enter_context(mock.patch.object(runner.signal, "signal"))
+        self.stack.enter_context(mock.patch.object(runner.sys, "argv", ["observation_runner.py"]))
         runner._interrupted = False
 
     def run_report(self):

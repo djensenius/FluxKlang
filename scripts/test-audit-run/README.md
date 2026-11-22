@@ -231,9 +231,14 @@ creates its UUID-linked output and schema-3 intent siblings relative to the
 held parent directory. It caps serialization before publication, handles short
 and zero writes, holds the created descriptors, and invokes the real bounded
 validator. Both provider contexts must complete their exit rechecks and the
-complete fresh observations must agree before success. After the input walk's
-exit check and ancestor closes, a fresh no-follow walk compares the whole path
-chain and held input identity to the original, then rechecks both created paths
+complete fresh observations must agree before success. Each bounded provider
+context compares its complete exit snapshot type-sensitively: at most 1024
+value nodes, depth 16 from the root, and 8,388,608 combined bytes/string
+codepoints including dictionary keys across both snapshots. Integers are at
+most 4096 bits; unsupported values or excess refuse. Legacy provider comparison
+is unchanged. After the input walk's exit check and ancestor closes, a fresh
+no-follow walk compares the whole path chain and held input identity to the
+original, then rechecks both created paths
 relative to the reopened parent. Duplicated original directory descriptors keep
 their identities alive across ancestor closes and the fresh walk; the input,
 original parent, created files and reopened directories also remain held.
@@ -705,7 +710,8 @@ Same-job code, Python, the provider and toolchain remain trusted assumptions.
 
 `observation_runner.py --bounded-prepare-v1 ABSOLUTE_INPUT LOWERCASE_SHA256`
 selects the separate v5 composition; the existing no-argument runner remains
-v4. Supply exactly one canonical absolute `.xctestrun` path and its 64-digit
+v4. Unknown, incomplete or extra arguments refuse at the input stage.
+Supply exactly one canonical absolute `.xctestrun` path and its 64-digit
 lowercase SHA-256 pin. There is no candidate enumeration or compile provenance
 claim. This mode is not used by the workflow below and authorizes no dispatch.
 It uses the same bounded context and pack discovery and the exact v4 source set

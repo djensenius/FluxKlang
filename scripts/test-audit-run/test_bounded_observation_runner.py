@@ -74,7 +74,7 @@ class BoundedRunnerTests(unittest.TestCase):
             path.unlink()
         self.write_pack()
 
-    def report(self, input_path=None, pin=None):
+    def report(self, input_path=None, pin=None, *, arguments=None):
         self.serial += 1
         run_id = str(uuid.UUID(int=self.serial, version=4))
         self.output, self.intent = prepare.output_paths(self.source, run_id)
@@ -90,6 +90,8 @@ class BoundedRunnerTests(unittest.TestCase):
         argv = ["observation_runner.py", "--bounded-prepare-v1",
                 str(self.source) if input_path is None else input_path,
                 self.pin if pin is None else pin]
+        if arguments is not None:
+            argv = ["observation_runner.py", *arguments]
         with mock.patch.object(sys, "argv", argv), \
                 mock.patch.object(prepare.uuid, "uuid4", return_value=uuid.UUID(run_id)), \
                 mock.patch.object(os, "write", side_effect=write):
@@ -97,6 +99,34 @@ class BoundedRunnerTests(unittest.TestCase):
         self.assertEqual(len(output), 1)
         self.assertFalse(self.host.fds)
         return status, output[0]
+
+    def test_unknown_missing_and_extra_arguments_refuse_before_observation(self):
+        secret = "PRIVATE-argument"
+        cases = (
+            ["--bounded-prepar-v1", secret, self.pin],
+            ["--unknown", secret],
+            [secret],
+            ["--bounded-prepare-v1"],
+            ["--bounded-prepare-v1", str(self.source)],
+            ["--bounded-prepare-v1", str(self.source), self.pin, secret],
+        )
+        with mock.patch.object(prepare, "prepare", wraps=prepare.prepare) as producer, \
+                mock.patch.object(integration, "observe_v4", wraps=integration.observe_v4) as old_mode, \
+                mock.patch.object(integration, "observe_v5", wraps=integration.observe_v5) as new_mode:
+            for arguments in cases:
+                with self.subTest(arguments=arguments):
+                    status, output = self.report(arguments=arguments)
+                    self.assertEqual((status, output),
+                                     (1, b'{"diagnostic":"Refusal","stage":"input",'
+                                      b'"status":"refused"}\n'))
+                    self.assertNotIn(secret.encode(), output)
+                    self.assertNotIn(str(self.source).encode(), output)
+                    self.assertFalse(self.output.exists())
+                    self.assertFalse(self.intent.exists())
+        producer.assert_not_called()
+        old_mode.assert_not_called()
+        new_mode.assert_not_called()
+        self.assertEqual(self.host.commands, [])
 
     def test_real_pipeline_order_exact_budgets_and_version(self):
         events, counts, envelopes = [], [], []
@@ -224,6 +254,52 @@ class BoundedRunnerTests(unittest.TestCase):
         self.assertTrue(self.output.exists())
         self.assertTrue(self.intent.exists())
         self.assertNotIn(b"provider_observation", output)
+
+    def test_type_change_at_each_real_provider_exit_refuses(self):
+        tool = self.host.nodes[ios_runtime.DEVELOPER + "/usr/bin/xcodebuild"]
+        for boundary, trigger, total, comparisons, stage in (
+            ("validator", 18, 24, 1, b"prepare"),
+            ("producer", 24, 30, 2, b"prepare"),
+            ("composition", 30, 36, 3, b"provider-exit"),
+        ):
+            with self.subTest(boundary=boundary):
+                tool.st_ino = 1
+                command_count = len(self.host.commands)
+
+                def change(_argv):
+                    if len(self.host.commands) - command_count == trigger:
+                        tool.st_ino = True
+
+                self.host.after_command = change
+                with mock.patch.object(ios_runtime, "_bounded_snapshot_equal",
+                                       wraps=ios_runtime._bounded_snapshot_equal) as compare:
+                    status, output = self.report()
+                self.assertEqual((status, output),
+                                 (1, b'{"diagnostic":"Refusal","stage":"' + stage
+                                  + b'","status":"refused"}\n'))
+                self.assertEqual(len(self.host.commands) - command_count, total)
+                self.assertEqual(compare.call_count, comparisons)
+                self.assertTrue(self.output.exists())
+                self.assertTrue(self.intent.exists())
+                self.assertNotIn(str(self.root).encode(), output)
+                self.assertNotIn(b"provider_observation", output)
+                self.host.after_command = lambda _argv: None
+
+    def test_interrupt_during_type_mismatch_retains_closed_interrupt(self):
+        tool = self.host.nodes[ios_runtime.DEVELOPER + "/usr/bin/xcodebuild"]
+        tool.st_ino = 1
+
+        def change(_argv):
+            if len(self.host.commands) == 18:
+                tool.st_ino = True
+            if len(self.host.commands) == 19:
+                runner._sigint(None, None)
+
+        self.host.after_command = change
+        self.assertEqual(self.report(),
+                         (130, b'{"diagnostic":"Interrupted","status":"failed"}\n'))
+        self.assertTrue(self.output.exists())
+        self.assertTrue(self.intent.exists())
 
     def test_mutation_and_provider_exit_failure_retain_artifacts(self):
         for case in ("input", "source", "pair", "provider", "outer-exit"):

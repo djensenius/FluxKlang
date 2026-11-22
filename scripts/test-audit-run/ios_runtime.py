@@ -609,6 +609,49 @@ def _provider_snapshot(*, command=None, file_reader=None):
     return record, canonical, alias[0], identity, library, plist_identity, plist_bytes, alias
 
 
+def _bounded_snapshot_equal(left, right):
+    """Compare provider snapshots by exact type under fixed traversal/byte limits."""
+    pending = [(left, right, 0)]
+    nodes = size = 0
+    while pending:
+        first, second, depth = pending.pop()
+        nodes += 1
+        if nodes > 1024 or depth > 16 or type(first) is not type(second):
+            return False
+        kind = type(first)
+        if kind in (tuple, list):
+            if len(first) != len(second) or nodes + len(pending) + len(first) > 1024:
+                return False
+            pending.extend((a, b, depth + 1) for a, b in zip(first, second))
+        elif kind is dict:
+            if (len(first) != len(second)
+                    or nodes + len(pending) + len(first) > 1024):
+                return False
+            for mapping in (first, second):
+                for key in mapping:
+                    if type(key) is not str:
+                        return False
+                    size += len(key)
+                    if size > 8 * 1024 * 1024:
+                        return False
+            if first.keys() != second.keys():
+                return False
+            pending.extend((value, second[key], depth + 1) for key, value in first.items())
+        elif kind in (str, bytes):
+            size += len(first) + len(second)
+            if size > 8 * 1024 * 1024 or first != second:
+                return False
+        elif kind is int:
+            if first.bit_length() > 4096 or second.bit_length() > 4096 or first != second:
+                return False
+        elif kind in (bool, type(None)):
+            if first != second:
+                return False
+        else:
+            return False
+    return True
+
+
 @contextmanager
 def provider_verified_checker(*, bounded_cleanup=False):
     """Yield fixed checker spellings under an explicit hosted-provider trust assumption.
@@ -625,7 +668,8 @@ def provider_verified_checker(*, bounded_cleanup=False):
 
         before = snapshot()
         yield (before[1], before[2]), before[0]
-        require(snapshot() == before,
+        after = snapshot()
+        require(_bounded_snapshot_equal(after, before) if bounded_cleanup else after == before,
                 "provider-trusted runtime/toolchain observation changed")
     except OSError as error:
         raise Refusal("provider-trusted runtime verification unavailable") from error
