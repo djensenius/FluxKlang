@@ -1,0 +1,57 @@
+name: iOS provider observation (no launch)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -e {0}
+
+env:
+  BASH_ENV: /dev/null
+  ENV: /dev/null
+  PATH: /usr/bin:/bin
+
+jobs:
+  observe:
+    runs-on: xcode-27
+    # Twelve 30-second probes and their bounded cleanup, plus other work.
+    timeout-minutes: 30
+    steps:
+      - name: Require the reviewed dispatch context
+        env:
+          CHECK_REPOSITORY: ${{ github.repository }}
+          CHECK_EVENT: ${{ github.event_name }}
+          CHECK_REF: ${{ github.ref }}
+          CHECK_SHA: ${{ github.sha }}
+          CHECK_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          [[ "$CHECK_REPOSITORY" == 'djensenius/FluxKlang' &&
+             "$CHECK_EVENT" == 'workflow_dispatch' &&
+             "$CHECK_REF" == 'refs/heads/main' &&
+             "$CHECK_SHA" =~ ^[0-9a-f]{40}$ &&
+             "$CHECK_WORKFLOW_SHA" == "$CHECK_SHA" ]] || exit 1
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (peeled commit)
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Observe once (no launch)
+        run: |
+          exec /usr/bin/env -i \
+            PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH-}" \
+            RUNNER_NAME="${RUNNER_NAME-}" RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" RUNNER_ARCH="${RUNNER_ARCH-}" RUNNER_TEMP="${RUNNER_TEMP-}" \
+            /usr/bin/python3 -B -S scripts/test-audit-run/observation_runner.py
