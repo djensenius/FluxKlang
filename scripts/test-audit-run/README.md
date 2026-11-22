@@ -464,7 +464,8 @@ records in each snapshot. The source helper's exact module path and
 dependency-graph checks apply.
 The second snapshot and the provider output must match the first; failures,
 including cleanup failures, return no partial result. Interruptions propagate.
-Pack pairs are reacquired per snapshot, not cached across snapshots.
+When needed, pack pairs are reacquired per snapshot, not cached across snapshots;
+all-loose objects need not cause the named pair to be acquired.
 
 The wrapper has exactly `schema` (`ios-source-snapshot-composition-observation-v1`),
 `assurance` (`same-job-unauthenticated-observation-not-custody-or-authority`),
@@ -495,6 +496,28 @@ calls and two pair acquisitions. These are logical I/O reservations, not
 peak RSS or elapsed-time limits; the v2 parser/acquisition memory and race
 caveats below apply. No hosted acceptance is claimed.
 
+`observe_v3(checkout_root, pack_id, input_reader)` and `validate_v3(data,
+checkout_root, pack_id, input_reader)` are a separate source-only opt-in,
+using the v2 explicit-pair profile and outer schema
+`ios-source-snapshot-composition-observation-v3`. Validation refuses other
+versions' bytes. On each snapshot, `input_reader()` supplies an exact tuple
+`(environment, event_bytes, checkout_sha)` for `github_context.read_context`.
+These are explicit inputs, not an ambient environment or event-file reader.
+The callback is invoked on each side of the provider verifier, but two calls do
+not prove fresh acquisition: the caller remains responsible for it. Comparison
+is of projected context, not all input bytes; changes to ignored event fields can
+leave the projection unchanged.
+
+V3 adds `github_context.py` to the ten fixed sources and checks its exact module
+path and its `ios_runtime` and `provider_attribution` dependency identities in
+addition to the existing graph. It shares the same per-snapshot object and byte
+budgets with attribution: ordinary snapshots use 23 calls without workflow
+identity and 28 with it, or 46 and 56 across both snapshots, within the unchanged
+32-per-snapshot and 64-per-invocation limits. Aggregate bytes can still refuse.
+The caller supplies the pack ID; there is no discovery, and the pair is acquired
+only when a requested object is not loose. This adds no filesystem event
+acquisition, workflow or hosted invocation, or launch.
+
 This is a same-job **unauthenticated observation**, not custody, provenance,
 authority, or qualification. Caller code and context acquisition, Python and
 stdlib, loaded bytecode, races, hostile job/provider behavior, and hosted layout
@@ -502,6 +525,11 @@ compatibility are outside the claim. Module path/graph observations do not prove
 the integrity of executing code. The provider verifier may execute its fixed
 native probes when invoked in future; the synthetic tests mock it and deny
 process, network, enumeration and hardware probes. They do not launch iOS tests.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_source_snapshot_integration_v3.py'
+```
 
 `git_loose.read_object(compressed_bytes, oid)` is an independent, in-memory
 SHA-1 Git loose-object decoder. It accepts only plain immutable `bytes` and a
