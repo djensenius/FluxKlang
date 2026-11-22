@@ -192,6 +192,35 @@ or a compromised provider. Do not use this profile to make the strict
 profile's stronger filesystem-authority claim; the strict implementation and
 its acceptance/refusal semantics are unchanged.
 
+### Opt-in bounded provider material validation
+
+The provider profile alone supports `validate(..., bounded_material=True)`,
+or `prepare.py validate --bounded-material` with the usual explicit `--input`,
+`--expected-sha256`, `--profile`, `--output`, and `--intent` arguments. Other
+profiles refuse this option. It is not the default: existing prepare and
+validate APIs and profiles retain their legacy behavior.
+
+This option acquires exactly the selected original, output, and intent as
+immutable bytes and applies the same pin, original XML, transformation, UUID,
+sibling, intent schema, and fresh provider-observation checks to those bytes.
+There is no legacy path-read fallback. Each file has a 2 MiB limit plus one
+detection byte; at most 6,291,459 bytes are acquired across all three. Every
+selected path must be a canonical absolute UTF-8 path of at most 4096 bytes.
+These are conservative refusal limits based on existing `build_receipt`
+precedents, **not** measured iOS candidate sizes or evidence an actual pair
+fits. Descriptor-relative no-follow walks refuse symlinks and special files;
+file and directory identities are checked at acquisition and validation
+boundaries. Growth, visible replacement or mutation, read failures, and cleanup
+failures refuse. Transient changes between checks can still escape detection;
+this is not custody, race freedom, or a hard RSS bound.
+
+Bounded **preparation is unsupported**: `prepare` has no bounded option, and
+`prepare --bounded-material` is rejected. Legacy preparation and its internal
+validation use unbounded path reads, including for the provider profile.
+Bounded validation does not make that earlier preparation bounded. Exact
+compile-produced candidate selection, material production, checker
+path/handoff, source coverage, and hosted integration remain separate work.
+
 This preparation slice does **not** claim source commit/head, runner identity,
 workflow/job provenance, or that those values are bound to this observation.
 It intentionally does not trust ambient environment variables to supply them.

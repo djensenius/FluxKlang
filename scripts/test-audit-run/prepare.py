@@ -419,14 +419,14 @@ def existing_file(selected):
 
 
 @contextmanager
-def _checked_input(selected, expected_sha256, profile):
+def _checked_input(selected, expected_sha256, profile, material=None):
     expected, _, _, _ = _profile_definition(profile)
     if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         raise Refusal("expected SHA256 must be 64 lowercase hexadecimal digits")
-    path = existing_file(selected)
+    path = existing_file(selected) if material is None else material[0]
     if path.suffix != ".xctestrun":
         raise Refusal("input must have the .xctestrun suffix")
-    data = path.read_bytes()
+    data = path.read_bytes() if material is None else material[1]
     if digest(data) != expected_sha256:
         raise Refusal("input SHA256 mismatch")
     parsed = parse_plist(data)
@@ -539,23 +539,36 @@ def intent_record(input_path, input_digest, output, output_digest, intent, run_i
     return record
 
 
-def validate(input_path, expected_sha256, profile, output_path, intent_path):
+def validate(input_path, expected_sha256, profile, output_path, intent_path, *,
+             bounded_material=False):
     """Read and verify only; never create identity, flags, files, or products."""
-    with _checked_input(input_path, expected_sha256, profile) as (
-        source, original, provider_observation,
-    ):
-        return _validate(
-            source, original, expected_sha256, profile, output_path, intent_path,
-            provider_observation,
-        )
+    if type(bounded_material) is not bool:
+        raise Refusal("bounded material option must be boolean")
+    if bounded_material and profile != IOS_PROVIDER_RUNTIME_PROFILE:
+        raise Refusal("bounded material is only available for the provider profile")
+    if bounded_material:
+        import bounded_material as acquisition
+
+        materials = acquisition.acquire((input_path, output_path, intent_path))
+    else:
+        materials = nullcontext(None)
+    with materials as acquired:
+        with _checked_input(
+            input_path, expected_sha256, profile, None if acquired is None else acquired[0],
+        ) as (source, original, provider_observation):
+            return _validate(
+                source, original, expected_sha256, profile, output_path, intent_path,
+                provider_observation, None if acquired is None else acquired[1:],
+            )
 
 
 def _validate(source, original, expected_sha256, profile, output_path, intent_path,
-              provider_observation=None):
-    output = existing_file(output_path)
-    intent = existing_file(intent_path)
+              provider_observation=None, materials=None):
+    output = existing_file(output_path) if materials is None else materials[0][0]
+    intent = existing_file(intent_path) if materials is None else materials[1][0]
     record = json.loads(
-        intent.read_text(encoding="utf-8"), object_pairs_hook=unique_pairs,
+        intent.read_text(encoding="utf-8") if materials is None else materials[1][1].decode("utf-8"),
+        object_pairs_hook=unique_pairs,
         parse_constant=invalid_constant,
     )
     if not isinstance(record, dict):
@@ -565,7 +578,7 @@ def _validate(source, original, expected_sha256, profile, output_path, intent_pa
     expected_output, expected_intent = output_paths(source, run_id)
     if output != expected_output or intent != expected_intent:
         raise Refusal("output/intent must have the run-linked sibling paths")
-    data = output.read_bytes()
+    data = output.read_bytes() if materials is None else materials[0][1]
     require_equal(
         record,
         intent_record(
@@ -626,22 +639,27 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("prepare", "validate"):
         command = commands.add_parser(name)
-        command.add_argument("--input", required=True, type=Path)
+        command.add_argument("--input", required=True)
         command.add_argument("--expected-sha256", required=True)
         command.add_argument("--profile", required=True, choices=[
             PROFILE, IOS_PROFILE, RETENTION_PROFILE, IOS_RETENTION_PROFILE,
             IOS_RUNTIME_PROFILE, IOS_PROVIDER_RUNTIME_PROFILE,
         ])
         if name == "validate":
-            command.add_argument("--output", required=True, type=Path)
-            command.add_argument("--intent", required=True, type=Path)
+            command.add_argument("--output", required=True)
+            command.add_argument("--intent", required=True)
+            command.add_argument("--bounded-material", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "prepare":
-            record = prepare(args.input, args.expected_sha256, args.profile)
+            record = prepare(Path(args.input), args.expected_sha256, args.profile)
         else:
             record = validate(
-                args.input, args.expected_sha256, args.profile, args.output, args.intent,
+                args.input if args.bounded_material else Path(args.input),
+                args.expected_sha256, args.profile,
+                args.output if args.bounded_material else Path(args.output),
+                args.intent if args.bounded_material else Path(args.intent),
+                bounded_material=args.bounded_material,
             )
     except (OSError, ValueError, ET.ParseError) as error:
         print(f"refused: {error}", file=sys.stderr)
