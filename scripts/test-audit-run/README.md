@@ -531,14 +531,15 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_source_snapshot_integration_v3.py'
 ```
 
-#### Integrated no-launch runner (source-only)
+#### Integrated no-launch runner
 
 `observation_runner.py` connects private bounded discovery and fresh input
 acquisition to the separately versioned
 `ios-source-snapshot-composition-observation-v4`. It emits only
 `{"status":"observed"}` or a fixed refusal/failure/interruption diagnostic;
 the envelope, paths, IDs, environment, exceptions and native command output
-are never deliberately emitted. No workflow or hosted execution is included.
+are never deliberately emitted. The separately reviewed manual workflow below
+is included; its presence does not mean it has been dispatched.
 Success is deliberately status-only: exact source, HEAD, runner and toolchain
 identity evidence is not emitted and remains separately unresolved for #893.
 The provider verifier executes up to twelve fixed native commands when actually
@@ -598,9 +599,41 @@ documented race and cleanup limitations; this does not establish universal
 replacement detection, custody, authentication, isolation or qualification.
 Same-job code, Python, the provider and toolchain remain trusted assumptions.
 
+#### Manual hosted observation procedure
+
+`.github/workflows/ios-provider-observation.yml` permits only a manual
+dispatch, without inputs, on `djensenius/FluxKlang` main. Before any later
+dispatch, a human/coordinator must independently review the merged workflow
+and verify the selected exact main head and its workflow contents; this
+source change authorizes no dispatch. The workflow requires a nonempty
+workflow SHA equal to the event SHA and checks out that event SHA. Those
+in-run checks are not independent evidence of the executing workflow's
+identity, nor do they pin a future dispatch against a main-branch change.
+Verify the selected head again when dispatching, and do not dispatch if it
+cannot be established as the reviewed head.
+
+Run once only, with no retry or artifact collection. The status-only success
+does not emit identity evidence and cannot establish exact source, workflow,
+runner or toolchain identity, qualification, or launch authority. Report a
+refusal or failure as such: the previously observed unknown pack entry may
+cause refusal before any provider probe, and refusal is not profile acceptance.
+The eventual provider probes are read-only and do not launch iOS tests.
+
+The job trusts the hosted image, checkout action, shell, Python and reviewed
+job; it does not protect against a compromised provider or same-job code.
+Shell startup is constrained and the runner is started with an allowlisted
+environment and Python site initialization disabled (`-S`); its fixed
+subprocesses have their own sanitized environment. Interpreter/shell startup,
+checkout action logs, GitHub's job logs and forced termination are outside the
+runner's closed-output boundary and may include checkout identities or other
+diagnostics. No additional secrets are provided. The finite timeout allows
+twelve 30-second probes and bounded cleanup, but can still terminate a slow run.
+
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_observation_runner.py'
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_observation_workflow.py'
 ```
 
 `git_loose.read_object(compressed_bytes, oid)` is an independent, in-memory
