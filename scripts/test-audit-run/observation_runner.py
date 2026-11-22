@@ -14,6 +14,7 @@ _STAGES = {
     "snapshot-before": b"snapshot-before",
     "provider-enter": b"provider-enter",
     "provider-record": b"provider-record",
+    "prepare": b"prepare",
     "provider-exit": b"provider-exit",
     "snapshot-after": b"snapshot-after",
     "consistency": b"consistency",
@@ -51,7 +52,11 @@ def main():
         import source_snapshot_integration as integration
 
         root = os.environ.get("GITHUB_WORKSPACE")
-        integration.observe_v4(root, sys.modules[__name__])
+        if sys.argv[1:2] == ["--bounded-prepare-v1"]:
+            integration.ios_runtime.require(len(sys.argv) == 4, "invalid explicit input")
+            integration.observe_v5(root, sys.modules[__name__], sys.argv[2], sys.argv[3])
+        else:
+            integration.observe_v4(root, sys.modules[__name__])
         set_stage("final-check")
         check_interrupted()
         output = b'{"status":"observed"}\n'

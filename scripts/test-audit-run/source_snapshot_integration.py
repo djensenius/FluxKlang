@@ -27,11 +27,14 @@ _CONTEXT_NAME = "github_context.py"
 _PATHS_V3 = tuple(sorted((*_PATHS, f"{_DIRECTORY}/{_CONTEXT_NAME}")))
 _RUNNER_NAMES = ("observation_runner.py", "observation_acquisition.py")
 _PATHS_V4 = tuple(sorted((*_PATHS_V3, *(f"{_DIRECTORY}/{name}" for name in _RUNNER_NAMES))))
+_MATERIAL_NAMES = ("prepare.py", "bounded_material.py")
+_PATHS_V5 = tuple(sorted((*_PATHS_V4, *(f"{_DIRECTORY}/{name}" for name in _MATERIAL_NAMES))))
 _LIMIT = 128 * 1024
 SCHEMA = "ios-source-snapshot-composition-observation-v1"
 SCHEMA_V2 = "ios-source-snapshot-composition-observation-v2"
 SCHEMA_V3 = "ios-source-snapshot-composition-observation-v3"
 SCHEMA_V4 = "ios-source-snapshot-composition-observation-v4"
+SCHEMA_V5 = "ios-source-snapshot-composition-observation-v5"
 ASSURANCE = "same-job-unauthenticated-observation-not-custody-or-authority"
 
 
@@ -272,10 +275,23 @@ def observe_v3(checkout_root, pack_id, input_reader):
 
 def observe_v4(checkout_root, runner):
     """Integrated runner-only composition, with persistent pair identity checks."""
+    return _observe_runner(checkout_root, runner)
+
+
+def observe_v5(checkout_root, runner, input_path, expected_sha256):
+    """Explicit bounded producer within the integrated source/job observation."""
+    return _observe_runner(checkout_root, runner, (input_path, expected_sha256))
+
+
+def _observe_runner(checkout_root, runner, material=None):
     import github_context
     import observation_acquisition
     import sys
     import types
+
+    if material is not None:
+        import bounded_material
+        import prepare
 
     def graph():
         _context_module_graph(github_context)
@@ -291,6 +307,13 @@ def observe_v4(checkout_root, runner):
                             and observation_acquisition.github_context is github_context
                             and observation_acquisition.ios_runtime is ios_runtime,
                             "project module dependency differs")
+        if material is not None:
+            ios_runtime.require(type(prepare) is types.ModuleType
+                                and type(bounded_material) is types.ModuleType
+                                and sys.modules.get("prepare") is prepare
+                                and sys.modules.get("bounded_material") is bounded_material
+                                and sys.modules.get("ios_runtime") is ios_runtime,
+                                "project module dependency differs")
 
     def paths(root):
         _context_module_paths(root, github_context)
@@ -299,14 +322,38 @@ def observe_v4(checkout_root, runner):
             ios_runtime.require(type(module.__file__) is str
                                 and module.__file__ == f"{root}/{_DIRECTORY}/{name}",
                                 "loaded module path differs from fixed source")
+        if material is not None:
+            for module, name in ((prepare, _MATERIAL_NAMES[0]),
+                                 (bounded_material, _MATERIAL_NAMES[1])):
+                ios_runtime.require(type(module.__file__) is str
+                                    and module.__file__ == f"{root}/{_DIRECTORY}/{name}",
+                                    "loaded module path differs from fixed source")
 
     try:
         checkout_head._checkout_path(checkout_root)
     except checkout_head.Refusal as error:
         raise ios_runtime.Refusal("invalid runner checkout root") from error
+    if material is not None:
+        import re
+
+        input_path, expected_sha256 = material
+        try:
+            ios_runtime.require(type(input_path) is str
+                                and type(expected_sha256) is str
+                                and re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is not None,
+                                "invalid explicit material input")
+        except ValueError as error:
+            raise ios_runtime.Refusal("invalid explicit material input") from error
     runner.set_stage("project-checks")
     graph()
     paths(checkout_root)
+    if material is not None:
+        runner.set_stage("input")
+        try:
+            bounded_material._path(input_path)
+        except Exception as error:
+            raise ios_runtime.Refusal("invalid explicit material input") from error
+        runner.set_stage("project-checks")
     runner.check_interrupted()
     runner.set_stage("pack-discovery")
     pair = observation_acquisition.discover_pair(checkout_root)
@@ -326,20 +373,34 @@ def observe_v4(checkout_root, runner):
         return github_context.read_context(*inputs)
 
     def sources(root, tree, objects):
-        result = _observe_fixed_sources(root, tree, objects, _PATHS_V4, graph, paths)
+        result = _observe_fixed_sources(
+            root, tree, objects, _PATHS_V4 if material is None else _PATHS_V5, graph, paths,
+        )
         check_pair()
         return result
 
+    def produce(provider):
+        runner.check_interrupted()
+        try:
+            record = prepare.prepare(input_path, expected_sha256, prepare.IOS_PROVIDER_RUNTIME_PROFILE,
+                                     bounded_material=True)
+            runner.check_interrupted()
+            prepare.require_equal(record["provider_observation"], provider, "provider observation")
+        except Exception as error:
+            raise ios_runtime.Refusal("bounded producer refused") from error
+        runner.check_interrupted()
+
     result = _observe(checkout_root, pair[0], context_reader,
-                      git_snapshot_reader.InvocationV2, SCHEMA_V4, sources,
-                      runner.set_stage)
+                      git_snapshot_reader.InvocationV2,
+                      SCHEMA_V4 if material is None else SCHEMA_V5, sources,
+                      runner.set_stage, None if material is None else produce)
     runner.set_stage("final-check")
     check_pair()
     return result
 
 
 def _observe(checkout_root, pack_id, context_reader, invocation_type, schema,
-             source_reader=None, set_stage=None):
+             source_reader=None, set_stage=None, producer=None):
     def stage(value):
         if set_stage is not None:
             set_stage(value)
@@ -352,10 +413,17 @@ def _observe(checkout_root, pack_id, context_reader, invocation_type, schema,
         stage("provider-enter")
         operation_error = None
         try:
-            with ios_runtime.provider_verified_checker() as (spellings, observation):
+            authority = (ios_runtime.provider_verified_checker() if producer is None else
+                         ios_runtime.provider_verified_checker(bounded_cleanup=True))
+            with authority as (spellings, observation):
                 stage("provider-record")
+                operation_stage = "provider-record"
                 try:
                     provider = provider_attribution._provider(observation, spellings)
+                    if producer is not None:
+                        stage("prepare")
+                        operation_stage = "prepare"
+                        producer(provider)
                 except BaseException as error:
                     operation_error = error
                     raise
@@ -363,7 +431,7 @@ def _observe(checkout_root, pack_id, context_reader, invocation_type, schema,
                     stage("provider-exit")
         except BaseException as error:
             if error is operation_error:
-                stage("provider-record")
+                stage("provider-record" if producer is None else operation_stage)
             raise
         stage("snapshot-after")
         after, later_sources = _snapshot(checkout_root, context_reader, invocation.snapshot(),
