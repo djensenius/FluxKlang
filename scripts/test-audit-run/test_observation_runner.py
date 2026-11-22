@@ -19,6 +19,7 @@ import test_source_snapshot_integration_v3 as v3
 
 
 _SCANDIR = os.scandir
+_PROVIDER_VERIFIED_CHECKER = ios_runtime.provider_verified_checker
 
 
 class RunnerTests(unittest.TestCase):
@@ -372,6 +373,20 @@ class RunnerTests(unittest.TestCase):
                                   side_effect=ios_runtime.Refusal("PRIVATE operation")):
             self.assertEqual(self.run_report(),
                              (1, b'{"diagnostic":"Unexpected failure","stage":"provider-exit","status":"failed"}\n'))
+
+    def test_real_provider_context_wraps_record_oserror_on_exit(self):
+        canonical, alias = self.record["checker"]["accepted_paths"]
+        snapshot = (self.record, canonical, alias)
+        with mock.patch.object(ios_runtime, "provider_verified_checker", _PROVIDER_VERIFIED_CHECKER), \
+                mock.patch.object(ios_runtime, "_provider_snapshot", return_value=snapshot) as provider_snapshot, \
+                mock.patch.object(provider_attribution, "_provider",
+                                  side_effect=OSError("PRIVATE record failure")) as record:
+            status, output = self.run_report()
+        self.assertEqual((status, output),
+                         (1, b'{"diagnostic":"Refusal","stage":"provider-exit","status":"refused"}\n'))
+        self.assertNotIn(b"PRIVATE", output)
+        provider_snapshot.assert_called_once_with()
+        record.assert_called_once_with(self.record, (canonical, alias))
 
     def test_comparison_refusal_is_consistency_boundary(self):
         self.on_exit = lambda: os.environ.update(GITHUB_RUN_ID="43")
