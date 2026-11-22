@@ -40,8 +40,12 @@ def _register_close(stack, descriptor):
     def close_on_exit(exc_type, exc_value, traceback):
         try:
             os.close(descriptor)
-        except BaseException:
-            if exc_type is None:
+        except BaseException as error:
+            # Control-flow exceptions outrank ordinary failures, but never
+            # replace an already-active control-flow exception.
+            if exc_type is None or (
+                isinstance(exc_value, Exception) and not isinstance(error, Exception)
+            ):
                 raise
         return False
 

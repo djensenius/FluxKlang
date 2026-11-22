@@ -215,8 +215,11 @@ precedents, **not** measured iOS candidate sizes or evidence an actual pair
 fits. Descriptor-relative no-follow walks refuse symlinks and special files;
 file and directory identities are checked at acquisition and validation
 boundaries. Growth, visible replacement or mutation, read failures, and cleanup
-failures refuse. All registered closes are attempted; an active exception,
-including an interruption, takes precedence over close failures. Asynchronous
+failures refuse. All registered closes are attempted. A control-flow exception
+(such as `KeyboardInterrupt` or `SystemExit`) raised during cleanup takes
+precedence over an ordinary active exception; an already-active control-flow
+exception takes precedence over later cleanup failures. An ordinary active
+exception takes precedence over later ordinary cleanup errors. Asynchronous
 interruption between opening and registering a descriptor or during cleanup
 can still prevent complete cleanup, and a failed close is not retried.
 Transient changes between checks can still escape detection; this is not

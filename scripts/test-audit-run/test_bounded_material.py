@@ -489,6 +489,59 @@ class BoundedMaterialTests(unittest.TestCase):
             self.assertIn("refused: first cleanup failure", stderr.getvalue())
         self.assertEqual(closed, list(reversed(opened)))
 
+    def test_cleanup_control_flow_precedence_and_all_closes(self):
+        for scenario in ("validation-value", "validation-os", "prior-close", "active-control",
+                         "no-active"):
+            for kind in (KeyboardInterrupt, SystemExit, GeneratorExit):
+                with self.subTest(scenario=scenario, kind=kind):
+                    control = kind("control from cleanup")
+                    active = kind("active control")
+                    expected = active if scenario == "active-control" else control
+                    open_fd, close_fd = os.open, os.close
+                    opened, closed = [], []
+
+                    def opening(*args, **kwargs):
+                        fd = open_fd(*args, **kwargs)
+                        opened.append(fd)
+                        return fd
+
+                    def closing(fd):
+                        closed.append(fd)
+                        close_fd(fd)
+                        if len(closed) == 1:
+                            if scenario == "no-active":
+                                raise control
+                            raise OSError("earlier cleanup failure")
+                        if len(closed) == 2:
+                            raise control if scenario != "no-active" else SystemExit("later control")
+                        if len(closed) == 3:
+                            raise KeyboardInterrupt("later control")
+                        if len(closed) == 4:
+                            raise OSError("later cleanup failure")
+
+                    with ExitStack() as stack:
+                        stack.enter_context(mock.patch.object(bounded.os, "open", side_effect=opening))
+                        stack.enter_context(mock.patch.object(bounded.os, "close", side_effect=closing))
+                        if scenario in ("validation-value", "validation-os", "active-control"):
+                            failure = {
+                                "validation-value": ValueError("validation failure"),
+                                "validation-os": OSError("validation failure"),
+                                "active-control": active,
+                            }[scenario]
+                            stack.enter_context(mock.patch.object(
+                                ios_runtime, "provider_verified_checker", side_effect=failure,
+                            ))
+                        with self.assertRaises(kind) as caught:
+                            prepare.main([
+                                "validate", "--bounded-material", "--input", str(self.source),
+                                "--expected-sha256", self.pin, "--profile",
+                                prepare.IOS_PROVIDER_RUNTIME_PROFILE,
+                                "--output", str(self.output), "--intent", str(self.intent),
+                            ])
+                    self.assertIs(caught.exception, expected)
+                    self.assertGreater(len(opened), 4)
+                    self.assertEqual(closed, list(reversed(opened)))
+
 
 if __name__ == "__main__":
     unittest.main()
