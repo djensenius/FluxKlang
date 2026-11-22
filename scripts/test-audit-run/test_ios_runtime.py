@@ -364,6 +364,45 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(len(self.host.commands), 36)
         self.assertFalse(self.host.fds)
 
+    def test_bounded_snapshot_comparison_is_type_sensitive_and_bounded(self):
+        equal = runtime._bounded_snapshot_equal
+        self.assertTrue(equal(({"nested": [1, True, None, b"bytes"]},), (
+            {"nested": [1, True, None, b"bytes"]},
+        )))
+        for first, second in (
+            (1, True), ([1], [True]), ({"n": 1}, {"n": True}),
+            ({1: "x"}, {True: "x"}), ((1,), [1]), (1, 1.0),
+            (b"a", b"b"),
+        ):
+            with self.subTest(first=first, second=second):
+                self.assertFalse(equal(first, second))
+        self.assertTrue(equal([1] * 1023, [1] * 1023))
+        self.assertFalse(equal([1] * 1024, [1] * 1024))
+        self.assertTrue(equal(b"x" * (4 * 1024 * 1024), b"x" * (4 * 1024 * 1024)))
+        self.assertFalse(equal(b"x" * (4 * 1024 * 1024 + 1), b"x" * (4 * 1024 * 1024 + 1)))
+        self.assertTrue(equal(1 << 4095, 1 << 4095))
+        self.assertFalse(equal(1 << 4096, 1 << 4096))
+        nested = "x"
+        for _ in range(16):
+            nested = [nested]
+        self.assertTrue(equal(nested, nested))
+        self.assertFalse(equal([nested], [nested]))
+        cycle = []
+        cycle.append(cycle)
+        self.assertFalse(equal(cycle, cycle))
+
+    def test_bounded_provider_exit_rejects_type_change_legacy_unchanged(self):
+        tool = self.host.nodes[DEVELOPER + "/usr/bin/xcodebuild"]
+        tool.st_ino = 1
+        with runtime.provider_verified_checker():
+            tool.st_ino = True
+        tool.st_ino = 1
+        with mock.patch.object(runtime, "_bounded_command", side_effect=self.host.command):
+            with self.assertRaisesRegex(runtime.Refusal, "observation changed"):
+                with runtime.provider_verified_checker(bounded_cleanup=True):
+                    tool.st_ino = True
+        self.assertFalse(self.host.fds)
+
     def test_provider_validation_rejects_altered_input_and_intent(self):
         record = self.prepare_provider()
         original_input = self.source.read_bytes()

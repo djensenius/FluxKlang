@@ -231,9 +231,14 @@ creates its UUID-linked output and schema-3 intent siblings relative to the
 held parent directory. It caps serialization before publication, handles short
 and zero writes, holds the created descriptors, and invokes the real bounded
 validator. Both provider contexts must complete their exit rechecks and the
-complete fresh observations must agree before success. After the input walk's
-exit check and ancestor closes, a fresh no-follow walk compares the whole path
-chain and held input identity to the original, then rechecks both created paths
+complete fresh observations must agree before success. Each bounded provider
+context compares its complete exit snapshot type-sensitively: at most 1024
+value nodes, depth 16 from the root, and 8,388,608 combined bytes/string
+codepoints including dictionary keys across both snapshots. Integers are at
+most 4096 bits; unsupported values or excess refuse. Legacy provider comparison
+is unchanged. After the input walk's exit check and ancestor closes, a fresh
+no-follow walk compares the whole path chain and held input identity to the
+original, then rechecks both created paths
 relative to the reopened parent. Duplicated original directory descriptors keep
 their identities alive across ancestor closes and the fresh walk; the input,
 original parent, created files and reopened directories also remain held.
@@ -631,7 +636,7 @@ are never deliberately emitted. The separately reviewed manual workflow below
 is included; its presence does not mean it has been dispatched.
 Success is deliberately status-only: exact source, HEAD, runner and toolchain
 identity evidence is not emitted and remains separately unresolved for #893.
-The current runner verifies provider context but does **not** call the preparer's
+The v4 runner verifies provider context but does **not** call the preparer's
 profile acceptance; even a successful provider observation is not acceptance.
 The earlier generic refusal does not establish its cause or profile refusal.
 
@@ -700,6 +705,65 @@ The existing HEAD, loose-object and fixed-source primitives retain their
 documented race and cleanup limitations; this does not establish universal
 replacement detection, custody, authentication, isolation or qualification.
 Same-job code, Python, the provider and toolchain remain trusted assumptions.
+
+#### Explicit bounded producer runner (source-only opt-in)
+
+`observation_runner.py --bounded-prepare-v1 ABSOLUTE_INPUT LOWERCASE_SHA256`
+selects the separate v5 composition; the existing no-argument runner remains
+v4. Unknown, incomplete or extra arguments refuse at the input stage.
+Supply exactly one canonical absolute `.xctestrun` path and its 64-digit
+lowercase SHA-256 pin. There is no candidate enumeration or compile provenance
+claim. This mode is not used by the workflow below and authorizes no dispatch.
+It uses the same bounded context and pack discovery and the exact v4 source set
+plus `prepare.py` and `bounded_material.py` (15 files), with module path and
+dependency identity checks including the preparer's local imports.
+
+Inside a fresh provider context it invokes the actual provider-profile bounded
+preparer and its nested bounded validator. It type-sensitively compares the
+entire validated intent provider observation with the outer observation.
+Provider exit rechecks, the second source/job snapshot, consistency, encoding,
+the final pair check and final SIGINT checks must all succeed before the same
+status-only `{"status":"observed"}` report. Preparer and material acquisition
+errors are closed `prepare`-stage refusals; input shape errors use `input`.
+Diagnostics expose no intent, path, exception or provider output. As in v4,
+stage is a boundary, not a cause, and cleanup can mask an earlier failure.
+Shell history, process arguments, interpreter startup and external logging are
+outside this output boundary and may expose the explicit path or pin.
+An in-progress bounded preparation can finish after SIGINT before the flag is
+checked; the v4 final report-commit semantics are unchanged.
+
+The object limits remain **32 calls and 1 MiB per snapshot, 64 calls total**.
+Synthetic workflow-identity snapshots use exactly 32 calls each (64 total),
+leaving no call margin; without workflow identity they use 27 each (54 total).
+Aggregate object bytes can still refuse. The pair
+limits remain 16 MiB pack and 1 MiB index and v2's 52,953,156-byte total
+Git I/O reservation. Event reads reserve at most 2,097,154 bytes. Six provider
+snapshots run up to 36 fixed commands, each with a 2 MiB plus one detection
+byte output limit and 30-second execution deadline; bounded child cleanup can
+also wait up to 30 seconds. Their combined output reservation is 75,497,508
+bytes and provider file reads reserve 16,649,490 bytes. The producer's four
+bounded material reads reserve 8,388,612 bytes and it writes at most 4 MiB.
+These separate logical I/O limits, descriptor limits described above, and
+deadlines do not guarantee RSS or elapsed time. The existing workflow's
+30-minute timeout is not proven sufficient for this mode, even before other
+overhead; no workflow timeout or behavior is changed here.
+
+The producer never deletes artifacts: even a failure *after* successful
+preparation, such as a later snapshot or final-check refusal, can retain the
+complete pair and possibly sensitive material. Repeated attempts can consume
+unbounded disk space. Authorized disposable-workspace use and separate
+caller-owned cleanup authority are required; this runner does not clean up.
+Creating siblings directly in the checkout root can itself change root
+metadata and trigger the existing pair identity refusal. A status-only success
+is a same-job unauthenticated observation, not custody, source provenance,
+actual hosted acceptance, qualification, or launch authority. Python, loaded
+code, the job and provider remain trusted; transient races remain possible.
+Synthetic tests use only mocked native provider probes, not a real host:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_bounded_observation_runner.py'
+```
 
 #### Manual hosted observation procedure
 
