@@ -6,6 +6,29 @@ import sys
 
 
 _interrupted = False
+_stage = "input"
+_STAGES = {
+    "input": b"input",
+    "project-checks": b"project-checks",
+    "pack-discovery": b"pack-discovery",
+    "snapshot-before": b"snapshot-before",
+    "provider-enter": b"provider-enter",
+    "provider-record": b"provider-record",
+    "provider-exit": b"provider-exit",
+    "snapshot-after": b"snapshot-after",
+    "consistency": b"consistency",
+    "encoding": b"encoding",
+    "final-check": b"final-check",
+}
+
+
+def set_stage(stage):
+    global _stage
+    _stage = stage
+
+
+def _stage_bytes():
+    return _STAGES.get(_stage, b"observation") if type(_stage) is str else b"observation"
 
 
 def _sigint(_signum, _frame):
@@ -19,17 +42,17 @@ def check_interrupted():
 
 
 def main():
-    global _interrupted, integration, acquisition
+    global _interrupted, _stage, integration, acquisition
     _interrupted = False
-    stage = "input"
+    _stage = "input"
     try:
         signal.signal(signal.SIGINT, _sigint)
         import observation_acquisition as acquisition
         import source_snapshot_integration as integration
 
         root = os.environ.get("GITHUB_WORKSPACE")
-        stage = "observation"
         integration.observe_v4(root, sys.modules[__name__])
+        set_stage("final-check")
         check_interrupted()
         output = b'{"status":"observed"}\n'
         status = 0
@@ -47,12 +70,12 @@ def main():
             output = b'{"diagnostic":"Interrupted","status":"failed"}\n'
             status = 130
         elif refused:
-            output = b'{"diagnostic":"Refusal","stage":"observation","status":"refused"}\n'
+            output = (b'{"diagnostic":"Refusal","stage":"' + _stage_bytes()
+                      + b'","status":"refused"}\n')
             status = 1
         else:
-            output = (b'{"diagnostic":"Unexpected failure","stage":"input","status":"failed"}\n'
-                      if stage == "input" else
-                      b'{"diagnostic":"Unexpected failure","stage":"observation","status":"failed"}\n')
+            output = (b'{"diagnostic":"Unexpected failure","stage":"' + _stage_bytes()
+                      + b'","status":"failed"}\n')
             status = 1
     try:
         # This final flag read commits the report/status pair. A later SIGINT

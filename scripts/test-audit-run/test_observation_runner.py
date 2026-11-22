@@ -2,10 +2,12 @@
 
 import json
 import os
+from contextlib import contextmanager
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+import checkout_head
 import git_pack_acquire
 import git_snapshot_reader
 import ios_runtime
@@ -127,7 +129,10 @@ class RunnerTests(unittest.TestCase):
                 with mock.patch.object(git_pack_acquire, "_read", side_effect=read):
                     status, output = self.run_report()
                 self.assertTrue(changed)
-                self.assertEqual((status, output), (1, b'{"diagnostic":"Refusal","stage":"observation","status":"refused"}\n'))
+                stage = b"snapshot-before" if when == "read" else b"snapshot-after"
+                self.assertEqual((status, output),
+                                 (1, b'{"diagnostic":"Refusal","stage":"' + stage
+                                  + b'","status":"refused"}\n'))
                 for path in self.pack_dir.iterdir():
                     path.unlink()
                 self.pack_dir.rmdir()
@@ -149,7 +154,7 @@ class RunnerTests(unittest.TestCase):
         extra.write_bytes(b"secret")
         status, output = self.run_report()
         self.assertEqual(status, 1)
-        self.assertEqual(output, b'{"diagnostic":"Refusal","stage":"observation","status":"refused"}\n')
+        self.assertEqual(output, b'{"diagnostic":"Refusal","stage":"pack-discovery","status":"refused"}\n')
         extra.unlink()
 
     def test_discovery_shapes_and_inclusive_size_boundary(self):
@@ -285,13 +290,120 @@ class RunnerTests(unittest.TestCase):
                 mock.patch.object(os, "write", return_value=0):
             self.assertEqual(runner.main(), 1)
 
+    def test_closed_execution_boundaries(self):
+        cases = (
+            ("input", checkout_head, "_checkout_path", 1),
+            ("project-checks", integration, "_context_module_graph", 1),
+            ("pack-discovery", acquisition, "discover_pair", 1),
+            ("snapshot-before", integration, "_snapshot", 1),
+            ("snapshot-before", acquisition, "read_inputs", 1),
+            ("provider-record", provider_attribution, "_provider", 1),
+            ("snapshot-after", integration, "_snapshot", 2),
+            ("snapshot-after", acquisition, "read_inputs", 2),
+            ("consistency", provider_attribution, "_provider", 2),
+            ("encoding", provider_attribution, "_encode", 1),
+            ("encoding", provider_attribution, "_encode", 2),
+            ("final-check", acquisition, "discover_pair", 8),
+        )
+        for stage, module, name, number in cases:
+            for error_type in (ios_runtime.Refusal, RuntimeError):
+                with self.subTest(stage=stage, name=name, number=number, error=error_type):
+                    original = getattr(module, name)
+                    calls = []
+
+                    def fail_at(*args, **kwargs):
+                        if name == "_encode" and runner._stage != "encoding":
+                            return original(*args, **kwargs)
+                        calls.append(None)
+                        if len(calls) == number:
+                            raise error_type("PRIVATE exception, path and native output")
+                        return original(*args, **kwargs)
+
+                    with mock.patch.object(module, name, side_effect=fail_at):
+                        status, output = self.run_report()
+                    diagnostic = b"Refusal" if error_type is ios_runtime.Refusal else b"Unexpected failure"
+                    result = b"refused" if error_type is ios_runtime.Refusal else b"failed"
+                    self.assertEqual((status, output),
+                                     (1, b'{"diagnostic":"' + diagnostic + b'","stage":"'
+                                      + stage.encode() + b'","status":"' + result + b'"}\n'))
+                    self.assertEqual(len(calls), number)
+
+    def test_provider_boundaries_and_cleanup_masking(self):
+        for failing in ("enter", "record", "exit", "record-and-exit"):
+            for error_type in (ios_runtime.Refusal, RuntimeError):
+                with self.subTest(failing=failing, error=error_type):
+                    @contextmanager
+                    def checker():
+                        if failing == "enter":
+                            raise error_type("PRIVATE entry")
+                        try:
+                            yield tuple(self.record["checker"]["accepted_paths"]), self.record
+                        finally:
+                            if failing in ("exit", "record-and-exit"):
+                                raise error_type("PRIVATE cleanup")
+
+                    def record(*_args):
+                        raise error_type("PRIVATE operation")
+
+                    expected = ("provider-exit" if "exit" in failing else
+                                "provider-enter" if failing == "enter" else "provider-record")
+                    patch_record = (mock.patch.object(provider_attribution, "_provider", side_effect=record)
+                                    if failing.startswith("record") else mock.patch.object(
+                                        provider_attribution, "_provider",
+                                        wraps=provider_attribution._provider))
+                    with mock.patch.object(ios_runtime, "provider_verified_checker", side_effect=checker), \
+                            patch_record:
+                        status, output = self.run_report()
+                    diagnostic = b"Refusal" if error_type is ios_runtime.Refusal else b"Unexpected failure"
+                    result = b"refused" if error_type is ios_runtime.Refusal else b"failed"
+                    self.assertEqual((status, output),
+                                     (1, b'{"diagnostic":"' + diagnostic + b'","stage":"'
+                                      + expected.encode() + b'","status":"' + result + b'"}\n'))
+
+        @contextmanager
+        def cleanup_failure():
+            try:
+                yield tuple(self.record["checker"]["accepted_paths"]), self.record
+            finally:
+                raise RuntimeError("PRIVATE cleanup")
+
+        with mock.patch.object(ios_runtime, "provider_verified_checker", side_effect=cleanup_failure), \
+                mock.patch.object(provider_attribution, "_provider",
+                                  side_effect=ios_runtime.Refusal("PRIVATE operation")):
+            self.assertEqual(self.run_report(),
+                             (1, b'{"diagnostic":"Unexpected failure","stage":"provider-exit","status":"failed"}\n'))
+
+    def test_comparison_refusal_is_consistency_boundary(self):
+        self.on_exit = lambda: os.environ.update(GITHUB_RUN_ID="43")
+        self.assertEqual(self.run_report(),
+                         (1, b'{"diagnostic":"Refusal","stage":"consistency","status":"refused"}\n'))
+
+    def test_unknown_stage_fails_closed(self):
+        class Poisoned:
+            def __hash__(self):
+                raise RuntimeError("PRIVATE hash")
+
+        for invalid in ("PRIVATE stage", Poisoned()):
+            for error in (ios_runtime.Refusal, RuntimeError):
+                def fail(*_args):
+                    runner.set_stage(invalid)
+                    raise error("PRIVATE exception")
+
+                with self.subTest(invalid=type(invalid), error=error), \
+                        mock.patch.object(integration, "observe_v4", side_effect=fail):
+                    diagnostic = b"Refusal" if error is ios_runtime.Refusal else b"Unexpected failure"
+                    result = b"refused" if error is ios_runtime.Refusal else b"failed"
+                    self.assertEqual(self.run_report(),
+                                     (1, b'{"diagnostic":"' + diagnostic
+                                      + b'","stage":"observation","status":"' + result + b'"}\n'))
+
     def test_signal_during_complete_write_preserves_committed_report_and_status(self):
         cases = (
             (None, 0, b'{"status":"observed"}\n'),
             (ios_runtime.Refusal("private"), 1,
-             b'{"diagnostic":"Refusal","stage":"observation","status":"refused"}\n'),
+             b'{"diagnostic":"Refusal","stage":"input","status":"refused"}\n'),
             (ValueError("private"), 1,
-             b'{"diagnostic":"Unexpected failure","stage":"observation","status":"failed"}\n'),
+             b'{"diagnostic":"Unexpected failure","stage":"input","status":"failed"}\n'),
             (KeyboardInterrupt("private"), 130,
              b'{"diagnostic":"Interrupted","status":"failed"}\n'),
         )
