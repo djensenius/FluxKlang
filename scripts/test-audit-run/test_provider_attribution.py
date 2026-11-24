@@ -59,7 +59,7 @@ def provider_record():
             "xcodebuild_path": runtime.DEVELOPER + "/usr/bin/xcodebuild",
             "xcodebuild_file_identity": list(range(8)),
             "xcodebuild_apple_anchor_check": "passed",
-            "simctl_path": runtime.DEVELOPER + "/usr/bin/simctl",
+            "simctl_path": runtime.SIMCTL,
             "simctl_file_identity": list(range(8)),
             "simctl_apple_anchor_check": "passed",
         },
@@ -235,6 +235,7 @@ class AttributionTests(unittest.TestCase):
         for path, item in result["executing_sources"].items():
             self.assertEqual(item["sha256"], hashlib.sha256(self.source_bytes[path]).hexdigest())
         self.assertEqual(result["workflow"]["status"], "observed")
+        self.assertEqual(result["provider_runtime"]["xcode"]["simctl_path"], runtime.SIMCTL)
         self.validate(data)
         self.assertEqual(self.checker.call_count, 2)
         self.assertEqual({call.args[0] for call in self.source.call_args_list},
@@ -389,6 +390,8 @@ class AttributionTests(unittest.TestCase):
             lambda r: r["xcode"].update(simctl_file_identity=[0] * 9),
             lambda r: r["xcode"].update(simctl_file_identity=[True] * 8),
             lambda r: r["xcode"].update(simctl_path="/candidate/bin/simctl"),
+            # The unsigned Xcode wrapper is never the provider-observed simctl.
+            lambda r: r["xcode"].update(simctl_path=runtime.DEVELOPER + "/usr/bin/simctl"),
         ]
         for mutation in mutations:
             with self.subTest(mutation=mutation):

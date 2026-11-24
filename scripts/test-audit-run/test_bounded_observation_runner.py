@@ -505,7 +505,7 @@ class BoundedRunnerTests(unittest.TestCase):
                 self.host.after_command = after_command
                 status, output = self.report()
                 stage = (b"prepare" if case in ("input", "provider") else
-                         b'provider-exit","reason":"xcode-tool-drift' if case == "outer-exit"
+                         b'provider-exit","reason":"provider-tool-drift' if case == "outer-exit"
                          else b"snapshot-after")
                 self.assertEqual((status, output),
                                  (1, b'{"diagnostic":"Refusal","stage":"' + stage
