@@ -928,11 +928,16 @@ concurrency group, a 110-minute job timeout and a finite limit on every step:
 2 minutes for the guard, 5 for checkout, 1 for the workspace, 45 each for
 compile and observe (v5 can spend 36 minutes in bounded provider commands and
 cleanup) and 5 for cleanup. It creates a fresh `mktemp -d` workspace under `RUNNER_TEMP` and
-refuses unless that workspace is canonical, owned, mode 0700 and empty. It then
-runs only `xcodebuild build-for-testing` for `FluxKlangIsolatedTests` on the
-generic iOS Simulator destination, using that workspace as the derived-data
-path. Build output goes to a log inside the workspace; on failure, only its last
-200 lines are printed. The job then runs
+refuses unless that workspace is canonical, owned, mode 0700 and empty. It
+then runs only `xcodebuild build-for-testing` for `FluxKlangIsolatedTests` on
+the concrete destination `platform=iOS Simulator,OS=27.0,name=iPhone 17`,
+using that workspace as the derived-data path. The device is one the runner
+image already has for the pinned iOS 27.0 runtime; nothing creates or boots
+it. A concrete destination is required: with the generic destination, Xcode
+writes no runtime MainThreadChecker into either target's
+`TestingEnvironmentVariables`, so the provider profile refuses with
+`checker-field-missing` (run 45401463059). Build output goes to a log inside
+the workspace; on failure, only its last 200 lines are printed. The job then runs
 `observation_runner.py --provider-products-v1 WORKSPACE/Build/Products` once,
 and the job result is that runner's exit status. An always-run final step
 removes only the recorded workspace. A cleanup failure also fails the job.

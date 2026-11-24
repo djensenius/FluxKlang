@@ -189,7 +189,8 @@ class ProductsObservationWorkflowTests(unittest.TestCase):
                              r"(?=\s+CODE_SIGNING)", build)
         self.assertEqual(actions, ["build-for-testing"])
         self.assertEqual(build.count("/usr/bin/xcodebuild -project "), 2)
-        self.assertEqual(build.count("-destination 'generic/platform=iOS Simulator'"), 1)
+        self.assertEqual(build.count("-destination 'platform=iOS Simulator,OS=27.0,name=iPhone 17'"), 1)
+        self.assertNotIn("generic/platform", build)
         self.assertEqual(build.count('-derivedDataPath "$WORKSPACE_PATH"'), 2)
         self.assertEqual(build.count("-scheme FluxKlangIsolatedTests"), 2)
         # Two invocations plus the selected-Xcode presence check.
@@ -358,7 +359,7 @@ class ProductsObservationWorkflowTests(unittest.TestCase):
                      "-resolvePackageDependencies", "-disableAutomaticPackageResolution",
                      "-derivedDataPath", str(workspace)],
                     ["-project", "FluxKlang.xcodeproj", "-scheme", "FluxKlangIsolatedTests",
-                     "-destination", "generic/platform=iOS Simulator",
+                     "-destination", "platform=iOS Simulator,OS=27.0,name=iPhone 17",
                      "-disableAutomaticPackageResolution", "-derivedDataPath", str(workspace),
                      "build-for-testing", "CODE_SIGNING_ALLOWED=NO", "ARCHS=arm64"],
                 ])
