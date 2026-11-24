@@ -743,9 +743,11 @@ class PrepareReasonAllowlistTests(unittest.TestCase):
 
     def refusal_messages(self, name, helper):
         """Exact literals plus f-string (prefix, suffix) pairs passed to Refusal/helper."""
-        exact, formatted = set(), set()
+        exact, formatted, seen = set(), set(), set()
         tree = self.module_tree(name)
         for function in ast.walk(tree):
+            if isinstance(function, ast.FunctionDef) and function.name == helper:
+                seen.update(id(node) for node in ast.walk(function))
             if not isinstance(function, ast.FunctionDef) or function.name == helper:
                 continue  # The helper forwards its already-checked message.
             assigned = {}
@@ -764,6 +766,7 @@ class PrepareReasonAllowlistTests(unittest.TestCase):
                     message = node.args[1]
                 else:
                     continue
+                seen.add(id(node))
                 if isinstance(message, ast.Name):
                     message = assigned[message.id]
                 values = ([message.body, message.orelse] if isinstance(message, ast.IfExp)
@@ -778,6 +781,14 @@ class PrepareReasonAllowlistTests(unittest.TestCase):
                     prefix = parts[0].value if isinstance(parts[0], ast.Constant) else ""
                     suffix = parts[-1].value if isinstance(parts[-1], ast.Constant) else ""
                     formatted.add((prefix, suffix))
+        # Refusals outside plain functions or spelled as module.Refusal would escape the scan.
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                callee = node.func
+                spelled = (callee.id if isinstance(callee, ast.Name)
+                           else callee.attr if isinstance(callee, ast.Attribute) else None)
+                if spelled in ("Refusal", helper):
+                    self.assertIn(id(node), seen, ast.unparse(node))
         return exact, formatted
 
     def test_every_prepare_refusal_message_has_a_reason_code(self):
