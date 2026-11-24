@@ -1,0 +1,139 @@
+name: iOS provider Products observation (no launch)
+
+# Separately reviewed, manual-only (#893). Compiles iOS build-for-testing
+# products into a fresh disposable workspace, then runs the provider-trusted
+# Products mode once. A lower-assurance observation only; it establishes no
+# provenance, isolation or #60 qualification. See scripts/test-audit-run/README.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_head:
+        description: Full 40-character lowercase main head SHA that was reviewed
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-provider-products-observation
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -e {0}
+
+env:
+  BASH_ENV: /dev/null
+  ENV: /dev/null
+  PATH: /usr/bin:/bin
+
+jobs:
+  observe:
+    runs-on: xcode-27
+    # 45-minute compile step (observed hosted iOS build-for-testing took 13-19
+    # minutes after a warm macOS build; a cold derived-data path needs margin)
+    # plus a 45-minute observe step (v5 runs at most 36 fixed 30-second commands,
+    # each with up to 30 seconds of bounded cleanup: 36 minutes, plus margin),
+    # plus 10 minutes for guard, checkout, workspace creation and cleanup.
+    timeout-minutes: 100
+    steps:
+      - name: Require the reviewed dispatch context
+        env:
+          CHECK_REPOSITORY: ${{ github.repository }}
+          CHECK_EVENT: ${{ github.event_name }}
+          CHECK_REF: ${{ github.ref }}
+          CHECK_SHA: ${{ github.sha }}
+          CHECK_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          CHECK_REVIEWED_HEAD: ${{ inputs.reviewed_head }}
+        run: |
+          [[ "$CHECK_REPOSITORY" == 'djensenius/FluxKlang' &&
+             "$CHECK_EVENT" == 'workflow_dispatch' &&
+             "$CHECK_REF" == 'refs/heads/main' &&
+             "$CHECK_SHA" =~ ^[0-9a-f]{40}$ &&
+             "$CHECK_WORKFLOW_SHA" == "$CHECK_SHA" &&
+             "$CHECK_REVIEWED_HEAD" =~ ^[0-9a-f]{40}$ &&
+             "$CHECK_REVIEWED_HEAD" == "$CHECK_SHA" ]] || exit 1
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (peeled commit)
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Create the fresh disposable workspace
+        id: workspace
+        timeout-minutes: 1
+        run: |
+          [[ "$RUNNER_TEMP" == /* && -d "$RUNNER_TEMP" && ! -L "$RUNNER_TEMP" ]] || exit 1
+          workspace=$(/usr/bin/mktemp -d "$RUNNER_TEMP/ios-products-observation.XXXXXXXX")
+          [[ "${workspace%/*}" == "$RUNNER_TEMP" &&
+             "${workspace##*/}" =~ ^ios-products-observation\.[A-Za-z0-9]{8}$ ]] || exit 1
+          # Recorded before the remaining checks so cleanup removes it on refusal.
+          echo "path=$workspace" >> "$GITHUB_OUTPUT"
+          [[ -d "$workspace" && ! -L "$workspace" ]] || exit 1
+          [[ "$(cd -- "$workspace" && /bin/pwd -P)" == "$workspace" ]] || exit 1
+          [[ "$(/usr/bin/stat -f %u:%Lp "$workspace")" == "$(/usr/bin/id -u):700" ]] || exit 1
+          [[ -z "$(/bin/ls -A -- "$workspace")" ]] || exit 1
+
+      - name: Compile iOS Products for testing only (no launch)
+        # build-for-testing only, generic simulator destination, as apple-build.yml.
+        timeout-minutes: 45
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+          WORKSPACE_PATH: ${{ steps.workspace.outputs.path }}
+        run: |
+          [[ -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ]] || exit 1
+          [[ -n "$WORKSPACE_PATH" && -d "$WORKSPACE_PATH" && ! -L "$WORKSPACE_PATH" ]] || exit 1
+          log="$WORKSPACE_PATH/build.log"
+          [[ ! -e "$log" && ! -L "$log" ]] || exit 1
+          status=0
+          {
+            /usr/bin/xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangIsolatedTests \
+              -resolvePackageDependencies -disableAutomaticPackageResolution \
+              -derivedDataPath "$WORKSPACE_PATH" &&
+            /usr/bin/xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangIsolatedTests \
+              -destination 'generic/platform=iOS Simulator' \
+              -disableAutomaticPackageResolution -derivedDataPath "$WORKSPACE_PATH" \
+              build-for-testing CODE_SIGNING_ALLOWED=NO ARCHS=arm64
+          } > "$log" 2>&1 < /dev/null || status=$?
+          if [[ "$status" -ne 0 ]]; then
+            echo "::error::compile exited $status; last 200 log lines follow"
+            /usr/bin/tail -n 200 -- "$log"
+            exit "$status"
+          fi
+          /usr/bin/git --no-pager diff --quiet --exit-code -- '*Package.resolved' || exit 1
+
+      - name: Observe Products once (no launch)
+        timeout-minutes: 45
+        env:
+          PRODUCTS_ROOT: ${{ steps.workspace.outputs.path }}/Build/Products
+        run: |
+          exec /usr/bin/env -i \
+            PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH-}" \
+            RUNNER_NAME="${RUNNER_NAME-}" RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" RUNNER_ARCH="${RUNNER_ARCH-}" RUNNER_TEMP="${RUNNER_TEMP-}" \
+            /usr/bin/python3 -B -S scripts/test-audit-run/observation_runner.py \
+            --provider-products-v1 "$PRODUCTS_ROOT"
+
+      - name: Remove only the recorded workspace
+        if: always()
+        timeout-minutes: 5
+        env:
+          WORKSPACE_PATH: ${{ steps.workspace.outputs.path }}
+        run: |
+          [[ -n "$WORKSPACE_PATH" ]] || exit 0
+          [[ "$RUNNER_TEMP" == /* && "${WORKSPACE_PATH%/*}" == "$RUNNER_TEMP" &&
+             "${WORKSPACE_PATH##*/}" =~ ^ios-products-observation\.[A-Za-z0-9]{8}$ ]] || exit 1
+          [[ -d "$WORKSPACE_PATH" && ! -L "$WORKSPACE_PATH" ]] || exit 1
+          /usr/bin/find "$WORKSPACE_PATH" -type d ! -perm -u+w -exec /bin/chmod u+w {} +
+          /bin/rm -rf -- "$WORKSPACE_PATH"
+          [[ ! -e "$WORKSPACE_PATH" && ! -L "$WORKSPACE_PATH" ]] || exit 1
