@@ -730,5 +730,112 @@ class ProviderReasonAllowlistTests(unittest.TestCase):
         self.assertEqual(sorted(set(runner._PROVIDER_REASONS) - messages), [])
 
 
+
+class PrepareReasonAllowlistTests(unittest.TestCase):
+    @staticmethod
+    def module_tree(name):
+        import bounded_material
+        import prepare
+
+        module = {"prepare": prepare, "bounded_material": bounded_material,
+                  "integration": integration}[name]
+        return ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+
+    def refusal_messages(self, name, helper):
+        """Exact literals plus f-string (prefix, suffix) pairs passed to Refusal/helper."""
+        exact, formatted = set(), set()
+        tree = self.module_tree(name)
+        for function in ast.walk(tree):
+            if not isinstance(function, ast.FunctionDef) or function.name == helper:
+                continue  # The helper forwards its already-checked message.
+            assigned = {}
+            for node in ast.walk(function):
+                if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name)):
+                    assigned[node.targets[0].id] = node.value
+            for node in ast.walk(function):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                    continue
+                if node.func.id == "Refusal":
+                    self.assertEqual(len(node.args), 1, function.name)
+                    message = node.args[0]
+                elif helper is not None and node.func.id == helper:
+                    self.assertEqual(len(node.args), 2, function.name)
+                    message = node.args[1]
+                else:
+                    continue
+                if isinstance(message, ast.Name):
+                    message = assigned[message.id]
+                values = ([message.body, message.orelse] if isinstance(message, ast.IfExp)
+                          else [message])
+                for value in values:
+                    if isinstance(value, ast.Constant):
+                        self.assertIs(type(value.value), str, function.name)
+                        exact.add(value.value)
+                        continue
+                    self.assertIsInstance(value, ast.JoinedStr, function.name)
+                    parts = value.values
+                    prefix = parts[0].value if isinstance(parts[0], ast.Constant) else ""
+                    suffix = parts[-1].value if isinstance(parts[-1], ast.Constant) else ""
+                    formatted.add((prefix, suffix))
+        return exact, formatted
+
+    def test_every_prepare_refusal_message_has_a_reason_code(self):
+        exact, formatted = self.refusal_messages("prepare", None)
+        self.assertIn("input SHA256 mismatch", exact)
+        self.assertEqual(sorted(exact ^ set(runner._PREPARE_REASONS)), [])
+        prefixes = {prefix for prefix, _suffix in formatted if prefix}
+        suffixes = {suffix for prefix, suffix in formatted if not prefix}
+        self.assertEqual(sorted(prefixes ^ {prefix for prefix, _ in runner._PREPARE_PREFIXES}),
+                         [])
+        self.assertEqual(sorted(suffixes ^ {suffix for suffix, _ in runner._REQUIRE_EQUAL_KINDS}),
+                         [])
+        for message in exact:
+            self.assertFalse(any(message.startswith(prefix) for prefix in prefixes), message)
+
+    def test_every_bounded_material_refusal_message_has_a_reason_code(self):
+        exact, formatted = self.refusal_messages("bounded_material", "_require")
+        self.assertIn("material byte limit", exact)
+        self.assertEqual(formatted, set())
+        self.assertEqual(sorted(exact ^ set(runner._MATERIAL_REASONS)), [])
+
+    def test_require_equal_locations_are_the_closed_literals(self):
+        locations = set()
+        for name in ("prepare", "integration"):
+            for node in ast.walk(self.module_tree(name)):
+                if not isinstance(node, ast.Call):
+                    continue
+                function = node.func
+                called = (function.attr if isinstance(function, ast.Attribute) else
+                          function.id if isinstance(function, ast.Name) else None)
+                if called != "require_equal":
+                    continue
+                self.assertEqual(len(node.args), 3)
+                if isinstance(node.args[2], ast.JoinedStr):
+                    continue  # Recursive nested locations keep a literal root.
+                self.assertIsInstance(node.args[2], ast.Constant)
+                locations.add(node.args[2].value)
+        self.assertIn("provider observation", locations)
+        self.assertEqual(sorted(locations ^ set(runner._REQUIRE_EQUAL_LOCATIONS)), [])
+
+    def test_all_reason_codes_are_unique_kebab_ascii(self):
+        codes = list(runner._PROVIDER_REASONS.values())
+        codes += [code for _cause, code in runner._UNAVAILABLE_CAUSES]
+        codes += [b"prepare-provider-" + code for code in codes]
+        codes += list(runner._PREPARE_REASONS.values())
+        codes += [code for _prefix, code in runner._PREPARE_PREFIXES]
+        for _suffix, kind in runner._REQUIRE_EQUAL_KINDS:
+            codes.append(b"require-equal-" + kind)
+            codes += [location + b"-mismatch-" + kind
+                      for location in runner._REQUIRE_EQUAL_LOCATIONS.values()]
+        codes += list(runner._MATERIAL_REASONS.values())
+        codes += [code for _cause, code in runner._PREPARE_UNAVAILABLE_CAUSES]
+        self.assertEqual(len(codes), len(set(codes)))
+        for code in codes:
+            self.assertIs(type(code), bytes)
+            self.assertRegex(code.decode("ascii"), r"\A[a-z0-9]+(-[a-z0-9]+)*\Z")
+            self.assertNotIn(b"changed", code)
+
+
 if __name__ == "__main__":
     unittest.main()
