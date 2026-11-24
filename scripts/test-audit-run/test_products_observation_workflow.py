@@ -89,7 +89,7 @@ class ProductsObservationWorkflowTests(unittest.TestCase):
             names.append(match.group(1) if match else None)
         self.assertEqual(names, STEP_NAMES)
         self.assertIn("      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
-                      " # v6.0.3 (peeled commit)\n        with:\n"
+                      " # v6.0.3 (peeled commit)\n        timeout-minutes: 5\n        with:\n"
                       "          ref: ${{ github.sha }}\n          fetch-depth: 1\n"
                       "          persist-credentials: false\n", self.steps[1])
         self.assertEqual(self.text.count("uses:"), 1)
@@ -131,7 +131,8 @@ class ProductsObservationWorkflowTests(unittest.TestCase):
                       "  cancel-in-progress: false\n\n", self.text)
         for forbidden in ("secrets", "GITHUB_TOKEN", "github.token", "upload-artifact",
                           "download-artifact", "actions/cache", "continue-on-error",
-                          "retry", "rerun", "re-run", "attempt <", "for attempt", "while "):
+                          "retry", "rerun", "re-run", "attempt <", "for attempt", "while ",
+                          "set +e", "|| true", "|| :", "pipefail", "| tee", "set +o"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden.lower(), self.text.lower())
         self.assertEqual(self.text.count("if:"), 1)
@@ -139,21 +140,28 @@ class ProductsObservationWorkflowTests(unittest.TestCase):
 
     # Invariant 4: finite job and step timeouts.
     def test_finite_timeouts(self):
-        self.assertEqual(re.findall(r"\n    timeout-minutes: (\d+)\n", self.text), ["100"])
+        self.assertEqual(re.findall(r"\n    timeout-minutes: (\d+)\n", self.text), ["110"])
         timeouts = {}
         for name, step in self.by_name.items():
             found = re.findall(r"\n        timeout-minutes: (\d+)\n", step)
             if found:
                 timeouts[name] = int(found[0])
         self.assertEqual(timeouts, {
+            "Require the reviewed dispatch context": 2,
             "Create the fresh disposable workspace": 1,
             "Compile iOS Products for testing only (no launch)": 45,
             "Observe Products once (no launch)": 45,
             "Remove only the recorded workspace": 5,
         })
-        # The job covers both long steps and leaves room for the always-run cleanup.
+        # Every step, including the unnamed checkout, has a finite limit.
+        checkout = re.findall(r"\n        timeout-minutes: (\d+)\n", self.steps[1])
+        self.assertEqual(checkout, ["5"])
+        for step in self.steps:
+            with self.subTest(step=step.splitlines()[0]):
+                self.assertRegex(step, r"\n        timeout-minutes: \d+\n")
+        # The job covers every step limit with headroom for the always-run cleanup.
         job = int(re.findall(r"\n    timeout-minutes: (\d+)\n", self.text)[0])
-        self.assertGreater(job, sum(timeouts.values()))
+        self.assertGreaterEqual(job, sum(timeouts.values()) + int(checkout[0]) + 5)
         self.assertIn("# 45-minute compile step", self.text)
         self.assertIn("36 fixed 30-second commands", self.text)
 
@@ -250,6 +258,48 @@ class ProductsObservationWorkflowTests(unittest.TestCase):
                                             "GITHUB_OUTPUT": str(output)})
                 self.assertNotEqual(result.returncode, 0)
         self.assertEqual(list((temp / "real").iterdir()), [])
+
+    def test_workspace_refuses_non_empty_or_loose_mode_but_records_it(self):
+        create = run_block(self.by_name["Create the fresh disposable workspace"])
+        self.assertEqual(create.count("/usr/bin/mktemp "), 1)
+        for case in ("non-empty", "mode-0755"):
+            with self.subTest(case=case):
+                temp = self.make_temp()
+                output = temp / "output"
+                workspace = temp / "ios-products-observation.ABCDEFGH"
+                prepare = (f"/bin/mkdir -m 700 {workspace}; echo x > {workspace}/stale"
+                           if case == "non-empty" else f"/bin/mkdir -m 755 {workspace}")
+                fake_mktemp = temp / "mktemp"
+                fake_mktemp.write_text(f"#!/bin/sh\n{prepare}\necho {workspace}\n")
+                fake_mktemp.chmod(0o700)
+                script = create.replace("/usr/bin/mktemp ", f"{fake_mktemp} ")
+                result = self.bash(script, {"PATH": "/usr/bin:/bin", "RUNNER_TEMP": str(temp),
+                                            "GITHUB_OUTPUT": str(output)})
+                self.assertEqual(result.returncode, 1)
+                # Recorded so the always-run cleanup still removes it.
+                self.assertEqual(output.read_text(), f"path={workspace}\n")
+
+    def test_compile_refuses_package_resolution_drift(self):
+        build = run_block(self.by_name["Compile iOS Products for testing only (no launch)"])
+        temp = self.make_temp()
+        developer = temp / "Developer"
+        (developer / "usr/bin").mkdir(parents=True)
+        fake_xcodebuild = developer / "usr/bin/xcodebuild"
+        fake_xcodebuild.write_text("#!/bin/sh\nexit 0\n")
+        fake_xcodebuild.chmod(0o700)
+        fake_git = temp / "git"
+        git_args = temp / "git-args"
+        fake_git.write_text(f'#!/bin/sh\necho "$@" > {git_args}\nexit 1\n')
+        fake_git.chmod(0o700)
+        script = (build.replace("/usr/bin/xcodebuild -project", f"{fake_xcodebuild} -project")
+                  .replace("/usr/bin/git", str(fake_git)))
+        workspace = temp / "ios-products-observation.DRIFTING"
+        workspace.mkdir()
+        result = self.bash(script, {"PATH": "/usr/bin:/bin", "DEVELOPER_DIR": str(developer),
+                                    "WORKSPACE_PATH": str(workspace)})
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(git_args.read_text(),
+                         "--no-pager diff --quiet --exit-code -- *Package.resolved\n")
 
     # Invariants 6 and 7: build output is logged inside the workspace, the
     # tail is bounded, and the compile status is preserved.

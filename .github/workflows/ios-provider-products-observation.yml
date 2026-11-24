@@ -36,10 +36,13 @@ jobs:
     # minutes after a warm macOS build; a cold derived-data path needs margin)
     # plus a 45-minute observe step (v5 runs at most 36 fixed 30-second commands,
     # each with up to 30 seconds of bounded cleanup: 36 minutes, plus margin),
-    # plus 10 minutes for guard, checkout, workspace creation and cleanup.
-    timeout-minutes: 100
+    # plus 2 + 5 + 1 + 5 minutes for guard, checkout, workspace creation and
+    # cleanup (103 minutes of step limits), plus headroom so the always-run
+    # cleanup is not cut off by the job limit.
+    timeout-minutes: 110
     steps:
       - name: Require the reviewed dispatch context
+        timeout-minutes: 2
         env:
           CHECK_REPOSITORY: ${{ github.repository }}
           CHECK_EVENT: ${{ github.event_name }}
@@ -57,6 +60,7 @@ jobs:
              "$CHECK_REVIEWED_HEAD" == "$CHECK_SHA" ]] || exit 1
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (peeled commit)
+        timeout-minutes: 5
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -70,7 +74,8 @@ jobs:
           workspace=$(/usr/bin/mktemp -d "$RUNNER_TEMP/ios-products-observation.XXXXXXXX")
           [[ "${workspace%/*}" == "$RUNNER_TEMP" &&
              "${workspace##*/}" =~ ^ios-products-observation\.[A-Za-z0-9]{8}$ ]] || exit 1
-          # Recorded before the remaining checks so cleanup removes it on refusal.
+          # Recorded before the checks below so cleanup removes it if they refuse;
+          # a refusal above leaves at most an empty directory in the job-scoped RUNNER_TEMP.
           echo "path=$workspace" >> "$GITHUB_OUTPUT"
           [[ -d "$workspace" && ! -L "$workspace" ]] || exit 1
           [[ "$(cd -- "$workspace" && /bin/pwd -P)" == "$workspace" ]] || exit 1
