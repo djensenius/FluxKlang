@@ -98,6 +98,9 @@ class ProductsObservationWorkflowTests(unittest.TestCase):
                       "          ref: ${{ github.sha }}\n          fetch-depth: 1\n"
                       "          persist-credentials: false\n", self.steps[1])
         self.assertEqual(self.text.count("uses:"), 1)
+        # Only the checkout step carries the Git override (not workflow/job env).
+        self.assertEqual(self.text.count("GIT_CONFIG"), 3)
+        self.assertEqual(self.text.count("pack.writeReverseIndex"), 1)
         for key in ("GIT_CONFIG", "pack.writeReverseIndex"):
             self.assertNotIn(key, "".join(self.steps[:1] + self.steps[2:]))
         guard = self.steps[0]
