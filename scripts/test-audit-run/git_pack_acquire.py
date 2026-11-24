@@ -64,6 +64,12 @@ def acquire_validated_pair_v2(checkout_root, pack_id):
     return tuple.__new__(_ValidatedPair, (tuple(sorted(objects.items())),))
 
 
+def acquire_validated_pair_v3(checkout_root, pack_id):
+    """Like acquire_validated_pair, with the fixed Products-path V3 profile."""
+    _, _, objects = _acquire(checkout_root, pack_id, git_pack._Profile.V3)
+    return tuple.__new__(_ValidatedPair, (tuple(sorted(objects.items())),))
+
+
 def _acquire(checkout_root, pack_id, profile=git_pack._Profile.V1):
     pieces = checkout_head._checkout_path(checkout_root)
     expected = checkout_head._expected_oid(pack_id)

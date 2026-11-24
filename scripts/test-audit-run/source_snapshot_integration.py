@@ -356,13 +356,15 @@ def _observe_runner(checkout_root, runner, material=None):
         runner.set_stage("project-checks")
     runner.check_interrupted()
     runner.set_stage("pack-discovery")
-    pair = observation_acquisition.discover_pair(checkout_root)
+    # Only the v5/Products material path uses the larger V3 pack profile.
+    profile = git_pack._Profile.V2 if material is None else git_pack._Profile.V3
+    pair = observation_acquisition.discover_pair(checkout_root, profile)
 
     def check_pair():
         runner.check_interrupted()
         graph()
         paths(checkout_root)
-        ios_runtime.require(observation_acquisition.discover_pair(checkout_root) == pair,
+        ios_runtime.require(observation_acquisition.discover_pair(checkout_root, profile) == pair,
                             "selected pair changed")
         runner.check_interrupted()
 
@@ -391,7 +393,8 @@ def _observe_runner(checkout_root, runner, material=None):
         runner.check_interrupted()
 
     result = _observe(checkout_root, pair[0], context_reader,
-                      git_snapshot_reader.InvocationV2,
+                      git_snapshot_reader.InvocationV2 if material is None
+                      else git_snapshot_reader.InvocationV3,
                       SCHEMA_V4 if material is None else SCHEMA_V5, sources,
                       runner.set_stage, None if material is None else produce)
     runner.set_stage("final-check")

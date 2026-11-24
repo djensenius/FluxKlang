@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 import checkout_head
+import git_pack
 import git_pack_acquire
 import git_snapshot_reader
 import ios_runtime
@@ -93,11 +94,19 @@ class RunnerTests(unittest.TestCase):
         with mock.patch.object(integration, "_observe_fixed_sources", side_effect=sources), \
                 mock.patch.object(acquisition, "read_inputs", wraps=acquisition.read_inputs) as inputs, \
                 mock.patch.object(git_pack_acquire, "acquire_validated_pair_v2",
-                                  wraps=git_pack_acquire.acquire_validated_pair_v2) as pairs:
+                                  wraps=git_pack_acquire.acquire_validated_pair_v2) as pairs, \
+                mock.patch.object(git_pack_acquire, "acquire_validated_pair_v3") as v3_pairs, \
+                mock.patch.object(acquisition, "discover_pair",
+                                  wraps=acquisition.discover_pair) as discover:
             status, output = self.run_report()
         self.assertEqual((status, output), (0, b'{"status":"observed"}\n'))
         self.assertEqual(inputs.call_count, 2)
         self.assertEqual(pairs.call_count, 2)
+        # The v4 path keeps the V2 pack profile; only v5/Products uses V3.
+        v3_pairs.assert_not_called()
+        self.assertTrue(discover.call_args_list)
+        self.assertTrue(all(call.args[1:] == (git_pack._Profile.V2,)
+                            for call in discover.call_args_list))
         self.assertEqual(counts, [30, 30])
         for target, limit in ((provider_attribution, "OBJECT_COUNT"),
                               (git_snapshot_reader, "OBJECT_CALL_LIMIT")):
@@ -184,6 +193,17 @@ class RunnerTests(unittest.TestCase):
         with pack.open("ab") as stream:
             stream.write(b"x")
         self.assertEqual(self.run_report()[0], 1)
+        # Only an explicit V3 (v5/Products) discovery admits a larger pack.
+        self.assertEqual(acquisition.discover_pair(str(self.root), git_pack._Profile.V3)[0],
+                         self.pack_id)
+        with pack.open("ab") as stream:
+            stream.truncate(32 * 1024 * 1024)
+        self.assertEqual(acquisition.discover_pair(str(self.root), git_pack._Profile.V3)[0],
+                         self.pack_id)
+        with pack.open("ab") as stream:
+            stream.write(b"x")
+        with self.assertRaises(ios_runtime.Refusal):
+            acquisition.discover_pair(str(self.root), git_pack._Profile.V3)
         pack.write_bytes(pack_data)
 
     def test_v4_sources_and_v1_v2_v3_validation_separation(self):

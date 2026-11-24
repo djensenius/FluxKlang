@@ -671,7 +671,8 @@ the detached HEAD under the existing HEAD observer.
 
 Each discovery accepts exactly one regular `pack-<sha>.pack` and matching
 `.idx`, with no other entries, symlinks or special files, and inclusive 16 MiB
-pack and 1 MiB index limits. Names and metadata are checked before and after
+pack and 1 MiB index limits (the v5 and Products modes use the V3 32 MiB pack
+limit described below). Names and metadata are checked before and after
 the directory scan. The selected pair and its root, directory and entry
 metadata are rechecked before and after each snapshot and after composition;
 a persistent directory or pair replacement refuses, including between snapshots.
@@ -735,9 +736,12 @@ checked; the v4 final report-commit semantics are unchanged.
 The object limits remain **32 calls and 1 MiB per snapshot, 64 calls total**.
 Synthetic workflow-identity snapshots use exactly 32 calls each (64 total),
 leaving no call margin; without workflow identity they use 27 each (54 total).
-Aggregate object bytes can still refuse. The pair
-limits remain 16 MiB pack and 1 MiB index and v2's 52,953,156-byte total
-Git I/O reservation. Event reads reserve at most 2,097,154 bytes. Six provider
+Aggregate object bytes can still refuse. This v5 mode (and the Products mode
+below) discovers and parses its pair with the separate V3 pack profile: 32 MiB
+pack and 1 MiB index, with a 69,206,020-byte total pair I/O reservation plus
+the unchanged 17,301,568-byte loose reservation. The v4 mode keeps 16 MiB pack,
+1 MiB index and v2's 52,953,156-byte total Git I/O reservation. Event reads
+reserve at most 2,097,154 bytes. Six provider
 snapshots run up to 36 fixed commands, each with a 2 MiB plus one detection
 byte output limit and 30-second execution deadline; bounded child cleanup can
 also wait up to 30 seconds. Their combined output reservation is 75,497,508
@@ -1027,6 +1031,24 @@ availability, unexpected entries, identity and acceptance here are unknown.
 These synthetic parser tests do not establish hosted acceptance, qualification,
 provenance or hardware behavior, and do not authorize hosted dispatch.
 
+A separate internal V3 profile (#893) is used only by the v5 explicit-material
+and Products runner modes, via `observation_acquisition.discover_pair(root,
+profile)`, `git_pack_acquire.acquire_validated_pair_v3` and
+`git_snapshot_reader.InvocationV3`. V1, V2, v4 and all other callers keep their
+bounds. A depth-1 hosted-equivalent checkout of `ba2d5b4d` refused under V2
+("object size limit"): its pack was 9,724,838 bytes with a 79,752-byte index,
+2,810 objects, a 1,847,740-byte largest object, 30,795,796 inflated entry bytes,
+31,516,826 reconstructed bytes and 83 small deltas. V3 therefore allows, with
+roughly 2–3x headroom: a 32 MiB pack, 8,192 objects (an index of about 230 KB,
+still under the unchanged 1 MiB index cap), 4 MiB per non-delta object, delta
+program, delta base and delta output, one delta operation per 4 output bytes
+(1,048,576), and 96 MiB each of aggregate inflated and reconstructed bytes.
+Depth, reader call/parse limits and every structural, checksum, identity, CRC,
+delta and offset check are unchanged. Logical buffers per V3 parse are about
+225 MiB (pack, index, inflated entries and results) plus overhead and a
+transient acquisition copy of the pack; this is not a hard RSS bound. A larger
+checkout can still refuse closed.
+
 `git_pack.BoundedReader` is an optional synchronous, in-memory adapter for one
 `observe` or `validate` invocation, encompassing both envelope snapshots. Its
 `read(pack_bytes, index_bytes, oid)` takes fresh, explicitly supplied bytes on
@@ -1071,6 +1093,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_git_pack.py'
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_git_pack_v2.py'
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_git_pack_v3.py'
 ```
 
 `git_pack_acquire.acquire_pair(checkout_root, pack_id)` separately returns fresh
