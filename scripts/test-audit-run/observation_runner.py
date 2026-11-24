@@ -37,6 +37,7 @@ _PROVIDER_REASONS = {
     "duplicate inventory key": b"inventory-duplicate-key",
     "provider-trusted runtime requires Darwin arm64": b"platform",
     "fixed Xcode tool is not a regular file": b"xcode-tool-shape",
+    "fixed CoreSimulator simctl is not a regular file": b"simctl-tool-shape",
     "unreviewed Xcode version/build observation": b"xcode-version",
     "malformed Xcode build observation": b"xcode-build-malformed",
     "unreviewed simulator SDK observation": b"simulator-sdk",

@@ -69,6 +69,7 @@ class Host:
         self.add("/var", symlink=True)
         for tool in ("xcodebuild", "simctl"):
             self.add(DEVELOPER + "/usr/bin/" + tool, b"mock Apple tool")
+        self.add(runtime.SIMCTL, b"mock signed CoreSimulator simctl")
         self.bytes = struct.pack("<II", 0xFEEDFACF, 0x0100000C) + bytes(338880 - 8)
         self.add(LIBRARY, self.bytes)
         self.add(PLIST, plistlib.dumps({
@@ -158,12 +159,17 @@ class Host:
         elif argv == [DEVELOPER + "/usr/bin/xcodebuild", "-version", "-sdk",
                       "iphonesimulator", "SDKVersion"]:
             result = "27.1"
-        elif argv == [DEVELOPER + "/usr/bin/simctl", "list", "runtimes", "--json"]:
+        elif argv in ([DEVELOPER + "/usr/bin/simctl", "list", "runtimes", "--json"],
+                      [runtime.SIMCTL, "list", "runtimes", "--json"]):
             result = json.dumps({"runtimes": self.runtimes})
         elif argv in [
             ["/usr/bin/codesign", "--verify", "--strict", "-R", "=anchor apple",
              DEVELOPER + "/usr/bin/" + tool] for tool in ("xcodebuild", "simctl")
         ]:
+            result = ""
+        elif argv == ["/usr/bin/codesign", "--verify", "--strict", "-R",
+                      '=identifier "com.apple.CoreSimulator.simctl" and anchor apple',
+                      runtime.SIMCTL]:
             result = ""
         elif argv == ["/usr/bin/codesign", "--verify", "--strict", "-R",
                       '=identifier "com.apple.libMainThreadChecker" and anchor apple', LIBRARY]:
@@ -314,6 +320,64 @@ class RuntimeTests(unittest.TestCase):
             ("/usr/bin/codesign", "--verify", "--strict", "-R", runtime.REQUIREMENT, LIBRARY),
             commands,
         )
+        self.assertFalse(self.host.fds)
+
+    def test_provider_invokes_only_signed_coresimulator_simctl_never_wrapper(self):
+        wrapper = DEVELOPER + "/usr/bin/simctl"
+        self.assertEqual(
+            runtime.SIMCTL,
+            "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/"
+            "Versions/A/Resources/bin/simctl",
+        )
+        # The unsigned Xcode wrapper is not even stat'd on the provider path.
+        del self.host.nodes[wrapper]
+        record = self.prepare_provider()
+        self.assertEqual(self.validate_provider(record), record)
+        commands = self.host.commands
+        self.assertFalse([argv for argv, _ in commands if wrapper in argv])
+        self.assertIn((
+            ("/usr/bin/codesign", "--verify", "--strict", "-R",
+             '=identifier "com.apple.CoreSimulator.simctl" and anchor apple', runtime.SIMCTL),
+            None,
+        ), commands)
+        self.assertIn(((runtime.SIMCTL, "list", "runtimes", "--json"), DEVELOPER), commands)
+        self.assertFalse([argv for argv, _ in commands
+                          if runtime.SIMCTL in argv and "=anchor apple" in argv])
+        xcode = record["provider_observation"]["xcode"]
+        self.assertEqual(xcode["simctl_path"], runtime.SIMCTL)
+        self.assertEqual(xcode["simctl_file_identity"],
+                         list(runtime._identity(self.host.nodes[runtime.SIMCTL])))
+        self.assertEqual(xcode["simctl_apple_anchor_check"], "passed")
+        self.assertFalse(self.host.fds)
+
+    def test_provider_refuses_non_regular_unsigned_or_changed_coresimulator_simctl(self):
+        node = self.host.nodes[runtime.SIMCTL]
+        for mode in (stat.S_IFLNK | 0o755, stat.S_IFDIR | 0o755):
+            node.st_mode = mode
+            with self.subTest(mode=mode), self.assertRaisesRegex(
+                runtime.Refusal, "^fixed CoreSimulator simctl is not a regular file$",
+            ):
+                runtime._provider_inventory(command=self.host.command)
+        node.st_mode = stat.S_IFREG | 0o755
+        signature = ("/usr/bin/codesign", "--verify", "--strict", "-R",
+                     runtime.SIMCTL_REQUIREMENT, runtime.SIMCTL)
+        self.host.responses[signature] = runtime.Refusal("runtime verification command failed")
+        with self.assertRaisesRegex(runtime.Refusal, "command failed"):
+            runtime._provider_inventory(command=self.host.command)
+        self.host.responses.clear()
+
+        def replace(argv):
+            if argv == [runtime.SIMCTL, "list", "runtimes", "--json"]:
+                node.st_ino += 1
+        self.host.after_command = replace
+        with self.assertRaisesRegex(
+            runtime.Refusal, "fixed Xcode tool changed during provider-trusted inventory",
+        ):
+            runtime._provider_inventory(command=self.host.command)
+        self.host.after_command = lambda argv: None
+        with self.assertRaisesRegex(runtime.Refusal, "observation changed"):
+            with runtime.provider_verified_checker():
+                node.st_ctime_ns += 1
         self.assertFalse(self.host.fds)
 
     def test_provider_inventory_paths_are_bounded_and_non_traversing(self):

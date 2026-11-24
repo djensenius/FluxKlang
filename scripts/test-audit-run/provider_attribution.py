@@ -327,7 +327,7 @@ def _provider(observation, spellings):
             "xcodebuild_path": runtime.DEVELOPER + "/usr/bin/xcodebuild",
             "xcodebuild_file_identity": xcode["xcodebuild_file_identity"],
             "xcodebuild_apple_anchor_check": "passed",
-            "simctl_path": runtime.DEVELOPER + "/usr/bin/simctl",
+            "simctl_path": runtime.SIMCTL,
             "simctl_file_identity": xcode["simctl_file_identity"],
             "simctl_apple_anchor_check": "passed",
         },

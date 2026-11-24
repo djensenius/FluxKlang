@@ -23,6 +23,10 @@ DEVELOPER = "/Applications/Xcode_27.1.app/Contents/Developer"
 LIBRARY_SHA256 = "1ab99e516a208f4ce91fcde55af17ee83a4aedfc9687ec1eeade456943ea32e8"
 LIBRARY_SIZE = 338880
 REQUIREMENT = '=identifier "com.apple.libMainThreadChecker" and anchor apple'
+# Provider-trusted profile only: the signed CoreSimulator simctl binary.
+SIMCTL = ("/Library/Developer/PrivateFrameworks/CoreSimulator.framework/"
+          "Versions/A/Resources/bin/simctl")
+SIMCTL_REQUIREMENT = '=identifier "com.apple.CoreSimulator.simctl" and anchor apple'
 OUTPUT_LIMIT = 2 * 1024 * 1024
 TIMEOUT = 30
 ENV = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
@@ -425,14 +429,19 @@ def _provider_inventory(*, command=None):
             "provider-trusted runtime requires Darwin arm64")
     developer = DEVELOPER
     xcodebuild = developer + "/usr/bin/xcodebuild"
-    simctl = developer + "/usr/bin/simctl"
+    # Never the Xcode usr/bin/simctl wrapper: it is an unsigned script that may
+    # run first-launch setup before exec'ing this fixed Apple-signed binary.
+    simctl = SIMCTL
     tools = {}
-    for tool in (xcodebuild, simctl):
+    for tool, requirement in ((xcodebuild, "=anchor apple"), (simctl, SIMCTL_REQUIREMENT)):
         path = _path(tool)
         info = os.stat(path, follow_symlinks=False)
-        require(stat.S_ISREG(info.st_mode), "fixed Xcode tool is not a regular file")
+        if path == simctl:
+            require(stat.S_ISREG(info.st_mode), "fixed CoreSimulator simctl is not a regular file")
+        else:
+            require(stat.S_ISREG(info.st_mode), "fixed Xcode tool is not a regular file")
         tools[path] = _identity(info)
-        command(["/usr/bin/codesign", "--verify", "--strict", "-R", "=anchor apple", path])
+        command(["/usr/bin/codesign", "--verify", "--strict", "-R", requirement, path])
     version = command([xcodebuild, "-version"], developer)
     require(version == "Xcode 27.1\nBuild version 27A9275",
             "unreviewed Xcode version/build observation")

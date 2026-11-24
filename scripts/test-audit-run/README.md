@@ -156,10 +156,27 @@ select paths for filesystem or tool probes. Unknown/ambiguous identities,
 runtime entries, paths, metadata, or checker values are refused. Tool output
 and reads are bounded, and the fixed observations are rechecked on exit.
 
+For runtime inventory this profile never executes or signature-checks Xcode's
+`Contents/Developer/usr/bin/simctl`. In current Xcode that path is an unsigned
+shell wrapper (`codesign` reports "code object is not signed at all") that may
+run `xcodebuild -runFirstLaunch` before exec'ing the real tool, so it can
+neither pass an Apple-anchor check nor be run without a first-launch side
+effect. The profile instead observes the fixed Apple-signed binary
+`/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl`:
+it must be a regular file (no-follow stat), pass `codesign --verify --strict`
+with the fixed requirement
+`=identifier "com.apple.CoreSimulator.simctl" and anchor apple`, and is invoked
+directly as `simctl list runtimes --json` with the fixed `DEVELOPER_DIR`. Its
+file identity must be unchanged after the inventory. A non-regular CoreSimulator
+simctl refuses with reason `simctl-tool-shape`. `xcodebuild` handling, and the
+strict runtime-backed profile above, are unchanged.
+
 Its provider-only intent field `provider_observation` uses the closed
 `ios-provider-trusted-runtime-observation-v1` schema. It records only values
-this preparer observes: fixed Xcode path/version/build, SDK version, Xcode tool
-file metadata and Apple-anchor check results, the selected runtime's exact
+this preparer observes: fixed Xcode path/version/build, SDK version, Xcode
+`xcodebuild` and CoreSimulator `simctl` file metadata and Apple-anchor check
+results (`simctl_path` is the signed CoreSimulator binary above, not the Xcode
+wrapper), the selected runtime's exact
 inventory identity/version/build/availability/bundle paths, and the checker
 path/accepted spelling(s), size, SHA256, architecture and signature-check
 result. These remain observations under the stated trust assumption, not
