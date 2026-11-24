@@ -105,7 +105,7 @@ jobs:
               -resolvePackageDependencies -disableAutomaticPackageResolution \
               -derivedDataPath "$WORKSPACE_PATH" &&
             /usr/bin/xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangIsolatedTests \
-              -destination 'generic/platform=iOS Simulator' \
+              -destination 'platform=iOS Simulator,OS=27.0,name=iPhone 17' \
               -disableAutomaticPackageResolution -derivedDataPath "$WORKSPACE_PATH" \
               build-for-testing CODE_SIGNING_ALLOWED=NO ARCHS=arm64
           } > "$log" 2>&1 < /dev/null || status=$?
