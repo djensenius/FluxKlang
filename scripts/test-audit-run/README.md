@@ -854,6 +854,41 @@ PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_observation_workflow.py'
 ```
 
+#### Manual Products observation workflow (#893; no launch)
+
+`.github/workflows/ios-provider-products-observation.yml` is a separate,
+manual-only workflow; the v4 workflow above is unchanged. Its required
+`reviewed_head` input must be a full 40-character lowercase SHA equal to the
+event SHA, with the same repository, event, `main` ref and workflow-SHA checks
+as v4; otherwise the first step refuses before any compile. It has read-only
+`contents` permission, no secrets or artifact upload, a fixed non-cancelling
+concurrency group, a 110-minute job timeout and a finite limit on every step:
+2 minutes for the guard, 5 for checkout, 1 for the workspace, 45 each for
+compile and observe (v5 can spend 36 minutes in bounded provider commands and
+cleanup) and 5 for cleanup. It creates a fresh `mktemp -d` workspace under `RUNNER_TEMP` and
+refuses unless that workspace is canonical, owned, mode 0700 and empty. It then
+runs only `xcodebuild build-for-testing` for `FluxKlangIsolatedTests` on the
+generic iOS Simulator destination, using that workspace as the derived-data
+path. Build output goes to a log inside the workspace; on failure, only its last
+200 lines are printed. The job then runs
+`observation_runner.py --provider-products-v1 WORKSPACE/Build/Products` once,
+and the job result is that runner's exit status. An always-run final step
+removes only the recorded workspace. A cleanup failure also fails the job.
+
+This is a lower-assurance, provider-trusted observation. A success shows only
+that the runner's checks passed in that job. It establishes no Products
+provenance, custody, workspace isolation, authentication, or #60
+qualification, and it grants no launch authority. Each dispatch needs separate
+authorization, recorded on #893 with the reviewed head and run outcome,
+before it is dispatched. Nothing retries automatically; never re-run or
+re-dispatch a refused or failed run unchanged (as for refused v4 run
+44997830432). Merging this workflow authorizes no dispatch.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
+  -s scripts/test-audit-run -p 'test_products_observation_workflow.py'
+```
+
 `git_loose.read_object(compressed_bytes, oid)` is an independent, in-memory
 SHA-1 Git loose-object decoder. It accepts only plain immutable `bytes` and a
 plain `str` containing a full lowercase 40-hex ID, returning `(kind, raw_bytes)`
