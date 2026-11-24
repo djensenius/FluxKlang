@@ -274,5 +274,38 @@ class SnapshotReaderV2Tests(unittest.TestCase):
             invocation.snapshot()
 
 
+class SnapshotReaderV3Tests(unittest.TestCase):
+    setUp = v1.SnapshotReaderTests.setUp
+
+    def test_v3_pair_profile_and_reservations(self):
+        self.assertEqual(reader.V3_PAIR_IO_LIMIT,
+                         2 * (32 * large.MIB + git_pack.INDEX_LIMIT + 2))
+        pack, index = large.pair_of_size(16 * large.MIB + 1)
+        self.pack_id = pack[-20:].hex()
+        (self.directory / f"pack-{self.pack_id}.pack").write_bytes(pack)
+        (self.directory / f"pack-{self.pack_id}.idx").write_bytes(index)
+        oid = fixtures.object_id("blob", b"x").hex()
+        with mock.patch.object(git_pack, "_parse_profile",
+                               wraps=git_pack._parse_profile) as parse, \
+                mock.patch.object(git_pack_acquire, "acquire_validated_pair_v3",
+                                  wraps=git_pack_acquire.acquire_validated_pair_v3) as v3, \
+                mock.patch.object(git_pack_acquire, "acquire_validated_pair_v2",
+                                  wraps=git_pack_acquire.acquire_validated_pair_v2) as v2:
+            with self.assertRaises(KeyError):
+                reader.InvocationV2(str(self.root), self.pack_id).snapshot()(oid)
+            self.assertEqual((v2.call_count, v3.call_count), (1, 0))
+            invocation = reader.InvocationV3(str(self.root), self.pack_id)
+            self.assertEqual(invocation.snapshot()(oid), ("blob", b"x"))
+            self.assertEqual(invocation.snapshot()(oid), ("blob", b"x"))
+            self.assertEqual((v2.call_count, v3.call_count), (1, 2))
+            self.assertEqual([call.args[2] for call in parse.call_args_list[-2:]],
+                             [git_pack._Profile.V3] * 2)
+        with mock.patch.object(reader, "V3_PAIR_IO_LIMIT", reader.V3_PAIR_IO_LIMIT - 1):
+            invocation = reader.InvocationV3(str(self.root), self.pack_id)
+            invocation.snapshot()(oid)
+            with self.assertRaises(KeyError):
+                invocation.snapshot()(oid)
+
+
 if __name__ == "__main__":
     unittest.main()

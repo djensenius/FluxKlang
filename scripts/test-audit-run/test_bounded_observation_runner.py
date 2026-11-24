@@ -12,6 +12,8 @@ from unittest import mock
 import uuid
 
 import bounded_material
+import git_pack
+import git_pack_acquire
 import git_snapshot_reader
 import ios_runtime
 import observation_acquisition as acquisition
@@ -333,6 +335,7 @@ class BoundedRunnerTests(unittest.TestCase):
 
         def pair(*args):
             events.append("pair")
+            self.assertEqual(args[1:], (git_pack._Profile.V3,))
             return original_pair(*args)
 
         def encode(record):
@@ -345,8 +348,13 @@ class BoundedRunnerTests(unittest.TestCase):
                 mock.patch.object(prepare, "prepare", side_effect=produce), \
                 mock.patch.object(prepare, "validate", side_effect=validate), \
                 mock.patch.object(acquisition, "discover_pair", side_effect=pair), \
+                mock.patch.object(git_pack_acquire, "acquire_validated_pair_v3",
+                                  wraps=git_pack_acquire.acquire_validated_pair_v3) as v3_pairs, \
+                mock.patch.object(git_pack_acquire, "acquire_validated_pair_v2") as v2_pairs, \
                 mock.patch.object(provider_attribution, "_encode", side_effect=encode):
             self.assertEqual(self.report(), (0, b'{"status":"observed"}\n'))
+        self.assertEqual(v3_pairs.call_count, 2)
+        v2_pairs.assert_not_called()
         self.assertEqual(events, [
             "pair", "pair", "pair", "sources", "pair", "provider", "prepare-enter",
             "provider", "validate-enter", "provider", "provider", "validate-exit",

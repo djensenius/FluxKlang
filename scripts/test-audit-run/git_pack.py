@@ -24,6 +24,23 @@ KINDS = {1: "commit", 2: "tree", 3: "blob", 4: "tag"}
 class _Profile(Enum):
     V1 = 1
     V2 = 2
+    V3 = 3
+
+
+# V3 serves only the Products/v5 material path, which observes a depth-1 hosted
+# checkout pack. Measured at ba2d5b4d: 9,724,838-byte pack, 79,752-byte index,
+# 2,810 objects, 1,847,740-byte largest object, 30,795,796 inflated entry bytes,
+# 31,516,826 reconstructed bytes and 83 deltas (largest program 29,924 bytes).
+# Each cap gives roughly 2-3x headroom; one parse holds at most about 225 MiB
+# (pack, index, inflated records and results). Other limits are unchanged.
+V3_PACK_LIMIT = 32 * 1024 * 1024
+V3_OBJECT_COUNT_LIMIT = 8192  # 8,192-object index is ~230 KB, under INDEX_LIMIT.
+V3_OBJECT_LIMIT = 4 * 1024 * 1024
+V3_INFLATE_LIMIT = 96 * 1024 * 1024
+V3_RESULT_LIMIT = 96 * 1024 * 1024
+# Delta bases/outputs may be any V3 object; keep V1's one operation per 4 bytes.
+V3_DELTA_LIMITS = (V3_OBJECT_LIMIT, V3_OBJECT_LIMIT, V3_OBJECT_LIMIT,
+                   V3_OBJECT_LIMIT // 4)
 
 
 def _pack_limit(profile):
@@ -31,7 +48,20 @@ def _pack_limit(profile):
         return PACK_LIMIT
     if profile is _Profile.V2:
         return 16 * 1024 * 1024
+    if profile is _Profile.V3:
+        return V3_PACK_LIMIT
     raise ValueError("invalid internal pack profile")
+
+
+def _limits(profile):
+    """Return (object count, object, inflate, result, delta) caps for a profile."""
+    _pack_limit(profile)
+    if profile is _Profile.V3:
+        return (V3_OBJECT_COUNT_LIMIT, V3_OBJECT_LIMIT, V3_INFLATE_LIMIT,
+                V3_RESULT_LIMIT, V3_DELTA_LIMITS)
+    return (OBJECT_COUNT_LIMIT, OBJECT_LIMIT, INFLATE_LIMIT, RESULT_LIMIT,
+            (git_delta.BASE_LIMIT, git_delta.PROGRAM_LIMIT, git_delta.OUTPUT_LIMIT,
+             git_delta.OPERATION_LIMIT))
 
 
 def _u32(data, position):
@@ -61,7 +91,8 @@ def _entry_header(pack, start, end, profile=_Profile.V1):
             _fail("noncanonical object size header")
     if kind not in (*KINDS, 6, 7):
         _fail("unsupported object type")
-    if size > (git_delta.PROGRAM_LIMIT if kind in (6, 7) else OBJECT_LIMIT):
+    _, object_limit, _, _, delta_limits = _limits(profile)
+    if size > (delta_limits[1] if kind in (6, 7) else object_limit):
         _fail("object size limit")
     base = None
     if kind == 7:
@@ -110,6 +141,7 @@ def _parse(pack, index):
 
 def _parse_profile(pack, index, profile):
     _inputs(pack, index, profile)
+    count_limit, _, inflate_limit, result_limit, delta_limits = _limits(profile)
     if len(pack) < 32 or pack[:8] != b"PACK\0\0\0\2":
         _fail("unsupported pack header")
     if len(index) < 8 + 1024 + 40 or index[:8] != b"\xfftOc\0\0\0\2":
@@ -120,7 +152,7 @@ def _parse_profile(pack, index, profile):
             or index[-40:-20] != pack[-20:]):
         _fail("index checksum or pack identity mismatch")
     count = _u32(index, 8 + 255 * 4)
-    if count > OBJECT_COUNT_LIMIT or _u32(pack, 8) != count:
+    if count > count_limit or _u32(pack, 8) != count:
         _fail("object count limit or mismatch")
     names_start = 8 + 1024
     crc_start = names_start + 20 * count
@@ -177,7 +209,7 @@ def _parse_profile(pack, index, profile):
             _fail("object CRC mismatch")
         kind, size, base, position = _entry_header(pack, start, end, profile)
         inflated += size
-        if inflated > INFLATE_LIMIT:
+        if inflated > inflate_limit:
             _fail("aggregate inflate limit")
         try:
             decoder = zlib.decompressobj()
@@ -215,10 +247,13 @@ def _parse_profile(pack, index, profile):
             base_kind, base_data, depth = resolve(base)
             if depth >= DEPTH_LIMIT:
                 _fail("delta depth limit")
-            data = git_delta.apply_delta(base_data, data)
+            if profile is _Profile.V3:
+                data = git_delta._apply_delta(base_data, data, *delta_limits)
+            else:
+                data = git_delta.apply_delta(base_data, data)
             result = (base_kind, data, depth + 1)
         result_bytes += len(data)
-        if result_bytes > RESULT_LIMIT:
+        if result_bytes > result_limit:
             _fail("aggregate result limit")
         digest = hashlib.sha1()
         digest.update(f"{result[0]} {len(data)}\0".encode("ascii"))

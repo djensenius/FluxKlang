@@ -30,15 +30,21 @@ def apply_delta(base, program):
     and instructions at 65536. Size varints are minimal, at most 2**63-1.
     No pack, index, compressed stream, object ID, or delta chain is processed.
     """
+    return _apply_delta(base, program, BASE_LIMIT, PROGRAM_LIMIT, OUTPUT_LIMIT,
+                        OPERATION_LIMIT)
+
+
+def _apply_delta(base, program, base_limit, program_limit, output_limit, operation_limit):
+    """apply_delta with explicit caps; only git_pack's fixed profiles select them."""
     if type(base) is not bytes or type(program) is not bytes:
         raise ValueError("delta inputs must be bytes")
-    if len(base) > BASE_LIMIT or len(program) > PROGRAM_LIMIT:
+    if len(base) > base_limit or len(program) > program_limit:
         raise ValueError("delta input size limit")
     base_size, position = _size(program, 0)
     output_size, position = _size(program, position)
     if base_size != len(base):
         raise ValueError("delta base size mismatch")
-    if output_size > OUTPUT_LIMIT:
+    if output_size > output_limit:
         raise ValueError("delta output size limit")
 
     output = bytearray()
@@ -47,7 +53,7 @@ def apply_delta(base, program):
     operations = 0
     while position < len(program):
         operations += 1
-        if operations > OPERATION_LIMIT:
+        if operations > operation_limit:
             raise ValueError("delta operation limit")
         opcode = program[position]
         position += 1

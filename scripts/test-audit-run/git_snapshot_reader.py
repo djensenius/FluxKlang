@@ -14,6 +14,9 @@ PAIR_IO_LIMIT = SNAPSHOT_LIMIT * (git_pack.PACK_LIMIT + 1 + git_pack.INDEX_LIMIT
 V2_PAIR_IO_LIMIT = SNAPSHOT_LIMIT * (
     git_pack._pack_limit(git_pack._Profile.V2) + 1 + git_pack.INDEX_LIMIT + 1
 )
+V3_PAIR_IO_LIMIT = SNAPSHOT_LIMIT * (
+    git_pack._pack_limit(git_pack._Profile.V3) + 1 + git_pack.INDEX_LIMIT + 1
+)
 
 
 class Invocation:
@@ -24,20 +27,22 @@ class Invocation:
     def __init__(self, checkout_root, pack_id):
         Invocation._initialize(self, checkout_root, pack_id, False)
 
-    def _initialize(self, checkout_root, pack_id, v2):
+    def _initialize(self, checkout_root, pack_id, v2, v3=False):
         if hasattr(self, "_Invocation__next_snapshot"):
             raise TypeError("invocation cannot be reset")
         checkout_head._checkout_path(checkout_root)
         checkout_head._expected_oid(pack_id)
         # Reservations include each helper's detection byte, even on failure.
         loose_attempt = git_loose.COMPRESSED_LIMIT + 1
-        pack_limit = (git_pack._pack_limit(git_pack._Profile.V2)
-                      if v2 else git_pack.PACK_LIMIT)
+        profile = (git_pack._Profile.V3 if v3 else
+                   git_pack._Profile.V2 if v2 else git_pack._Profile.V1)
+        pack_limit = git_pack._pack_limit(profile)
         pair_attempt = pack_limit + 1 + git_pack.INDEX_LIMIT + 1
         snapshot_limit = SNAPSHOT_LIMIT
         call_limit = OBJECT_CALL_LIMIT
         loose_limit = LOOSE_IO_LIMIT
-        pair_limit = V2_PAIR_IO_LIMIT if v2 else PAIR_IO_LIMIT
+        pair_limit = (V3_PAIR_IO_LIMIT if v3 else
+                      V2_PAIR_IO_LIMIT if v2 else PAIR_IO_LIMIT)
         snapshots = calls = loose_bytes = pair_bytes = 0
         failed = busy = False
         pair = None
@@ -73,7 +78,11 @@ class Invocation:
                             pair_bytes += pair_attempt
                             if pair_bytes > pair_limit:
                                 raise ValueError("pack/index I/O limit")
-                            if v2:
+                            if v3:
+                                pair = git_pack_acquire.acquire_validated_pair_v3(
+                                    checkout_root, pack_id,
+                                )
+                            elif v2:
                                 pair = git_pack_acquire.acquire_validated_pair_v2(
                                     checkout_root, pack_id,
                                 )
@@ -126,3 +135,12 @@ class InvocationV2(Invocation):
 
     def __init__(self, checkout_root, pack_id):
         Invocation._initialize(self, checkout_root, pack_id, True)
+
+
+class InvocationV3(Invocation):
+    """Opt-in invocation using the fixed Products-path V3 explicit-pair profile."""
+
+    __slots__ = ()
+
+    def __init__(self, checkout_root, pack_id):
+        Invocation._initialize(self, checkout_root, pack_id, False, True)

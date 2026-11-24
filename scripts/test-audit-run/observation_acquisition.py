@@ -56,8 +56,11 @@ def _names(descriptor):
     return tuple(sorted(names))
 
 
-def discover_pair(root):
-    """Return a private pair identity, refusing all other pack directory shapes."""
+def discover_pair(root, profile=git_pack._Profile.V2):
+    """Return a private pair identity, refusing all other pack directory shapes.
+
+    The pack size cap is the explicit parser profile's; v4 keeps V2.
+    """
     try:
         ios_runtime.require(os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
                             and os.stat in os.supports_follow_symlinks
@@ -80,7 +83,7 @@ def discover_pair(root):
             entries = []
             for name, match in zip(names, matches):
                 info = os.stat(name, dir_fd=directory, follow_symlinks=False)
-                limit = (git_pack._pack_limit(git_pack._Profile.V2)
+                limit = (git_pack._pack_limit(profile)
                          if match.group(2) == "pack" else git_pack.INDEX_LIMIT)
                 ios_runtime.require(stat.S_ISREG(info.st_mode) and 0 <= info.st_size <= limit,
                                     "pack entry shape or size")
