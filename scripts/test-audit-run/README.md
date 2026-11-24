@@ -674,7 +674,8 @@ class is exactly `FileNotFoundError`, `PermissionError`, `NotADirectoryError`,
 `TimeoutError`, `ProcessLookupError` or `OSError` selects a fixed
 `verification-unavailable-<class>` code; any other cause keeps
 `verification-unavailable`. Codes come only from that closed table, never from
-exception text. Unknown messages, other stages, unexpected failures and
+exception text. Unknown messages, other stages (except the bounded producer's
+closed `prepare` reasons described below), unexpected failures and
 interruptions are unchanged and carry no reason. A reason names the refusal
 check, not its root cause, and cleanup can still mask an earlier error. An
 `OSError` raised while recording inside the checker is rewrapped as
@@ -765,6 +766,24 @@ Provider exit rechecks, the second source/job snapshot, consistency, encoding,
 the final pair check and final SIGINT checks must all succeed before the same
 status-only `{"status":"observed"}` report. Preparer and material acquisition
 errors are closed `prepare`-stage refusals; input shape errors use `input`.
+At stage `prepare` only, when the refusal is exactly
+`ios_runtime.Refusal("bounded producer refused")`, its direct cause may add a
+fixed `"reason"` (same position and format as the provider reasons above):
+an exact `prepare.Refusal` literal from `_PREPARE_REASONS`, a fixed f-string
+prefix from `_PREPARE_PREFIXES` (for example `plist-duplicate-key`), or a
+`require_equal` kind (`type`, `keys`, `length`, `value`) as
+`<location>-mismatch-<kind>` when the compared location is, or is nested under,
+one of the literal roots in `_REQUIRE_EQUAL_LOCATIONS` (for example
+`provider-observation-mismatch-value`), otherwise `require-equal-<kind>`; an
+exact `bounded_material.Refusal` literal from `_MATERIAL_REASONS`; a nested
+provider-trusted `ios_runtime.Refusal` as `prepare-provider-<provider code>`;
+or an exact `FileNotFoundError`, `FileExistsError`, `PermissionError`,
+`NotADirectoryError`, `IsADirectoryError` or `OSError` class as
+`prepare-unavailable-<class>`. Exception subclasses, extra arguments and any
+other cause carry no reason. Codes never include the dynamic f-string text,
+keys, values or paths. Static tests require every literal `Refusal` message or
+f-string prefix/suffix in `prepare.py` and `bounded_material.py`, and every
+literal `require_equal` root location, to have exactly one table entry.
 Diagnostics expose no intent, path, exception or provider output. As in v4,
 stage is a boundary, not a cause, and cleanup can mask an earlier failure.
 Shell history, process arguments, interpreter startup and external logging are

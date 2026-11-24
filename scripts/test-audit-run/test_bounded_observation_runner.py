@@ -237,7 +237,7 @@ class BoundedRunnerTests(unittest.TestCase):
                 source=candidate,
             )
         self.assertEqual((status, output),
-                         (1, b'{"diagnostic":"Refusal","stage":"prepare","status":"refused"}\n'))
+                         (1, b'{"diagnostic":"Refusal","stage":"prepare","reason":"input-sha256-mismatch","status":"refused"}\n'))
         self.assertEqual(len(calls), 1)
         self.assertFalse(self.output.exists())
         self.assertFalse(self.intent.exists())
@@ -381,7 +381,7 @@ class BoundedRunnerTests(unittest.TestCase):
             ("relative.xctestrun", self.pin, b"input"),
             (str(self.source) + "/../private", self.pin, b"input"),
             (str(self.source), self.pin.upper(), b"input"),
-            (str(self.source), "0" * 64, b"prepare"),
+            (str(self.source), "0" * 64, b'prepare","reason":"input-sha256-mismatch'),
         ):
             with self.subTest(stage=stage, path=path, pin=pin):
                 status, output = self.report(path, pin)
@@ -416,7 +416,7 @@ class BoundedRunnerTests(unittest.TestCase):
         self.host.after_command = changed_probe
         status, output = self.report()
         self.assertEqual((status, output),
-                         (1, b'{"diagnostic":"Refusal","stage":"prepare","status":"refused"}\n'))
+                         (1, b'{"diagnostic":"Refusal","stage":"prepare","reason":"provider-observation-mismatch-value","status":"refused"}\n'))
         self.assertTrue(self.output.exists())
         self.assertTrue(self.intent.exists())
         tool.st_ino = 1
@@ -429,7 +429,7 @@ class BoundedRunnerTests(unittest.TestCase):
         self.host.after_command = changed_type
         status, output = self.report()
         self.assertEqual((status, output),
-                         (1, b'{"diagnostic":"Refusal","stage":"prepare","status":"refused"}\n'))
+                         (1, b'{"diagnostic":"Refusal","stage":"prepare","reason":"provider-observation-mismatch-type","status":"refused"}\n'))
         self.assertTrue(self.output.exists())
         self.assertTrue(self.intent.exists())
         self.assertNotIn(b"provider_observation", output)
@@ -437,8 +437,8 @@ class BoundedRunnerTests(unittest.TestCase):
     def test_type_change_at_each_real_provider_exit_refuses(self):
         tool = self.host.nodes[ios_runtime.DEVELOPER + "/usr/bin/xcodebuild"]
         for boundary, trigger, total, comparisons, stage in (
-            ("validator", 18, 24, 1, b"prepare"),
-            ("producer", 24, 30, 2, b"prepare"),
+            ("validator", 18, 24, 1, b'prepare","reason":"prepare-provider-observation-drift'),
+            ("producer", 24, 30, 2, b'prepare","reason":"prepare-provider-observation-drift'),
             ("composition", 30, 36, 3, b'provider-exit","reason":"observation-drift'),
         ):
             with self.subTest(boundary=boundary):
@@ -504,7 +504,9 @@ class BoundedRunnerTests(unittest.TestCase):
 
                 self.host.after_command = after_command
                 status, output = self.report()
-                stage = (b"prepare" if case in ("input", "provider") else
+                stage = (b'prepare","reason":"material-path-drift' if case == "input" else
+                         b'prepare","reason":"prepare-provider-provider-tool-drift'
+                         if case == "provider" else
                          b'provider-exit","reason":"provider-tool-drift' if case == "outer-exit"
                          else b"snapshot-after")
                 self.assertEqual((status, output),
@@ -627,7 +629,7 @@ class BoundedRunnerTests(unittest.TestCase):
         self.source.write_bytes(b"x" * (bounded_material.MATERIAL_BYTES + 1))
         status, output = self.report()
         self.assertEqual((status, output),
-                         (1, b'{"diagnostic":"Refusal","stage":"prepare","status":"refused"}\n'))
+                         (1, b'{"diagnostic":"Refusal","stage":"prepare","reason":"material-byte-limit","status":"refused"}\n'))
         self.assertFalse(self.output.exists())
         self.source.write_bytes(data)
         command_count = len(self.host.commands)
@@ -672,6 +674,82 @@ class BoundedRunnerTests(unittest.TestCase):
                 if when != "before":
                     self.assertTrue(self.output.exists())
                     self.assertTrue(self.intent.exists())
+
+    def test_prepare_stage_reason_codes_are_closed_and_static(self):
+        def line(stage, reason=None):
+            return (b'{"diagnostic":"Refusal","stage":"' + stage
+                    + (b"" if reason is None else b'","reason":"' + reason)
+                    + b'","status":"refused"}\n')
+
+        class SubRefusal(prepare.Refusal):
+            pass
+
+        private = "PRIVATE/secret key"
+        cases = [(prepare.Refusal(message), reason)
+                 for message, reason in runner._PREPARE_REASONS.items()]
+        cases += [(prepare.Refusal(prefix + private), reason)
+                  for prefix, reason in runner._PREPARE_PREFIXES]
+        for suffix, kind in runner._REQUIRE_EQUAL_KINDS:
+            for location, code in runner._REQUIRE_EQUAL_LOCATIONS.items():
+                for actual in (location, location + "." + private, location + "[3]"):
+                    cases.append((prepare.Refusal(actual + suffix),
+                                  code + b"-mismatch-" + kind))
+            for actual in (private, "inputs", "provider observations." + private, ""):
+                cases.append((prepare.Refusal(actual + suffix), b"require-equal-" + kind))
+        cases += [(bounded_material.Refusal(message), reason)
+                  for message, reason in runner._MATERIAL_REASONS.items()]
+        cases += [(cause(private), reason)
+                  for cause, reason in runner._PREPARE_UNAVAILABLE_CAUSES]
+        cases += [
+            (ios_runtime.Refusal("unreviewed Xcode version/build observation"),
+             b"prepare-provider-xcode-version"),
+            (ios_runtime.Refusal("provider-trusted runtime/toolchain observation changed"),
+             b"prepare-provider-observation-drift"),
+            (prepare.Refusal(private), None),
+            (prepare.Refusal("input SHA256 mismatch", private), None),
+            (prepare.Refusal(), None),
+            (SubRefusal("input SHA256 mismatch"), None),
+            (bounded_material.Refusal("material byte limit "), None),
+            (bounded_material.Refusal("input SHA256 mismatch"), None),
+            (prepare.Refusal("material byte limit"), None),
+            (ios_runtime.Refusal(private), None),
+            (IsADirectoryError(private), b"prepare-unavailable-isadirectory"),
+            (BlockingIOError(private), None),
+            (ValueError("input SHA256 mismatch"), None),
+            (RuntimeError(private), None),
+        ]
+        for cause, reason in cases:
+            with self.subTest(cause=type(cause).__name__, args=cause.args), \
+                    mock.patch.object(prepare, "prepare", side_effect=cause):
+                status, output = self.report()
+                self.assertEqual((status, output), (1, line(b"prepare", reason)))
+                self.assertNotIn(b"PRIVATE", output)
+                self.assertNotIn(b"secret", output)
+                self.assertEqual(list(json.loads(output)),
+                                 ["diagnostic", "stage"] + ([] if reason is None else ["reason"])
+                                 + ["status"])
+
+        # Only the exact producer wrapper selects a prepare reason.
+        for outer in (ios_runtime.Refusal("PRIVATE producer"),
+                      ios_runtime.Refusal("bounded producer refused", "extra")):
+            outer.__cause__ = prepare.Refusal("input SHA256 mismatch")
+
+            def produce(_provider, outer=outer):
+                raise outer
+
+            real = integration._observe
+
+            def observe(*args, **kwargs):
+                return real(*args[:-1], produce, **kwargs)
+
+            with self.subTest(outer=outer.args), \
+                    mock.patch.object(integration, "_observe", side_effect=observe):
+                self.assertEqual(self.report(), (1, line(b"prepare")))
+        # Other stages never interpret a producer-shaped refusal.
+        error = ios_runtime.Refusal("bounded producer refused")
+        error.__cause__ = prepare.Refusal("input SHA256 mismatch")
+        with mock.patch.object(acquisition, "discover_pair", side_effect=error):
+            self.assertEqual(self.report(), (1, line(b"pack-discovery")))
 
 
 if __name__ == "__main__":
