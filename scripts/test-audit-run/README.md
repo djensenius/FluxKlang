@@ -671,7 +671,8 @@ the detached HEAD under the existing HEAD observer.
 
 Each discovery accepts exactly one regular `pack-<sha>.pack` and matching
 `.idx`, with no other entries, symlinks or special files, and inclusive 16 MiB
-pack and 1 MiB index limits. Names and metadata are checked before and after
+pack and 1 MiB index limits (the v5 and Products modes use the V3 32 MiB pack
+limit described below). Names and metadata are checked before and after
 the directory scan. The selected pair and its root, directory and entry
 metadata are rechecked before and after each snapshot and after composition;
 a persistent directory or pair replacement refuses, including between snapshots.
@@ -739,7 +740,8 @@ Aggregate object bytes can still refuse. This v5 mode (and the Products mode
 below) discovers and parses its pair with the separate V3 pack profile: 32 MiB
 pack and 1 MiB index, with a 69,206,020-byte total pair I/O reservation plus
 the unchanged 17,301,568-byte loose reservation. The v4 mode keeps 16 MiB pack,
-1 MiB index and v2's 52,953,156-byte total Git I/O reservation. Event reads reserve at most 2,097,154 bytes. Six provider
+1 MiB index and v2's 52,953,156-byte total Git I/O reservation. Event reads
+reserve at most 2,097,154 bytes. Six provider
 snapshots run up to 36 fixed commands, each with a 2 MiB plus one detection
 byte output limit and 30-second execution deadline; bounded child cleanup can
 also wait up to 30 seconds. Their combined output reservation is 75,497,508
