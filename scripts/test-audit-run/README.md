@@ -862,9 +862,10 @@ manual-only workflow; the v4 workflow above is unchanged. Its required
 event SHA, with the same repository, event, `main` ref and workflow-SHA checks
 as v4; otherwise the first step refuses before any compile. It has read-only
 `contents` permission, no secrets or artifact upload, a fixed non-cancelling
-concurrency group, a 100-minute job timeout and 45-minute compile and observe
-step timeouts (v5 can spend 36 minutes in bounded provider commands and
-cleanup). It creates a fresh `mktemp -d` workspace under `RUNNER_TEMP` and
+concurrency group, a 110-minute job timeout and a finite limit on every step:
+2 minutes for the guard, 5 for checkout, 1 for the workspace, 45 each for
+compile and observe (v5 can spend 36 minutes in bounded provider commands and
+cleanup) and 5 for cleanup. It creates a fresh `mktemp -d` workspace under `RUNNER_TEMP` and
 refuses unless that workspace is canonical, owned, mode 0700 and empty. It then
 runs only `xcodebuild build-for-testing` for `FluxKlangIsolatedTests` on the
 generic iOS Simulator destination, using that workspace as the derived-data
