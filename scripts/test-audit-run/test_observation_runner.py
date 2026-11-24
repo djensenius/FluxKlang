@@ -1,8 +1,10 @@
 """Synthetic runner tests: all provider probes and process/network launch are denied."""
 
+import ast
 import json
 import os
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -404,7 +406,8 @@ class RunnerTests(unittest.TestCase):
                                   side_effect=OSError("PRIVATE record failure")) as record:
             status, output = self.run_report()
         self.assertEqual((status, output),
-                         (1, b'{"diagnostic":"Refusal","stage":"provider-exit","status":"refused"}\n'))
+                         (1, b'{"diagnostic":"Refusal","stage":"provider-exit",'
+                          b'"reason":"verification-unavailable-oserror","status":"refused"}\n'))
         self.assertNotIn(b"PRIVATE", output)
         provider_snapshot.assert_called_once_with()
         record.assert_called_once_with(self.record, (canonical, alias))
@@ -544,6 +547,187 @@ class RunnerTests(unittest.TestCase):
         status, output = self.run_report()
         self.assertEqual(status, 1)
         self.assertNotIn(b"private", output)
+
+    def provider_failure(self, stage, error):
+        """Run the real pipeline with a fake provider failing at one boundary."""
+        @contextmanager
+        def checker():
+            if stage == "provider-enter":
+                raise error
+            try:
+                yield tuple(self.record["checker"]["accepted_paths"]), self.record
+            finally:
+                if stage == "provider-exit":
+                    raise error
+
+        record = (mock.patch.object(provider_attribution, "_provider", side_effect=error)
+                  if stage == "provider-record" else
+                  mock.patch.object(provider_attribution, "_provider",
+                                    wraps=provider_attribution._provider))
+        with mock.patch.object(ios_runtime, "provider_verified_checker", side_effect=checker), \
+                record:
+            return self.run_report()
+
+    @staticmethod
+    def refusal_line(stage, reason=None):
+        return (b'{"diagnostic":"Refusal","stage":"' + stage.encode()
+                + (b"" if reason is None else b'","reason":"' + reason)
+                + b'","status":"refused"}\n')
+
+    def test_provider_stage_reason_codes_are_closed_and_exact(self):
+        self.assertEqual(
+            self.provider_failure("provider-enter", ios_runtime.Refusal(
+                "unreviewed Xcode version/build observation")),
+            (1, b'{"diagnostic":"Refusal","stage":"provider-enter","reason":"xcode-version",'
+                b'"status":"refused"}\n'))
+        for stage in sorted(runner._PROVIDER_STAGES):
+            for message, reason in runner._PROVIDER_REASONS.items():
+                with self.subTest(stage=stage, message=message):
+                    status, output = self.provider_failure(stage, ios_runtime.Refusal(message))
+                    self.assertEqual((status, output), (1, self.refusal_line(stage, reason)))
+                    self.assertEqual(list(json.loads(output)),
+                                     ["diagnostic", "stage", "reason", "status"])
+                    self.assertNotIn(message.encode(), output)
+
+    def test_provider_reason_codes_are_unique_kebab_ascii(self):
+        codes = list(runner._PROVIDER_REASONS.values())
+        codes += [code for _cause, code in runner._UNAVAILABLE_CAUSES]
+        self.assertEqual(len(codes), len(set(codes)))
+        for code in codes:
+            self.assertIs(type(code), bytes)
+            self.assertRegex(code.decode("ascii"), r"\A[a-z0-9]+(-[a-z0-9]+)*\Z")
+        for message in runner._PROVIDER_REASONS:
+            self.assertIs(type(message), str)
+
+    def test_unlisted_provider_refusals_and_other_stages_have_no_reason(self):
+        known = "unreviewed checker digest observation"
+
+        class SubRefusal(ios_runtime.Refusal):
+            pass
+
+        class Text(str):
+            pass
+
+        for stage in sorted(runner._PROVIDER_STAGES):
+            for error in (ios_runtime.Refusal("PRIVATE unknown provider message"),
+                          ios_runtime.Refusal(known + " "),
+                          ios_runtime.Refusal(known, "extra"),
+                          ios_runtime.Refusal(),
+                          ios_runtime.Refusal(Text(known)),
+                          SubRefusal(known)):
+                with self.subTest(stage=stage, args=error.args, error=type(error)):
+                    self.assertEqual(self.provider_failure(stage, error),
+                                     (1, self.refusal_line(stage)))
+            with self.subTest(stage=stage, error=RuntimeError):
+                self.assertEqual(
+                    self.provider_failure(stage, RuntimeError(known)),
+                    (1, b'{"diagnostic":"Unexpected failure","stage":"' + stage.encode()
+                        + b'","status":"failed"}\n'))
+        for stage, module, name in (("snapshot-before", integration, "_snapshot"),
+                                    ("pack-discovery", acquisition, "discover_pair")):
+            for message in (known, "provider-trusted runtime verification unavailable"):
+                with self.subTest(stage=stage, message=message), \
+                        mock.patch.object(module, name,
+                                          side_effect=ios_runtime.Refusal(message)):
+                    self.assertEqual(self.run_report(), (1, self.refusal_line(stage)))
+
+    def test_provider_unavailable_cause_classes_are_closed(self):
+        canonical, alias = self.record["checker"]["accepted_paths"]
+
+        class FileNotFoundSubclass(FileNotFoundError):
+            pass
+
+        cases = (
+            (FileNotFoundError, b"verification-unavailable-filenotfound"),
+            (PermissionError, b"verification-unavailable-permission"),
+            (NotADirectoryError, b"verification-unavailable-notadirectory"),
+            (TimeoutError, b"verification-unavailable-timeout"),
+            (ProcessLookupError, b"verification-unavailable-processlookup"),
+            (OSError, b"verification-unavailable-oserror"),
+            (IsADirectoryError, b"verification-unavailable"),
+            (BlockingIOError, b"verification-unavailable"),
+            (FileNotFoundSubclass, b"verification-unavailable"),
+        )
+        for cause, reason in cases:
+            with self.subTest(cause=cause.__name__), \
+                    mock.patch.object(ios_runtime, "provider_verified_checker",
+                                      _PROVIDER_VERIFIED_CHECKER), \
+                    mock.patch.object(ios_runtime, "_provider_snapshot",
+                                      side_effect=cause("PRIVATE cause text")):
+                status, output = self.run_report()
+                self.assertEqual((status, output),
+                                 (1, self.refusal_line("provider-enter", reason)))
+                self.assertNotIn(b"PRIVATE", output)
+        for cause in (None, RuntimeError("PRIVATE")):
+            with self.subTest(cause=type(cause)):
+                error = ios_runtime.Refusal("provider-trusted runtime verification unavailable")
+                error.__cause__ = cause
+                self.assertEqual(self.provider_failure("provider-enter", error),
+                                 (1, self.refusal_line("provider-enter",
+                                                       b"verification-unavailable")))
+        with mock.patch.object(ios_runtime, "provider_verified_checker",
+                               _PROVIDER_VERIFIED_CHECKER), \
+                mock.patch.object(ios_runtime, "_provider_snapshot",
+                                  return_value=(self.record, canonical, alias)), \
+                mock.patch.object(provider_attribution, "_provider",
+                                  side_effect=PermissionError("PRIVATE")):
+            self.assertEqual(self.run_report(),
+                             (1, self.refusal_line("provider-exit",
+                                                   b"verification-unavailable-permission")))
+
+    def test_interrupted_provider_refusal_has_no_reason(self):
+        def interrupted():
+            runner._sigint(None, None)
+            raise ios_runtime.Refusal("unreviewed checker digest observation")
+
+        with mock.patch.object(ios_runtime, "provider_verified_checker", side_effect=interrupted):
+            self.assertEqual(self.run_report(),
+                             (130, b'{"diagnostic":"Interrupted","status":"failed"}\n'))
+
+
+class ProviderReasonAllowlistTests(unittest.TestCase):
+    def provider_messages(self):
+        """Literal refusal messages reachable from provider_verified_checker."""
+        tree = ast.parse(Path(ios_runtime.__file__).read_text(encoding="utf-8"))
+        functions = {node.name: node for node in tree.body
+                     if isinstance(node, ast.FunctionDef)}
+        reachable, pending = set(), ["provider_verified_checker"]
+        while pending:
+            name = pending.pop()
+            if name in reachable:
+                continue
+            reachable.add(name)
+            pending.extend(node.id for node in ast.walk(functions[name])
+                           if isinstance(node, ast.Name) and node.id in functions)
+        for name in ("_provider_inventory", "_provider_snapshot", "_bounded_provider_file",
+                     "_provider_file", "_provider_alias", "_command", "_bounded_command",
+                     "_path", "_read", "_json_pairs", "require"):
+            self.assertIn(name, reachable)
+        for name in ("verified_checker", "_inventory", "_alias", "_library", "_open_file"):
+            self.assertNotIn(name, reachable)
+        messages = set()
+        for name in reachable - {"require"}:
+            for node in ast.walk(functions[name]):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                    continue
+                if node.func.id == "require":
+                    self.assertEqual(len(node.args), 2, name)
+                    message = node.args[1]
+                elif node.func.id == "Refusal":
+                    self.assertEqual(len(node.args), 1, name)
+                    message = node.args[0]
+                else:
+                    continue
+                self.assertIsInstance(message, ast.Constant, name)
+                self.assertIs(type(message.value), str, name)
+                messages.add(message.value)
+        return messages
+
+    def test_every_provider_refusal_message_has_a_reason_code(self):
+        messages = self.provider_messages()
+        self.assertIn("provider-trusted runtime verification unavailable", messages)
+        self.assertEqual(sorted(messages - set(runner._PROVIDER_REASONS)), [])
+        self.assertEqual(sorted(set(runner._PROVIDER_REASONS) - messages), [])
 
 
 if __name__ == "__main__":

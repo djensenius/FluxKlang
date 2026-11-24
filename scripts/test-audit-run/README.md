@@ -646,6 +646,23 @@ stage: `input`, `project-checks`, `pack-discovery`, `snapshot-before`,
 `consistency`, `encoding`, or `final-check`. Invalid stage state falls back
 to `observation`. A stage is not a cause, a guarantee that earlier checks
 succeeded, an exact failed syscall, or proof that any provider command ran.
+At `provider-enter`, `provider-record` or `provider-exit` only, a refusal whose
+type is exactly `ios_runtime.Refusal` and whose single `str` argument exactly
+equals one of the literal provider-trusted messages in
+`observation_runner._PROVIDER_REASONS` adds a fixed kebab-case `"reason"` field
+between `stage` and `status`, for example
+`{"diagnostic":"Refusal","stage":"provider-enter","reason":"xcode-version","status":"refused"}`.
+For `provider-trusted runtime verification unavailable`, a direct cause whose
+class is exactly `FileNotFoundError`, `PermissionError`, `NotADirectoryError`,
+`TimeoutError`, `ProcessLookupError` or `OSError` selects a fixed
+`verification-unavailable-<class>` code; any other cause keeps
+`verification-unavailable`. Codes come only from that closed table, never from
+exception text. Unknown messages, other stages, unexpected failures and
+interruptions are unchanged and carry no reason. A reason names the refusal
+check, not its root cause, and cleanup can still mask an earlier error. A
+static test requires every literal message reachable from
+`provider_verified_checker` to have a table entry, and every entry to be
+reachable.
 Cleanup may mask an operation error, including during provider exit. No private
 exception, path, identity, event, environment, native output or envelope is
 included in these diagnostics.
