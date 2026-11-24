@@ -864,8 +864,10 @@ canonical observation record line, then the unchanged final
 `{"observation":{...},"schema":"fluxklang-provider-products-observation-v1"}`
 with `"assurance":"provider-trusted-observation-not-provenance-or-custody"`.
 It is built at stage `observation-record` from an explicit allow-list of
-values the existing v5 checks already compared in-process, and every value is
-revalidated before emission:
+values the existing v5 run already observed in-process. Except for
+`prepared.output_sha256`, which is only `prepare`'s own digest of the bytes it
+wrote and is never re-read or compared, each value was also compared by the
+existing checks. Every value is revalidated before emission:
 
 - `checkout`: `commit` and `tree` (40-hex); the checkout kind must be
   `event-commit`.
