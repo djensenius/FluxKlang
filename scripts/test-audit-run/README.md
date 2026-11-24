@@ -651,8 +651,10 @@ acquisition to the separately versioned
 the envelope, paths, IDs, environment, exceptions and native command output
 are never deliberately emitted. The separately reviewed manual workflow below
 is included; its presence does not mean it has been dispatched.
-Success is deliberately status-only: exact source, HEAD, runner and toolchain
-identity evidence is not emitted and remains separately unresolved for #893.
+Success in this v4 mode (and in `--bounded-prepare-v1`) is deliberately
+status-only: exact source, HEAD, runner and toolchain identity is not emitted.
+Only the `--provider-products-v1` mode below adds one closed, provider-trusted
+observation record line before the same status line on success.
 The v4 runner verifies provider context but does **not** call the preparer's
 profile acceptance; even a successful provider observation is not acceptance.
 The earlier generic refusal does not establish its cause or profile refusal.
@@ -660,7 +662,8 @@ The earlier generic refusal does not establish its cause or profile refusal.
 Refusal and unexpected-failure reports include a closed execution-boundary
 stage: `input`, `project-checks`, `pack-discovery`, `snapshot-before`,
 `provider-enter`, `provider-record`, `provider-exit`, `snapshot-after`,
-`consistency`, `encoding`, or `final-check`. Invalid stage state falls back
+`consistency`, `encoding`, `observation-record` (Products mode only), or
+`final-check`. Invalid stage state falls back
 to `observation`. A stage is not a cause, a guarantee that earlier checks
 succeeded, an exact failed syscall, or proof that any provider command ran.
 At `provider-enter`, `provider-record` or `provider-exit` only, a refusal whose
@@ -764,7 +767,8 @@ preparer and its nested bounded validator. It type-sensitively compares the
 entire validated intent provider observation with the outer observation.
 Provider exit rechecks, the second source/job snapshot, consistency, encoding,
 the final pair check and final SIGINT checks must all succeed before the same
-status-only `{"status":"observed"}` report. Preparer and material acquisition
+status-only `{"status":"observed"}` report (this explicit mode emits no
+observation record). Preparer and material acquisition
 errors are closed `prepare`-stage refusals; input shape errors use `input`.
 At stage `prepare` only, when the refusal is exactly
 `ios_runtime.Refusal("bounded producer refused")`, its direct cause may add a
@@ -853,8 +857,46 @@ The Products enumeration and handoff add no tracked source module: the changed
 acquisition logic is already among the runner's snapshotted sources. The
 existing v5 source set remains 15 files, and its object budgets remain exactly
 32 calls per snapshot (64 total), with no extra source snapshot or object calls.
-The only successful runner output remains `{"status":"observed"}`; failures
-remain fixed status-only diagnostics. The candidate itself is not printed.
+On success only, this mode writes exactly two lines in one write: one
+canonical observation record line, then the unchanged final
+`{"status":"observed"}` line. The record is canonical JSON (sorted keys,
+`,`/`:` separators, ASCII, at most 8 KiB including its newline) of the form
+`{"observation":{...},"schema":"fluxklang-provider-products-observation-v1"}`
+with `"assurance":"provider-trusted-observation-not-provenance-or-custody"`.
+It is built at stage `observation-record` from an explicit allow-list of
+values the existing v5 checks already compared in-process, and every value is
+revalidated before emission:
+
+- `checkout`: `commit` and `tree` (40-hex); the checkout kind must be
+  `event-commit`.
+- `workflow`: `path` must equal
+  `.github/workflows/ios-provider-products-observation.yml`; `sha` and the
+  tracked workflow `blob` (40-hex). An unavailable workflow identity refuses.
+- `sources`: exactly the 15 v5 executing source paths, each with tracked
+  `blob` (40-hex) and `sha256` (64-hex) of the fresh bytes.
+- `runner`: only `environment`, `os` and `arch`, which must equal
+  `github-hosted`, `macOS` and `ARM64` (the reported `RUNNER_ENVIRONMENT`,
+  `RUNNER_OS` and `RUNNER_ARCH` projections).
+- `xcode`: `version` `Xcode 27.1`, `build` `27A9275`,
+  `simulator_sdk_version` `27.1`.
+- `runtime`: `identifier` `com.apple.CoreSimulator.SimRuntime.iOS-27-0`,
+  `version` `27.0`, `build` `24A434`.
+- `checker`: MainThreadChecker `size` and `sha256`, which must equal the
+  profile's fixed values.
+- `prepared`: `input_sha256` (must equal the candidate pin) and
+  `output_sha256` of the prepared output (64-hex).
+
+Runner name, paths (Products root, candidate, output, intent, bundle, checker
+and temporary directories), repository, event/ref and PR data, run IDs,
+environment, provider command output and exception text are never copied. If
+any allow-listed value is missing, malformed or differs from its fixed value,
+the runner refuses with the existing closed
+`{"diagnostic":"Refusal","stage":"observation-record","status":"refused"}` and
+emits no record. Every refusal, failure and interruption output is byte-for-byte
+unchanged and never includes the record. This record is a lower-assurance
+provider-trusted **observation** reported by the same job; it is not
+independent provenance, custody, attestation, or #60 qualification evidence.
+The candidate path itself is not printed.
 
 This is only provider-trusted candidate selection, **not** a build operation or
 evidence that a candidate is fresh, compile-produced by this checkout, intended
@@ -939,7 +981,11 @@ writes no runtime MainThreadChecker into either target's
 `checker-field-missing` (run 45401463059). Build output goes to a log inside
 the workspace; on failure, only its last 200 lines are printed. The job then runs
 `observation_runner.py --provider-products-v1 WORKSPACE/Build/Products` once,
-and the job result is that runner's exit status. An always-run final step
+and the job result is that runner's exit status. On success the job log shows
+that runner's closed observation record line (described above) before
+`{"status":"observed"}`; this is how the source, workflow, runner, Xcode/SDK,
+runtime, checker and prepared-material identities are recorded, as
+provider-trusted observations rather than provenance or custody. An always-run final step
 removes only the recorded workspace. A cleanup failure also fails the job.
 
 This is a lower-assurance, provider-trusted observation. A success shows only
