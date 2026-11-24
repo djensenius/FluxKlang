@@ -89,10 +89,17 @@ class ProductsObservationWorkflowTests(unittest.TestCase):
             names.append(match.group(1) if match else None)
         self.assertEqual(names, STEP_NAMES)
         self.assertIn("      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
-                      " # v6.0.3 (peeled commit)\n        timeout-minutes: 5\n        with:\n"
+                      " # v6.0.3 (peeled commit)\n        timeout-minutes: 5\n"
+                      "        # Current Git also writes a pack-<id>.rev reverse index, which the\n"
+                      "        # runner's exact one-pair pack discovery refuses (run 45348707621).\n"
+                      "        env:\n          GIT_CONFIG_COUNT: '1'\n"
+                      "          GIT_CONFIG_KEY_0: pack.writeReverseIndex\n"
+                      "          GIT_CONFIG_VALUE_0: 'false'\n        with:\n"
                       "          ref: ${{ github.sha }}\n          fetch-depth: 1\n"
                       "          persist-credentials: false\n", self.steps[1])
         self.assertEqual(self.text.count("uses:"), 1)
+        for key in ("GIT_CONFIG", "pack.writeReverseIndex"):
+            self.assertNotIn(key, "".join(self.steps[:1] + self.steps[2:]))
         guard = self.steps[0]
         self.assertIn("CHECK_REVIEWED_HEAD: ${{ inputs.reviewed_head }}\n", guard)
         self.assertIn("CHECK_WORKFLOW_SHA: ${{ github.workflow_sha }}\n", guard)

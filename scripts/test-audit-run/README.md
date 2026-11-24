@@ -884,6 +884,14 @@ before it is dispatched. Nothing retries automatically; never re-run or
 re-dispatch a refused or failed run unchanged (as for refused v4 run
 44997830432). Merging this workflow authorizes no dispatch.
 
+The first dispatch, run 45348707621 at `ba2d5b4d`, compiled successfully and
+then refused at `pack-discovery`: current Git also writes a `pack-<id>.rev`
+reverse index, and pack discovery accepts exactly one `.pack`/`.idx` pair.
+The checkout step therefore sets `pack.writeReverseIndex=false` through
+`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0` and `GIT_CONFIG_VALUE_0` (checkout step
+only; the observe step still starts from `env -i`). Discovery is unchanged, so
+any `.rev` or other extra entry still refuses.
+
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover \
   -s scripts/test-audit-run -p 'test_products_observation_workflow.py'

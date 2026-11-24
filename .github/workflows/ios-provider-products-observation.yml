@@ -61,6 +61,12 @@ jobs:
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (peeled commit)
         timeout-minutes: 5
+        # Current Git also writes a pack-<id>.rev reverse index, which the
+        # runner's exact one-pair pack discovery refuses (run 45348707621).
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: pack.writeReverseIndex
+          GIT_CONFIG_VALUE_0: 'false'
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
