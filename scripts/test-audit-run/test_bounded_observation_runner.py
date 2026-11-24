@@ -113,9 +113,62 @@ class BoundedRunnerTests(unittest.TestCase):
         )
         return root, path
 
+    def use_products_workflow(self):
+        """The fixed Products workflow path, with a distinctive private runner name."""
+        self.workflow_blob = self.git.add("blob", b"fixture products workflow")
+        name = runner._PRODUCTS_WORKFLOW.rpartition("/")[2]
+        workflows = self.git.tree({name: ("100644", self.workflow_blob)})
+        github = self.git.tree({"workflows": ("40000", workflows)})
+        self.tree = self.git.tree({".github": ("40000", github)})
+        self.rebuild()
+        self.environment.update(
+            GITHUB_WORKFLOW_REF=f"owner/repo/{runner._PRODUCTS_WORKFLOW}@refs/heads/main",
+            GITHUB_WORKFLOW_SHA=self.commit, RUNNER_NAME="PRIVATE-runner-name",
+        )
+        os.environ.update(self.environment)
+
+    def expected_record(self):
+        def blob(data):
+            return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+        record = {
+            "schema": "fluxklang-provider-products-observation-v1",
+            "observation": {
+                "assurance": "provider-trusted-observation-not-provenance-or-custody",
+                "checkout": {"commit": self.commit, "tree": self.tree},
+                "workflow": {"path": ".github/workflows/ios-provider-products-observation.yml",
+                             "sha": self.commit, "blob": self.workflow_blob},
+                "sources": {path: {"blob": blob(self.data[path]),
+                                   "sha256": hashlib.sha256(self.data[path]).hexdigest()}
+                            for path in integration._PATHS_V5},
+                "runner": {"environment": "github-hosted", "os": "macOS", "arch": "ARM64"},
+                "xcode": {"version": "Xcode 27.1", "build": "27A9275",
+                          "simulator_sdk_version": "27.1"},
+                "runtime": {"identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+                            "version": "27.0", "build": "24A434"},
+                "checker": {"size": 338880,
+                            "sha256": hashlib.sha256(self.host.bytes).hexdigest()},
+                "prepared": {"input_sha256": self.candidate_pin,
+                             "output_sha256": hashlib.sha256(self.output.read_bytes()).hexdigest()},
+            },
+        }
+        return json.dumps(record, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+    def products_report(self):
+        products_root = self.directory / "products"
+        if products_root.exists():
+            for entry in products_root.iterdir():
+                entry.unlink()  # Earlier prepared siblings would be extra candidates.
+        products_root, candidate = self.products()
+        self.candidate_pin = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        return self.report(arguments=["--provider-products-v1", str(products_root)],
+                           source=candidate)
+
     def test_composed_products_handoff_uses_real_v5_and_exact_pin(self):
+        self.use_products_workflow()
         products_root, candidate = self.products()
         pin = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        self.candidate_pin = pin
         counts = []
         original_sources = integration._observe_fixed_sources
 
@@ -129,15 +182,135 @@ class BoundedRunnerTests(unittest.TestCase):
                 mock.patch.object(acquisition, "discover_candidate",
                                   wraps=acquisition.discover_candidate) as discover, \
                 mock.patch.object(integration, "observe_v5", wraps=integration.observe_v5) as v5:
-            self.assertEqual(self.report(
+            status, output = self.report(
                 arguments=["--provider-products-v1", str(products_root)],
                 source=candidate,
-            ), (0, b'{"status":"observed"}\n'))
+            )
         discover.assert_called_once_with(str(products_root))
         self.assertEqual(v5.call_args.args[2:], (str(candidate), pin))
         self.assertEqual(counts, [32, 32])
         self.assertTrue(self.output.is_file())
         self.assertTrue(self.intent.is_file())
+        # Exactly one canonical record line, then the unchanged final status line.
+        record = self.expected_record()
+        self.assertEqual((status, output), (0, record + b'{"status":"observed"}\n'))
+        self.assertLessEqual(len(record), 8 * 1024)
+        self.assertTrue(record.startswith(
+            b'{"observation":{"assurance":"provider-trusted-observation-not-provenance-or-custody",'))
+        self.assertTrue(record.endswith(b'},"schema":"fluxklang-provider-products-observation-v1"}\n'))
+        for private in (b"PRIVATE", b"Hosted Runner", str(self.root).encode(),
+                        str(candidate).encode(), str(self.output).encode(), b"refs/",
+                        b"owner/repo", b"/private/var", b"provider_observation"):
+            self.assertNotIn(private, output)
+
+    def test_products_record_fields_are_closed_and_refuse_without_partial_output(self):
+        self.use_products_workflow()
+        captured = []
+        original = integration.observe_v5
+
+        def capture(*args):
+            captured.append(original(*args))
+            return captured[-1]
+
+        with mock.patch.object(integration, "observe_v5", side_effect=capture):
+            self.assertEqual(self.products_report()[0], 0)
+        envelope, prepared = captured[0]
+        base = json.loads(envelope)
+        refused = (1, b'{"diagnostic":"Refusal","stage":"observation-record","status":"refused"}\n')
+        path = integration._PATHS_V5[0]
+
+        def setter(*keys, value):
+            def mutate(data, _prepared):
+                target = data
+                for key in keys[:-1]:
+                    target = target[key]
+                target[keys[-1]] = value
+            return mutate
+
+        def edit_prepared(key, value):
+            def mutate(_data, record):
+                record[key] = value
+            return mutate
+
+        def delete(*keys):
+            def mutate(data, _prepared):
+                target = data
+                for key in keys[:-1]:
+                    target = target[key]
+                del target[keys[-1]]
+            return mutate
+
+        attribution = ("attribution",)
+        provider = (*attribution, "provider_runtime")
+        cases = {
+            "schema": setter("schema", value=integration.SCHEMA_V4),
+            "commit": setter(*attribution, "checkout", "commit", value=self.commit.upper()),
+            "tree": setter(*attribution, "checkout", "tree", value=self.tree[:39]),
+            "kind": setter(*attribution, "checkout", "kind", value="pr-synthetic-merge"),
+            "workflow-status": setter(*attribution, "workflow", "status", value="unavailable"),
+            "workflow-path": setter(*attribution, "workflow", "path",
+                                    value=".github/workflows/observe.yml"),
+            "workflow-sha": setter(*attribution, "workflow", "sha", value=self.commit + "\n"),
+            "workflow-blob": setter(*attribution, "workflow", "blob", value=None),
+            "source-missing": delete("sources", path),
+            "source-extra": setter("sources", "scripts/test-audit-run/extra.py",
+                                   value=base["sources"][path]),
+            "source-blob": setter("sources", path, "blob", value="PRIVATE"),
+            "source-sha256": setter("sources", path, "sha256", value="A" * 64),
+            "source-extra-key": setter("sources", path, "path", value="/private"),
+            "runner-environment": setter(*attribution, "context", "runner", "environment",
+                                         value="self-hosted"),
+            "runner-os": setter(*attribution, "context", "platform", "os", value="Linux"),
+            "runner-arch": setter(*attribution, "context", "platform", "arch", value="X64"),
+            "xcode-version": setter(*provider, "xcode", "version", value="Xcode 27.2"),
+            "xcode-build": setter(*provider, "xcode", "build", value="27A9276"),
+            "xcode-sdk": setter(*provider, "xcode", "simulator_sdk_version", value="27.0"),
+            "runtime-identifier": setter(*provider, "runtime", "identifier", value="PRIVATE"),
+            "runtime-version": setter(*provider, "runtime", "version", value="27.1"),
+            "runtime-build": setter(*provider, "runtime", "build", value="24A435"),
+            "checker-size": setter(*provider, "checker", "size", value=338881),
+            "checker-size-type": setter(*provider, "checker", "size", value=338880.0),
+            "checker-sha256": setter(*provider, "checker", "sha256", value="0" * 64),
+            "provider-missing": delete(*provider),
+            "prepared-input": edit_prepared("input", "0" * 64),
+            "prepared-output": edit_prepared("output", "PRIVATE"),
+            "prepared-extra": edit_prepared("path", "/private"),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(field=name):
+                data, record = copy.deepcopy(base), dict(prepared)
+                mutate(data, record)
+                observed = (provider_attribution._encode(data), record)
+                with mock.patch.object(integration, "observe_v5", return_value=observed):
+                    self.assertEqual(self.products_report(), refused)
+        for name, observed in (("not-tuple", [envelope, prepared]),
+                               ("envelope-type", (envelope.decode(), prepared)),
+                               ("envelope-json", (b"{", prepared)),
+                               ("prepared-type", (envelope, None))):
+            with self.subTest(field=name), \
+                    mock.patch.object(integration, "observe_v5", return_value=observed):
+                self.assertEqual(self.products_report(), refused)
+        with self.subTest(field="size"), \
+                mock.patch.object(integration, "observe_v5", return_value=captured[0]), \
+                mock.patch.object(runner, "_RECORD_LIMIT", 1024):
+            self.assertEqual(self.products_report(), refused)
+        with self.subTest(field="interrupt"):
+            real = runner._products_record
+
+            def interrupted(*args):
+                result = real(*args)
+                runner._sigint(None, None)
+                return result
+
+            with mock.patch.object(integration, "observe_v5", return_value=captured[0]), \
+                    mock.patch.object(runner, "_products_record", side_effect=interrupted):
+                self.assertEqual(self.products_report(),
+                                 (130, b'{"diagnostic":"Interrupted","status":"failed"}\n'))
+        with self.subTest(field="bounded-prepare-unchanged"), \
+                mock.patch.object(integration, "observe_v5", return_value=captured[0]), \
+                mock.patch.object(runner, "_products_record") as record_builder:
+            self.assertEqual(self.report(), (0, b'{"status":"observed"}\n'))
+            record_builder.assert_not_called()
 
     def test_products_candidate_cardinality_and_path_policy_refuse_closed(self):
         products_root, candidate = self.products()

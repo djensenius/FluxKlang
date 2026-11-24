@@ -20,6 +20,7 @@ _STAGES = {
     "snapshot-after": b"snapshot-after",
     "consistency": b"consistency",
     "encoding": b"encoding",
+    "observation-record": b"observation-record",
     "final-check": b"final-check",
 }
 _PROVIDER_STAGES = frozenset(("provider-enter", "provider-record", "provider-exit"))
@@ -236,6 +237,108 @@ def set_stage(stage):
     _stage = stage
 
 
+# --provider-products-v1 success only: one closed, allow-listed observation
+# record. Every value is pattern-checked or must equal a fixed reviewed value;
+# runner name, paths, event/PR data, env and exception text are never copied.
+_RECORD_SCHEMA = "fluxklang-provider-products-observation-v1"
+_RECORD_ASSURANCE = "provider-trusted-observation-not-provenance-or-custody"
+_RECORD_LIMIT = 8 * 1024
+_RECORD_REFUSAL = "invalid provider Products observation record"
+_PRODUCTS_WORKFLOW = ".github/workflows/ios-provider-products-observation.yml"
+_RECORD_RUNNER = {"environment": "github-hosted", "os": "macOS", "arch": "ARM64"}
+_RECORD_XCODE = {"version": "Xcode 27.1", "build": "27A9275", "simulator_sdk_version": "27.1"}
+_RECORD_RUNTIME = {"version": "27.0", "build": "24A434"}
+
+
+def _products_record(observed, pin):
+    """Return the closed record line, or refuse; never partial data."""
+    import json
+    import re
+
+    runtime = integration.ios_runtime
+    message = _RECORD_REFUSAL
+
+    def shape(value, keys):
+        runtime.require(type(value) is dict and set(value) == set(keys)
+                        and len(value) == len(keys), message)
+        return value
+
+    def text(value, pattern):
+        runtime.require(type(value) is str
+                        and re.fullmatch(pattern, value, flags=re.ASCII) is not None, message)
+        return value
+
+    def exact(value, expected):
+        runtime.require(type(value) is type(expected) and value == expected, message)
+        return value
+
+    def oid(value):
+        return text(value, r"[0-9a-f]{40}")
+
+    def digest(value):
+        return text(value, r"[0-9a-f]{64}")
+
+    try:
+        runtime.require(type(observed) is tuple and len(observed) == 2, message)
+        envelope, prepared = observed
+        runtime.require(type(envelope) is bytes
+                        and len(envelope) <= integration.provider_attribution.ENVELOPE_LIMIT,
+                        message)
+        data = json.loads(envelope.decode("ascii"))
+        exact(data["schema"], integration.SCHEMA_V5)
+        attribution = data["attribution"]
+        context = attribution["context"]
+        checkout = attribution["checkout"]
+        workflow = attribution["workflow"]
+        provider = attribution["provider_runtime"]
+        exact(checkout["kind"], "event-commit")
+        exact(workflow["status"], "observed")
+        sources = shape(data["sources"], integration._PATHS_V5)
+        shape(prepared, ("input", "output"))
+        record = {
+            "schema": _RECORD_SCHEMA,
+            "observation": {
+                "assurance": _RECORD_ASSURANCE,
+                "checkout": {"commit": oid(checkout["commit"]), "tree": oid(checkout["tree"])},
+                "workflow": {"path": exact(workflow["path"], _PRODUCTS_WORKFLOW),
+                             "sha": oid(workflow["sha"]), "blob": oid(workflow["blob"])},
+                "sources": {
+                    path: {"blob": oid(shape(sources[path], ("blob", "sha256"))["blob"]),
+                           "sha256": digest(sources[path]["sha256"])}
+                    for path in integration._PATHS_V5
+                },
+                "runner": {
+                    "environment": exact(context["runner"]["environment"],
+                                         _RECORD_RUNNER["environment"]),
+                    "os": exact(context["platform"]["os"], _RECORD_RUNNER["os"]),
+                    "arch": exact(context["platform"]["arch"], _RECORD_RUNNER["arch"]),
+                },
+                "xcode": {key: exact(provider["xcode"][key], expected)
+                          for key, expected in _RECORD_XCODE.items()},
+                "runtime": {
+                    "identifier": exact(provider["runtime"]["identifier"], runtime.RUNTIME),
+                    **{key: exact(provider["runtime"][key], expected)
+                       for key, expected in _RECORD_RUNTIME.items()},
+                },
+                "checker": {
+                    "size": exact(provider["checker"]["size"], runtime.LIBRARY_SIZE),
+                    "sha256": exact(digest(provider["checker"]["sha256"]),
+                                    runtime.LIBRARY_SHA256),
+                },
+                "prepared": {"input_sha256": exact(digest(prepared["input"]), pin),
+                             "output_sha256": digest(prepared["output"])},
+            },
+        }
+        line = json.dumps(record, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=True, allow_nan=False).encode("ascii") + b"\n"
+        runtime.require(len(line) <= _RECORD_LIMIT and line.count(b"\n") == 1, message)
+        return line
+    except runtime.Refusal:
+        raise
+    except Exception as error:
+        raise runtime.Refusal(message) from error
+
+
 def _stage_bytes():
     return _STAGES.get(_stage, b"observation") if type(_stage) is str else b"observation"
 
@@ -260,6 +363,7 @@ def main():
         import source_snapshot_integration as integration
 
         root = os.environ.get("GITHUB_WORKSPACE")
+        record = b""
         if sys.argv[1:2] == ["--bounded-prepare-v1"]:
             integration.ios_runtime.require(len(sys.argv) == 4, "invalid explicit input")
             integration.observe_v5(root, sys.modules[__name__], sys.argv[2], sys.argv[3])
@@ -268,13 +372,16 @@ def main():
             set_stage("candidate-discovery")
             candidate, pin = acquisition.discover_candidate(sys.argv[2])
             check_interrupted()
-            integration.observe_v5(root, sys.modules[__name__], candidate, pin)
+            observed = integration.observe_v5(root, sys.modules[__name__], candidate, pin)
+            set_stage("observation-record")
+            check_interrupted()
+            record = _products_record(observed, pin)
         else:
             integration.ios_runtime.require(len(sys.argv) == 1, "unexpected arguments")
             integration.observe_v4(root, sys.modules[__name__])
         set_stage("final-check")
         check_interrupted()
-        output = b'{"status":"observed"}\n'
+        output = record + b'{"status":"observed"}\n'
         status = 0
     except KeyboardInterrupt:
         output = b'{"diagnostic":"Interrupted","status":"failed"}\n'

@@ -387,7 +387,10 @@ class ProductsObservationWorkflowTests(unittest.TestCase):
         environment = {key: "fixture-" + key for key in KEYS}
         environment.update(PRODUCTS_ROOT=products, SECRET_TOKEN="secret", PYTHONPATH="/hostile",
                            DEVELOPER_DIR="/hostile", PATH="/hostile")
-        for status, output in ((0, '{"status":"observed"}'),
+        record = ('{"observation":{"assurance":'
+                  '"provider-trusted-observation-not-provenance-or-custody"},'
+                  '"schema":"fluxklang-provider-products-observation-v1"}')
+        for status, output in ((0, record + '\n{"status":"observed"}'),
                                (1, '{"diagnostic":"Refusal","status":"refused"}'),
                                (130, '{"diagnostic":"Interrupted","status":"failed"}')):
             with self.subTest(status=status):

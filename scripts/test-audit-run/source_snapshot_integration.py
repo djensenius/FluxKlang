@@ -279,7 +279,11 @@ def observe_v4(checkout_root, runner):
 
 
 def observe_v5(checkout_root, runner, input_path, expected_sha256):
-    """Explicit bounded producer within the integrated source/job observation."""
+    """Explicit bounded producer within the integrated source/job observation.
+
+    Returns (envelope bytes, {"input": sha256, "output": sha256}) for the
+    prepared material; the caller decides what, if anything, to publish.
+    """
     return _observe_runner(checkout_root, runner, (input_path, expected_sha256))
 
 
@@ -381,6 +385,8 @@ def _observe_runner(checkout_root, runner, material=None):
         check_pair()
         return result
 
+    prepared = {}
+
     def produce(provider):
         runner.check_interrupted()
         try:
@@ -388,6 +394,7 @@ def _observe_runner(checkout_root, runner, material=None):
                                      bounded_material=True)
             runner.check_interrupted()
             prepare.require_equal(record["provider_observation"], provider, "provider observation")
+            prepared.update(input=record["input"]["sha256"], output=record["output"]["sha256"])
         except Exception as error:
             raise ios_runtime.Refusal("bounded producer refused") from error
         runner.check_interrupted()
@@ -399,7 +406,7 @@ def _observe_runner(checkout_root, runner, material=None):
                       runner.set_stage, None if material is None else produce)
     runner.set_stage("final-check")
     check_pair()
-    return result
+    return result if material is None else (result, dict(prepared))
 
 
 def _observe(checkout_root, pack_id, context_reader, invocation_type, schema,
