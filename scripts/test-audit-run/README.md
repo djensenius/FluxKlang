@@ -659,7 +659,12 @@ class is exactly `FileNotFoundError`, `PermissionError`, `NotADirectoryError`,
 `verification-unavailable`. Codes come only from that closed table, never from
 exception text. Unknown messages, other stages, unexpected failures and
 interruptions are unchanged and carry no reason. A reason names the refusal
-check, not its root cause, and cleanup can still mask an earlier error. A
+check, not its root cause, and cleanup can still mask an earlier error. An
+`OSError` raised while recording inside the checker is rewrapped as
+verification unavailable and reported at `provider-exit`, so a
+`verification-unavailable-<class>` code there may come from recording rather
+than the exit re-check. Messages raised through indirect calls (attribute or
+aliased `require`) are not seen by the static check and simply get no reason. A
 static test requires every literal message reachable from
 `provider_verified_checker` to have a table entry, and every entry to be
 reachable.
