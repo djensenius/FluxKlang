@@ -439,7 +439,7 @@ class BoundedRunnerTests(unittest.TestCase):
         for boundary, trigger, total, comparisons, stage in (
             ("validator", 18, 24, 1, b"prepare"),
             ("producer", 24, 30, 2, b"prepare"),
-            ("composition", 30, 36, 3, b"provider-exit"),
+            ("composition", 30, 36, 3, b'provider-exit","reason":"observation-drift'),
         ):
             with self.subTest(boundary=boundary):
                 tool.st_ino = 1
@@ -505,7 +505,8 @@ class BoundedRunnerTests(unittest.TestCase):
                 self.host.after_command = after_command
                 status, output = self.report()
                 stage = (b"prepare" if case in ("input", "provider") else
-                         b"provider-exit" if case == "outer-exit" else b"snapshot-after")
+                         b'provider-exit","reason":"xcode-tool-drift' if case == "outer-exit"
+                         else b"snapshot-after")
                 self.assertEqual((status, output),
                                  (1, b'{"diagnostic":"Refusal","stage":"' + stage
                                   + b'","status":"refused"}\n'))

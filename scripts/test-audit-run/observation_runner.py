@@ -22,6 +22,73 @@ _STAGES = {
     "encoding": b"encoding",
     "final-check": b"final-check",
 }
+_PROVIDER_STAGES = frozenset(("provider-enter", "provider-record", "provider-exit"))
+# Closed allowlist: exact literal ios_runtime provider-trusted refusal message
+# -> fixed reason code. Codes are never derived from exception text.
+_UNAVAILABLE = "provider-trusted runtime verification unavailable"
+_PROVIDER_REASONS = {
+    "runtime verification command timed out": b"command-timeout",
+    "runtime verification output limit": b"command-output-limit",
+    "runtime verification command failed": b"command-failed",
+    "runtime verification command unavailable": b"command-unavailable",
+    "invalid inventory path": b"invalid-path",
+    "ambiguous inventory path": b"ambiguous-path",
+    "runtime file size limit": b"file-size-limit",
+    "duplicate inventory key": b"inventory-duplicate-key",
+    "provider-trusted runtime requires Darwin arm64": b"platform",
+    "fixed Xcode tool is not a regular file": b"xcode-tool-shape",
+    "unreviewed Xcode version/build observation": b"xcode-version",
+    "malformed Xcode build observation": b"xcode-build-malformed",
+    "unreviewed simulator SDK observation": b"simulator-sdk",
+    "invalid provider-trusted runtime inventory": b"inventory-invalid",
+    "invalid provider-trusted runtime inventory shape": b"inventory-shape",
+    "provider-trusted runtime missing or ambiguous": b"runtime-missing",
+    "unreviewed/unavailable provider-trusted runtime observation": b"runtime-build",
+    "unexpected provider-trusted runtime bundle/root relationship": b"runtime-bundle-root",
+    "fixed Xcode tool changed during provider-trusted inventory": b"xcode-tool-drift",
+    "provider-trusted runtime file shape/size mismatch": b"file-shape",
+    "provider-trusted runtime file changed during observation": b"file-drift",
+    "provider-trusted runtime file unavailable": b"file-unavailable",
+    "standard /var alias unavailable": b"var-alias-unavailable",
+    "standard /var alias identity mismatch": b"var-alias-identity",
+    "checker alias identity mismatch": b"checker-alias-identity",
+    "unreviewed checker digest observation": b"checker-digest",
+    "checker observation must be thin arm64 Mach-O": b"checker-architecture",
+    "checker changed during provider-trusted signature observation": b"checker-drift",
+    "invalid provider-trusted runtime Info.plist observation": b"runtime-plist-invalid",
+    "provider-trusted runtime plist identifier mismatch": b"runtime-plist-identifier",
+    "provider-trusted runtime/toolchain observation changed": b"observation-drift",
+    _UNAVAILABLE: b"verification-unavailable",
+}
+# Exact builtin cause classes only (no subclasses, no text).
+_UNAVAILABLE_CAUSES = (
+    (FileNotFoundError, b"verification-unavailable-filenotfound"),
+    (PermissionError, b"verification-unavailable-permission"),
+    (NotADirectoryError, b"verification-unavailable-notadirectory"),
+    (TimeoutError, b"verification-unavailable-timeout"),
+    (ProcessLookupError, b"verification-unavailable-processlookup"),
+    (OSError, b"verification-unavailable-oserror"),
+)
+
+
+def _reason_bytes(error):
+    """Return a fixed allowlisted provider-stage reason code, or None."""
+    try:
+        if not (type(_stage) is str and _stage in _PROVIDER_STAGES
+                and type(error) is integration.ios_runtime.Refusal):
+            return None
+        args = error.args
+        if type(args) is not tuple or len(args) != 1 or type(args[0]) is not str:
+            return None
+        reason = _PROVIDER_REASONS.get(args[0])
+        if reason is not None and args[0] == _UNAVAILABLE:
+            cause = error.__cause__
+            for cause_type, cause_reason in _UNAVAILABLE_CAUSES:
+                if type(cause) is cause_type:
+                    return cause_reason
+        return reason
+    except BaseException:
+        return None
 
 
 def set_stage(stage):
@@ -83,7 +150,9 @@ def main():
             output = b'{"diagnostic":"Interrupted","status":"failed"}\n'
             status = 130
         elif refused:
+            reason = _reason_bytes(error)
             output = (b'{"diagnostic":"Refusal","stage":"' + _stage_bytes()
+                      + (b'' if reason is None else b'","reason":"' + reason)
                       + b'","status":"refused"}\n')
             status = 1
         else:
