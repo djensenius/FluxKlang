@@ -475,7 +475,7 @@ def _provider_inventory(*, command=None):
             and root == bundle + "/Contents/Resources/RuntimeRoot",
             "unexpected provider-trusted runtime bundle/root relationship")
     require({path: _identity(os.stat(path, follow_symlinks=False)) for path in tools} == tools,
-            "fixed Xcode tool changed during provider-trusted inventory")
+            "fixed provider tool changed during provider-trusted inventory")
     return {
         "developer_directory": developer,
         "xcodebuild_path": xcodebuild,

@@ -371,7 +371,7 @@ class RuntimeTests(unittest.TestCase):
                 node.st_ino += 1
         self.host.after_command = replace
         with self.assertRaisesRegex(
-            runtime.Refusal, "fixed Xcode tool changed during provider-trusted inventory",
+            runtime.Refusal, "fixed provider tool changed during provider-trusted inventory",
         ):
             runtime._provider_inventory(command=self.host.command)
         self.host.after_command = lambda argv: None

@@ -46,7 +46,7 @@ _PROVIDER_REASONS = {
     "provider-trusted runtime missing or ambiguous": b"runtime-missing",
     "unreviewed/unavailable provider-trusted runtime observation": b"runtime-build",
     "unexpected provider-trusted runtime bundle/root relationship": b"runtime-bundle-root",
-    "fixed Xcode tool changed during provider-trusted inventory": b"xcode-tool-drift",
+    "fixed provider tool changed during provider-trusted inventory": b"provider-tool-drift",
     "provider-trusted runtime file shape/size mismatch": b"file-shape",
     "provider-trusted runtime file changed during observation": b"file-drift",
     "provider-trusted runtime file unavailable": b"file-unavailable",
