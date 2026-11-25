@@ -2335,3 +2335,42 @@ the whole Products directory, does not establish provenance or custody, and
 does not re-check the prepared file's bytes at launch time (that would be a
 future, separately reviewed step). It is not wired into any workflow and does
 not launch anything, qualify #60 or authorize workflow dispatch.
+
+### Pre-launch prepared-input re-check (#893; source-only)
+
+`ios_launch_recheck.recheck_before_launch(binding, *, intent, validate=None)`
+returns `binding` unchanged or raises `ios_launch_plan.Refusal`. `binding` must
+be the exact `(run_uuid, xctestrun_path, result_bundle_path)` tuple of `str`
+values that `bind_launch` returned. That tuple carries no input path, pin or
+intent path, so the caller must also pass the **same** `intent` dict it gave
+`bind_launch`. The function checks the intent's provider-profile shape and that
+its `run_id` and output path equal the binding. Digest-to-record binding remains
+`bind_launch`'s job; an intent that was never bound is not detected here.
+
+It then calls `validate` exactly once as `validate(input_path, input_sha256,
+prepare.IOS_PROVIDER_RUNTIME_PROFILE, output_path, intent_path,
+bounded_material=True)`. When `validate` is `None`, `prepare.validate` is looked
+up at call time. Bounded-material mode is used because the Products path
+prepares provider-profile inputs with the bounded producer
+(`--bounded-prepare-v1`). Any `Exception` from `validate` becomes the closed
+refusal `prepared inputs failed the pre-launch re-check`, with the original
+exception as `__cause__`. `KeyboardInterrupt` and `SystemExit` propagate
+unchanged. The returned record must be an exact intent-shaped `dict` with
+equal input/output digests (`re-validated digests ...`), then equal
+input/output/intent paths (`re-validated paths ...`), and finally be
+type-exactly equal to `intent` (`re-validated intent ...`). Wrong binding,
+intent or `validate` types are refused before `validate` is called.
+
+The module does no IO itself. All reads happen inside `validate`, so real
+validation reacquires the three files and repeats the fresh provider-trusted
+runtime/toolchain observations. Tests use fake validators, plus one real
+bounded `prepare`/`validate` round trip on a temporary synthetic fixture.
+That test replaces provider probes and denies processes and sockets.
+
+Limits: a time-of-check/time-of-use window remains between this re-check
+and xcodebuild reading the prepared xctestrun (and the Products bundles it
+references, which are not inventoried). The re-check carries the provider
+profile's trust assumptions, not provenance or custody. It is not wired
+into `run_launch` or any workflow. Real simulator or xcodebuild execution
+and workflow dispatch remain unauthorized. The module is not in the v5
+observed source set.
