@@ -59,6 +59,24 @@ class LoggedValidate:
         return intent() if self.result is None else self.result
 
 
+class SequencedValidate:
+    """Logged validate returning or raising per call from ``steps``."""
+
+    def __init__(self, events, steps):
+        self.events, self.steps = events, list(steps)
+        self.calls = []
+
+    def __call__(self, *args, **kwargs):
+        self.events.log.append("validate")
+        self.calls.append((args, kwargs))
+        if not self.steps:
+            raise AssertionError("unexpected validate call")
+        result, error = self.steps.pop(0)
+        if error is not None:
+            raise error
+        return intent() if result is None else result
+
+
 class LoggedCommand(FakeCommand):
     def __init__(self, events, responses):
         super().__init__(responses)
@@ -84,15 +102,60 @@ class ComposeTests(unittest.TestCase):
         arguments.update(changes)
         return compose.bind_recheck_and_launch(**arguments)
 
-    def test_success_orders_recheck_before_every_command(self):
+    def test_success_rechecks_before_commands_and_again_before_xcodebuild(self):
         validate = LoggedValidate(self.events)
         command = LoggedCommand(self.events, script())
         record = outcome.decode(self.launch(validate, command))
         self.assertEqual((record["outcome"], record["run_uuid"]), ("passed", RUN_ID))
-        self.assertEqual(validate.calls, [CALL])
-        self.assertEqual(self.events.log[0], "validate")
-        self.assertEqual(self.events.log[1:], [entry[0] for entry in script()])
+        self.assertEqual(validate.calls, [CALL, CALL])
+        argvs = [entry[0] for entry in script()]
+        owned = len(PRE_OWNERSHIP)
+        self.assertEqual(self.events.log,
+                         ["validate", *argvs[:owned], "validate", *argvs[owned:]])
+        self.assertEqual(argvs[owned], TEST_ARGV)
         self.assertEqual(command.responses, [])
+
+    def test_tamper_between_rechecks_is_refused_without_xcodebuild(self):
+        tampered = intent()
+        tampered["output"]["sha256"] = "4" * 64
+        cases = ((tampered, None, recheck.DIGEST_REFUSAL),
+                 (None, OSError("output changed"), recheck.VALIDATE_REFUSAL))
+        for second, error, message in cases:
+            with self.subTest(message=message):
+                self.events.log.clear()
+                validate = SequencedValidate(self.events, [(None, None), (second, error)])
+                command = LoggedCommand(self.events, [*PRE_OWNERSHIP, DELETE])
+                observe = Observer()
+                with self.assertRaisesRegex(Refusal, message):
+                    self.launch(validate, command, observe)
+                self.assertEqual(validate.calls, [CALL, CALL])
+                self.assertNotIn(TEST_ARGV, command.calls)
+                self.assertEqual(observe.calls, [])
+                self.assertEqual(command.responses, [])
+                self.assertEqual(command.calls.count(DELETE[0]), 1)
+                self.assertEqual(command.calls[-1], DELETE[0])
+                argvs = [entry[0] for entry in PRE_OWNERSHIP]
+                self.assertEqual(self.events.log,
+                                 ["validate", *argvs, "validate", DELETE[0]])
+
+    def test_intent_changed_after_early_recheck_is_refused_in_hook(self):
+        supplied = intent()
+        create = PRE_OWNERSHIP[2][0]
+
+        class MutatingCommand(LoggedCommand):
+            def __call__(self, argv, **kwargs):
+                if argv == create:
+                    supplied["provider_observation"] = {"xcode": {"version": "Xcode 27.2"}}
+                return super().__call__(argv, **kwargs)
+
+        validate = LoggedValidate(self.events)
+        command = MutatingCommand(self.events, [*PRE_OWNERSHIP, DELETE])
+        with self.assertRaisesRegex(Refusal, recheck.BOUND_REFUSAL):
+            self.launch(validate, command, intent=supplied)
+        self.assertEqual(validate.calls, [CALL])
+        self.assertNotIn(TEST_ARGV, command.calls)
+        self.assertEqual(command.responses, [])
+        self.assertEqual(command.calls.count(DELETE[0]), 1)
 
     def test_bind_refusal_stops_recheck_and_launch(self):
         cases = (dict(reviewed_head="f" * 40), dict(run_uuid=str(OWNED)),
@@ -198,12 +261,23 @@ class ComposeTests(unittest.TestCase):
                     self.launch(command=command)
                 self.assertIs(caught.exception, error)
                 self.assertEqual(command.calls[-1], DELETE[0])
+            with self.subTest(stage="hook recheck", error=type(error)):
+                self.events.log.clear()
+                validate = SequencedValidate(self.events, [(None, None), (None, error)])
+                command = LoggedCommand(self.events, [*PRE_OWNERSHIP, DELETE])
+                with self.assertRaises(type(error)) as caught:
+                    self.launch(validate, command)
+                self.assertIs(caught.exception, error)
+                self.assertEqual(validate.calls, [CALL, CALL])
+                self.assertNotIn(TEST_ARGV, command.calls)
+                self.assertEqual(command.calls.count(DELETE[0]), 1)
+                self.assertEqual(command.calls[-1], DELETE[0])
 
     def test_default_validate_is_prepare_validate(self):
         validate = LoggedValidate(self.events)
         with mock.patch.object(prepare, "validate", validate):
             self.launch(command=LoggedCommand(self.events, script()), validate=None)
-        self.assertEqual(validate.calls, [CALL])
+        self.assertEqual(validate.calls, [CALL, CALL])
 
     def test_source_has_no_direct_execution_io_imports_or_cli(self):
         source = Path(compose.__file__).read_text(encoding="utf-8")

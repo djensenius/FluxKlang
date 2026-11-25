@@ -232,6 +232,78 @@ class LaunchRunnerTests(unittest.TestCase):
         self.assertEqual(record["outcome"], "unavailable")
         self.assert_deleted_once(fake)
 
+    def test_before_test_runs_once_after_ownership_before_xcodebuild(self):
+        fake, observe = FakeCommand(script()), Observer()
+        hook_calls = []
+
+        def hook(*args, **kwargs):
+            hook_calls.append((args, kwargs, list(fake.calls)))
+            return "ignored"
+
+        record = outcome.decode(run(fake, observe, before_test=hook))
+        self.assertEqual(record["outcome"], "passed")
+        self.assertEqual(len(hook_calls), 1)
+        args, kwargs, seen = hook_calls[0]
+        self.assertEqual((args, kwargs), ((), {}))
+        self.assertEqual(seen, [entry[0] for entry in PRE_OWNERSHIP])
+        self.assertEqual(fake.calls[len(PRE_OWNERSHIP)], TEST_ARGV)
+        self.assert_deleted_once(fake)
+
+    def test_before_test_none_is_unchanged(self):
+        fake = FakeCommand(script())
+        record = outcome.decode(run(fake, Observer(), before_test=None))
+        self.assertEqual(record["outcome"], "passed")
+        self.assertEqual(fake.calls, [entry[0] for entry in script()])
+
+    def test_non_callable_before_test_refused_before_commands(self):
+        for value in ("hook", 1, False):
+            with self.subTest(value=value):
+                fake = FakeCommand([])
+                with self.assertRaisesRegex(Refusal, "before_test"):
+                    run(fake, Observer(), before_test=value)
+                self.assertEqual(fake.calls, [])
+
+    def test_before_test_errors_skip_xcodebuild_and_delete_once(self):
+        for error in (Refusal("stale"), OSError("gone"), KeyboardInterrupt(),
+                      SystemExit(143)):
+            with self.subTest(error=type(error)):
+                fake, observe = FakeCommand([*PRE_OWNERSHIP, DELETE]), Observer()
+                calls = []
+
+                def hook():
+                    calls.append(1)
+                    raise error
+
+                with self.assertRaises(type(error)) as caught:
+                    run(fake, observe, before_test=hook)
+                self.assertIs(caught.exception, error)
+                self.assertEqual(calls, [1])
+                self.assertNotIn(TEST_ARGV, fake.calls)
+                self.assertNotIn(CONTAINER_ARGV, fake.calls)
+                self.assertEqual(observe.calls, [])
+                self.assert_deleted_once(fake)
+
+    def test_before_test_error_chained_under_cleanup_failure(self):
+        failing = ((SIMCTL, "delete", OWNED), SHORT, OK(1, b""))
+        fake = FakeCommand([*PRE_OWNERSHIP, failing])
+
+        def hook():
+            raise Refusal("stale")
+
+        with self.assertRaisesRegex(Refusal, "cleanup command failed") as caught:
+            run(fake, Observer(), before_test=hook)
+        self.assertEqual(str(caught.exception.__cause__), "stale")
+        self.assertNotIn(TEST_ARGV, fake.calls)
+        self.assert_deleted_once(fake)
+
+    def test_ownership_refusal_never_calls_before_test(self):
+        responses = list(PRE_OWNERSHIP)
+        responses[3] = (responses[3][0], SHORT, OK(0, inventory()))
+        calls = []
+        with self.assertRaisesRegex(Refusal, "possible orphan"):
+            run(FakeCommand(responses), Observer(), before_test=lambda: calls.append(1))
+        self.assertEqual(calls, [])
+
     def test_termination_propagates_after_cleanup(self):
         for signal in (KeyboardInterrupt(), SystemExit(143)):
             with self.subTest(signal=type(signal)):

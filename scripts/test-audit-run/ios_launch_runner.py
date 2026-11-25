@@ -76,11 +76,13 @@ def _observation(value, receipt_directory):
 
 
 def run_launch(run_uuid, command, *, expected_test_ids, xctestrun_path,
-               result_bundle_path, observe):
+               result_bundle_path, observe, before_test=None):
     """Return encoded closed outcome bytes for one owned-simulator attempt.
 
     Inputs are validated before any command. Inside the lifecycle operation it
-    plans with the owned UUID, invokes xcodebuild_argv (1800 s, 2 MiB) then
+    plans with the owned UUID, calls the optional ``before_test()`` exactly
+    once with no arguments (its return value is ignored; if it raises, no
+    xcodebuild command is sent), invokes xcodebuild_argv (1800 s, 2 MiB) then
     container_argv (30 s, 2 MiB) through the same command callback, and calls
     observe(plan=, test_result=, receipt_directory=) which must return
     (observed_results, receipt_observation) in ios_launch_outcome shapes;
@@ -88,7 +90,8 @@ def run_launch(run_uuid, command, *, expected_test_ids, xctestrun_path,
     receipt_observation must be None. A record that would be "passed" despite
     a non-zero (including negative) xcodebuild return code is refused, never
     returned or downgraded; other outcomes are returned. Refusals, operation errors
-    and termination propagate after the lifecycle's single cleanup attempt.
+    (including ``before_test`` errors, unconverted) and termination propagate after
+    the lifecycle's single cleanup attempt.
     """
     run_uuid = launch_plan.canonical_run_uuid(run_uuid)
     expected = launch_outcome._expected_ids(expected_test_ids)
@@ -96,9 +99,13 @@ def run_launch(run_uuid, command, *, expected_test_ids, xctestrun_path,
     bundle = _absolute_path(result_bundle_path, "result bundle path", ".xcresult")
     if not callable(command) or not callable(observe):
         raise Refusal("command and observe callbacks must be callable")
+    if before_test is not None and not callable(before_test):
+        raise Refusal("before_test hook must be callable or None")
 
     def operation(owned_uuid):
         plan = launch_plan.plan_launch(run_uuid, owned_uuid)
+        if before_test is not None:
+            before_test()
         test_result = lifecycle._command_result(command(
             xcodebuild_argv(xctestrun, bundle, owned_uuid),
             timeout=TEST_TIMEOUT_SECONDS,

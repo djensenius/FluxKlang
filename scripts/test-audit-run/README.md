@@ -2235,16 +2235,17 @@ and no executor produces these inputs.
 ### Callback-only iOS launch runner composition (#893; source-only)
 
 `ios_launch_runner.run_launch(run_uuid, command, *, expected_test_ids,
-xctestrun_path, result_bundle_path, observe)` composes the pieces above. It
-validates the run UUID, expected test IDs, and canonical absolute
-`.xctestrun`/`.xcresult` paths (at most 1024 bytes), plus both callbacks,
-before any command; these refusals never create or delete anything. The
+xctestrun_path, result_bundle_path, observe, before_test=None)` composes the
+pieces above. It validates the run UUID, expected test IDs, and canonical
+absolute `.xctestrun`/`.xcresult` paths (at most 1024 bytes), plus both
+callbacks and that `before_test` is `None` or callable, before any command; these refusals never create or delete anything. The
 caller must supply a nonexistent, run-keyed result bundle path; the runner
 cannot check its absence or freshness. It then
 calls `with_owned_simulator` with the same required `command` callback (there is
 no default executor). Inside the operation it calls
-`plan_launch(run_uuid, owned_uuid)` and sends two fixed direct argv tuples
-through that callback:
+`plan_launch(run_uuid, owned_uuid)`, then calls the optional `before_test()`
+hook exactly once with no arguments (its return value is ignored), and only
+then sends two fixed direct argv tuples through that callback:
 
 1. `<ios_runtime.DEVELOPER>/usr/bin/xcodebuild test-without-building
    -xctestrun <xctestrun_path> -destination id=<owned uuid>
@@ -2268,8 +2269,17 @@ raises `Refusal` instead of returning or downgrading the record, because the
 closed record cannot express a contradicting process exit. `failed`,
 `incomplete` and `unavailable` records are returned unchanged, with
 `exit_code` 1. The return value is the `encode`d closed outcome record. Refusals,
-observer or command exceptions, and `KeyboardInterrupt`/`SystemExit` propagate
-after the lifecycle's single cleanup attempt. The module has no direct
+observer, hook or command exceptions, and `KeyboardInterrupt`/`SystemExit`
+propagate unconverted after the lifecycle's single cleanup attempt.
+
+`before_test` runs inside the owned-simulator operation, so it is reached only
+after the create and ownership proof succeed, and it is the last step before
+the xcodebuild command. If it raises, no xcodebuild or container command is
+sent, the observer is not called, and the owned device is still deleted once
+(a cleanup failure is raised with the hook error as `__cause__`). It receives
+no arguments: its intended use, the prepared-input re-check, needs nothing
+device-specific, so the hook is not handed the owned device identity. With the default `None` the behavior and command sequence are
+unchanged. The module has no direct
 execution or IO imports and no CLI. It does import `ios_runtime`, which itself
 imports `subprocess` and `os`. It reuses private validators from
 `ios_launch_plan`, `ios_launch_outcome` and `ios_simulator_lifecycle`, so
@@ -2372,8 +2382,9 @@ That test replaces provider probes and denies processes and sockets.
 Limits: a time-of-check/time-of-use window remains between this re-check
 and xcodebuild reading the prepared xctestrun (and the Products bundles it
 references, which are not inventoried). The re-check carries the provider
-profile's trust assumptions, not provenance or custody. It is not wired
-into `run_launch` or any workflow. Real simulator or xcodebuild execution
+profile's trust assumptions, not provenance or custody. It reaches
+`run_launch` only through the composer's `before_test` hook (below) and is not
+wired into any workflow. Real simulator or xcodebuild execution
 and workflow dispatch remain unauthorized. The module is not in the v5
 observed source set.
 
@@ -2410,29 +2421,37 @@ encoded outcome bytes. In order it:
    no longer matches the snapshot;
 3. calls `bind_launch`;
 4. calls `recheck_before_launch(binding, intent=intent, digests=...,
-   validate=validate)`;
+   validate=validate)` (the early re-check);
 5. calls `run_launch` with the bound run UUID, prepared xctestrun and result
-   bundle path.
+   bundle path, and a `before_test` hook that repeats step 4 with the same
+   binding, intent, digests and `validate` (the hook re-check).
 
-A refusal or exception at any stage stops every later stage; in particular
-no command (no simulator inventory or create) is sent unless bind and re-check
-both succeed. Each stage keeps its own semantics: the composer adds no
+On success `validate` is therefore called exactly twice, and the intent must
+match the bind-time digests before, and the re-validated record after, each
+call. A refusal or exception at any stage stops every later stage; in
+particular no command (no simulator inventory or create) is sent unless bind
+and the early re-check both succeed, and no xcodebuild command is sent unless
+the hook re-check also succeeds (a hook refusal still deletes the owned
+device once). Each stage keeps its own semantics: the composer adds no
 exception conversion. `validate` exceptions become the re-check's closed
 refusal, runner errors propagate after the lifecycle's single cleanup
 attempt, and `KeyboardInterrupt`/`SystemExit` propagate unchanged. The module
 does no IO or execution itself; reads happen only inside `validate` and
 commands only inside `command`.
 
-Re-check placement: the re-check runs before `run_launch`, not inside the
-owned-simulator operation. Bad inputs are then refused without creating or
-deleting a simulator (and without any orphan risk), and `run_launch` has no
-pre-test hook; moving the re-check inside would need a reviewed runner
-change. The cost is a longer window: it also spans the device inventory,
-create and ownership proof before xcodebuild starts.
+Re-check placement: the re-check runs both before `run_launch` and inside
+the owned-simulator operation. The early re-check refuses bad inputs without
+creating or deleting a simulator (and without any orphan risk). The hook
+re-check runs after the device inventory, create and ownership proof,
+immediately before the xcodebuild command, so a change during simulator setup
+is refused. `prepare.validate` only reads (it never creates files or
+products), so repeating it costs a second bounded acquisition and provider
+observation, with no side effects to undo.
 
 Limits: not wired into any workflow. The time-of-check/time-of-use window
-between the re-check and xcodebuild reading the prepared xctestrun and the
-uninventoried Products bundles remains. Real simulator, xcodebuild or launch
+is narrowed, not closed: xcodebuild re-opens the prepared xctestrun and the
+uninventoried Products bundles after the hook returns, and nothing binds what
+it reads to what was re-checked. Real simulator, xcodebuild or launch
 execution and workflow dispatch remain unauthorized; tests use fake
 validators and the strict fake command only. Receipt delivery to the app
 (gap 3) and per-test startup isolation (gap 4) are not addressed. The module
