@@ -72,8 +72,13 @@ class LaunchPlan:
 def _canonical_absolute_root(value):
     if type(value) is not str or not value.startswith("/"):
         raise Refusal("container root must be an absolute path")
-    if any(ord(char) < 0x20 or ord(char) == 0x7f for char in value):
-        raise Refusal("container root must not contain control characters")
+    if any(
+        ord(char) < 0x20
+        or 0x7f <= ord(char) <= 0x9f
+        or char in ("\u2028", "\u2029")
+        for char in value
+    ):
+        raise Refusal("container root must not contain control or line separators")
     components = value[1:].split("/")
     if any(part in ("", ".", "..") for part in components):
         raise Refusal("container root must be canonical")

@@ -91,10 +91,6 @@ class IOSLaunchPlanTests(unittest.TestCase):
             "FLUXKLANG_AUDIT_RECEIPT_DIR":
                 self.CONTAINER_ROOT + "/" + self.RECEIPT_RELATIVE,
         })
-        self.assertEqual(list(overlay), ["FLUXKLANG_AUDIT_RECEIPT_DIR"])
-        for key in overlay:
-            self.assertFalse(key.startswith("TEST_RUNNER_"))
-            self.assertFalse(key.startswith("SIMCTL_CHILD_"))
         self.assertIsNot(
             overlay,
             launch_plan.receipt_environment_overlay(plan, self.CONTAINER_ROOT),
@@ -130,6 +126,10 @@ class IOSLaunchPlanTests(unittest.TestCase):
             "/root\nchild",
             "/root\tchild",
             "/root\x7fchild",
+            "/root\u0085child",
+            "/root\u009fchild",
+            "/root\u2028child",
+            "/root\u2029child",
             "/root/\udcff",
             b"/root",
             TextSubclass("/root"),
