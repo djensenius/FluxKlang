@@ -2147,3 +2147,21 @@ Only an exact synthetic candidate can be eligible for simulated cleanup;
 cleanup failure is final, without retry. This invocation-local status is not
 transferable authority. These fixtures prove neither simulator compatibility
 nor real ownership or cleanup authority, and do not qualify #60.
+
+### Pure iOS receipt environment overlay helper (#893; source-only)
+
+`ios_launch_plan.receipt_environment_overlay(plan, container_root)` accepts
+only an actual `LaunchPlan` and a canonical absolute UTF-8 POSIX container root
+string (no relative, empty or root-only value, repeated or trailing `/`, `.` or
+`..` component, NUL or unencodable surrogate). It returns a new mapping with
+exactly one **unprefixed** key, `FLUXKLANG_AUDIT_RECEIPT_DIR`, whose value is the
+root joined to the plan's run-keyed relative receipt location. The key is not
+stored in `LaunchPlan`, and no `TEST_RUNNER_` or `SIMCTL_CHILD_` prefix is used.
+
+This is string composition only: it does not inspect, create or verify the
+filesystem, and it is not wired to any launch. The closed provider profile,
+`prepare.py` and the intent schema are unchanged; app sources currently have no
+consumer of this receipt key (only unit-test sources read it); and the
+transport that would deliver the overlay is unresolved. The helper proves no
+delivery, launch, sandbox access or #60 evidence. Any later proof that the app
+receives a receipt requires separate authorization.
