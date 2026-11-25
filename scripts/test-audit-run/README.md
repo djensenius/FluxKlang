@@ -2166,3 +2166,42 @@ consumer of this receipt key (only unit-test sources read it); and the
 transport that would deliver the overlay is unresolved. The helper proves no
 delivery, launch, sandbox access or #60 evidence. Any later proof that the app
 receives a receipt requires separate authorization.
+
+### Pure closed iOS launch outcome record (#893; source-only)
+
+`ios_launch_outcome.evaluate(plan, expected_test_ids, observed_results,
+receipt_observation)` turns supplied data into a new closed record for a
+future launch attempt. It takes an actual `LaunchPlan` (re-validated in full;
+only its run UUID is recorded), a non-empty tuple of at most 4096 unique test
+IDs (each at most 256 characters and 1024 escaped JSON bytes, so the largest
+accepted record always encodes) without surrounding whitespace, control
+characters or line separators, a tuple of
+`(test ID, "passed"|"failed"|"skipped")` observations, and either `None` or a
+dict of exactly the `published`, `partial_leftovers` and `other_entries`
+receipt-directory entry counts.
+
+Each expected test is recorded as `passed`, `failed`, `skipped` or `absent`
+(no observation; assigned only by the evaluator). The receipt is `present`
+(at least one published file, no leftovers or other entries), `irregular`
+(any leftover or other entry) or `unavailable` (no observation or no
+published file); a missing receipt is never a pass. The outcome is `failed`
+for any failed test or irregular receipt, otherwise `incomplete` for any
+absent or skipped test, otherwise `unavailable` without a present receipt, and
+only then `passed`. `exit_code` is 0 only for `passed` and 1 otherwise.
+Unknown or duplicate observed test IDs and malformed values raise `Refusal`
+rather than being counted or dropped; callers must treat a refusal as a
+non-zero failure.
+
+Every record carries fixed `disclaimers` that no argument can replace: a
+provider-trusted labeled regression observation only; not provenance or
+custody evidence; not production-access proof; not #60 qualification.
+`encode` emits canonical ASCII JSON and `decode` accepts only those exact
+bytes, re-deriving the whole record (exact keys, vocabularies, counts,
+outcome, exit code and disclaimers) from its run UUID, tests and receipt
+counts.
+
+The module launches, reads and writes nothing and has no CLI. A `passed`
+record states only that the supplied observations were complete and passing;
+it does not prove a launch happened, that results belong to that run, or that
+the receipt overlay was delivered. The closed provider profile is unchanged,
+and no executor produces these inputs.
