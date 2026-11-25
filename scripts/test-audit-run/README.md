@@ -2135,3 +2135,15 @@ authorization, selected source/receipt pins, an eligible unreserved workspace,
 compatible invocation, continuous custody, isolation/process attribution and
 evidence/storage procedures. W1–W4 and other reserved lanes are not fixtures.
 Full #60, both iOS targets, G2, #190 and #191 remain open.
+
+### Synthetic iOS inventory/create/cleanup model (#893; source-only)
+
+`ios_launch_model.py` evaluates supplied synthetic transcript data in one
+invocation; it executes nothing. Its argv tuples, UUID tokens, and device and
+runtime parameters are illustrative and unqualified, not real simctl syntax or
+identifiers. The model refuses incomplete, malformed or duplicate inventory,
+pre-existing candidates, failed or ambiguous creation, and UUID mismatches.
+Only an exact synthetic candidate can be eligible for simulated cleanup;
+cleanup failure is final, without retry. This invocation-local status is not
+transferable authority. These fixtures prove neither simulator compatibility
+nor real ownership or cleanup authority, and do not qualify #60.
