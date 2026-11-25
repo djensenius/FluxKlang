@@ -2148,6 +2148,31 @@ cleanup failure is final, without retry. This invocation-local status is not
 transferable authority. These fixtures prove neither simulator compatibility
 nor real ownership or cleanup authority, and do not qualify #60.
 
+### Callback-only iOS Simulator device lifecycle (#893; source-only)
+
+`ios_simulator_lifecycle.with_owned_simulator` is a separate, source-only
+orchestrator. It requires a command callback (there is no default executor)
+and a device operation callback. The command callback receives direct argv
+tuples plus explicit 30-second and 2 MiB limits; any future real adapter needs
+separate review and authorization. The fake-only tests exercise the contract
+without running `simctl`, `xcrun`, Xcode, or any simulator operation.
+
+The design requests the fixed CoreSimulator `simctl` inventory, resolves one
+exact `iPhone 17` type, creates a run-UUID-keyed device on the fixed
+`ios_runtime.RUNTIME`, and permits cleanup only after the create UUID and full
+before/after inventories prove exactly one addition with no prior device
+disappearing. It then passes only that UUID to the operation and attempts one
+delete; ambiguous ownership is refused without deleting anything, and cleanup
+failure is final without retry. The `simctl list devicetypes --json` command
+availability and response shape have not been validated; the test's
+`{"devicetypes":[{"name":"iPhone 17","identifier":"…"}]}` fixture is
+illustrative only.
+
+No real simulator command ran. Command syntax, target identifier schema, and
+ownership semantics remain unverified until a separately authorized hosted
+preflight. This slice does not install, boot, launch or test an app; deliver a
+receipt; prove startup isolation; qualify #60; or authorize workflow dispatch.
+
 ### Pure iOS receipt environment overlay helper (#893; source-only)
 
 `ios_launch_plan.receipt_environment_overlay(plan, container_root)` accepts
