@@ -2436,20 +2436,23 @@ device once). Each stage keeps its own semantics: the composer adds no
 exception conversion. `validate` exceptions become the re-check's closed
 refusal, runner errors propagate after the lifecycle's single cleanup
 attempt, and `KeyboardInterrupt`/`SystemExit` propagate unchanged. The module
-does no IO or execution itself; reads happen only inside `validate` and
-commands only inside `command`.
+does no IO or execution itself; file reads and the provider's read-only tool
+probes happen inside `validate`, and launch commands only inside `command`.
 
 Re-check placement: the re-check runs both before `run_launch` and inside
 the owned-simulator operation. The early re-check refuses bad inputs without
 creating or deleting a simulator (and without any orphan risk). The hook
 re-check runs after the device inventory, create and ownership proof,
 immediately before the xcodebuild command, so a change during simulator setup
-is refused. `prepare.validate` only reads (it never creates files or
-products), so repeating it costs a second bounded acquisition and provider
-observation, with no side effects to undo.
+is refused. `prepare.validate` never creates, writes or removes files, but
+its provider observation runs read-only tool probes (`xcodebuild -version`,
+the simulator SDK version query and `simctl list runtimes --json`) outside
+the injected `command`; repeating it costs a second bounded acquisition and
+those probes, now while the owned simulator exists.
 
 Limits: not wired into any workflow. The time-of-check/time-of-use window
-is narrowed, not closed: xcodebuild re-opens the prepared xctestrun and the
+is narrowed, not closed (the hook's own provider probes take time before
+xcodebuild starts): xcodebuild re-opens the prepared xctestrun and the
 uninventoried Products bundles after the hook returns, and nothing binds what
 it reads to what was re-checked. Real simulator, xcodebuild or launch
 execution and workflow dispatch remain unauthorized; tests use fake
