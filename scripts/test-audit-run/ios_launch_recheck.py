@@ -6,6 +6,10 @@ by default). Re-checking narrows, but does not close, the window before
 xcodebuild reads the prepared xctestrun.
 """
 
+import hashlib
+import json
+import re
+
 import ios_launch_binding as launch_binding
 import ios_launch_plan as launch_plan
 import prepare
@@ -16,6 +20,8 @@ VALIDATE_REFUSAL = "prepared inputs failed the pre-launch re-check"
 DIGEST_REFUSAL = "re-validated digests do not match the bound intent"
 PATH_REFUSAL = "re-validated paths do not match the bound intent"
 RECORD_REFUSAL = "re-validated intent does not match the bound intent"
+BOUND_REFUSAL = "intent does not match the digests recorded at bind time"
+INTENT_DIGEST_REFUSAL = "intent is not canonically encodable"
 
 
 def _require(condition, message):
@@ -23,7 +29,51 @@ def _require(condition, message):
         raise Refusal(message)
 
 
-def recheck_before_launch(binding, *, intent, validate=None):
+def intent_sha256(intent):
+    """Return the SHA-256 of the canonical JSON encoding of ``intent``, or refuse."""
+    try:
+        data = json.dumps(intent, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=True, allow_nan=False).encode("ascii")
+    except Exception as error:
+        raise Refusal(INTENT_DIGEST_REFUSAL) from error
+    return hashlib.sha256(data).hexdigest()
+
+
+def bound_digests(products_record_line, intent):
+    """Return ``(input_sha256, output_sha256, intent_sha256)`` fixed at bind time.
+
+    Call this immediately after ``bind_launch`` accepted the same arguments.
+    The input/output digests come from the immutable Products record line's
+    ``prepared`` digests, not from the (mutable) intent, and ``intent`` must
+    still carry exactly those digests; its canonical encoding is snapshotted.
+    The tuple is the ``bound_digests=`` argument of ``recheck_before_launch``.
+    """
+    prepared = launch_binding._observation(products_record_line)["prepared"]
+    message = "intent is not a provider-profile intent"
+    launch_binding._shape(intent, launch_binding._INTENT_KEYS, message)
+    launch_binding._file(intent["input"], message)
+    launch_binding._file(intent["output"], message)
+    digests = (prepared["input_sha256"], prepared["output_sha256"], intent_sha256(intent))
+    _require(_matches_bound(intent, digests), BOUND_REFUSAL)
+    return digests
+
+
+def _bound(value):
+    _require(type(value) is tuple and len(value) == 3
+             and all(type(item) is str
+                     and re.fullmatch(r"[0-9a-f]{64}", item, flags=re.ASCII) is not None
+                     for item in value),
+             "bound digests must be three lowercase SHA-256 values")
+    return value
+
+
+def _matches_bound(record, digests):
+    """Whether an intent-shaped record has exactly the bound digests."""
+    return (record["input"]["sha256"], record["output"]["sha256"],
+            intent_sha256(record)) == digests
+
+
+def recheck_before_launch(binding, *, intent, validate=None, bound_digests=None):
     """Return ``binding`` unchanged after a fresh on-disk re-validation, or refuse.
 
     ``binding`` is the exact ``(run_uuid, xctestrun_path, result_bundle_path)``
@@ -33,6 +83,12 @@ def recheck_before_launch(binding, *, intent, validate=None):
     ``validate(input_path, input_sha256, IOS_PROVIDER_RUNTIME_PROFILE,
     output_path, intent_path, bounded_material=True)`` and must return a
     record equal (type-exactly) to ``intent``.
+
+    When ``bound_digests`` is supplied (the ``bound_digests(...)`` snapshot
+    taken at bind time), both ``intent`` before ``validate`` and the
+    re-validated record after it must have exactly those input, output and
+    canonical-intent digests; otherwise a different valid intent with the same
+    run ID and output path would pass. ``None`` keeps the original behavior.
     """
     message = "binding is not a bind_launch result"
     _require(type(binding) is tuple and len(binding) == 3
@@ -49,6 +105,9 @@ def recheck_before_launch(binding, *, intent, validate=None):
     _require(type(intent["run_id"]) is str and intent["run_id"] == run_uuid,
              "intent run ID does not match the binding")
     _require(output["path"] == xctestrun, "intent output path does not match the binding")
+    if bound_digests is not None:
+        bound_digests = _bound(bound_digests)
+        _require(_matches_bound(intent, bound_digests), BOUND_REFUSAL)
 
     if validate is None:
         validate = prepare.validate
@@ -72,4 +131,6 @@ def recheck_before_launch(binding, *, intent, validate=None):
         prepare.require_equal(record, intent, "re-validated intent")
     except Exception as error:
         raise Refusal(RECORD_REFUSAL) from error
+    if bound_digests is not None:
+        _require(_matches_bound(record, bound_digests), BOUND_REFUSAL)
     return binding

@@ -2374,3 +2374,59 @@ profile's trust assumptions, not provenance or custody. It is not wired
 into `run_launch` or any workflow. Real simulator or xcodebuild execution
 and workflow dispatch remain unauthorized. The module is not in the v5
 observed source set.
+
+Bind-time digests (optional, backward compatible): `recheck_before_launch`
+also accepts `bound_digests=`, the `(input_sha256, output_sha256,
+intent_sha256)` tuple from `ios_launch_recheck.bound_digests(
+products_record_line, intent)`. That helper takes the input/output digests
+from the immutable Products record line's `prepared` object (not from the
+mutable intent), refuses an intent that no longer carries them, and
+snapshots `intent_sha256(intent)`, the SHA-256 of the intent's canonical JSON
+(sorted keys, compact separators, ASCII, no NaN). When supplied, the intent
+must match all three digests before `validate` is called and the re-validated
+record must match them afterwards (`intent does not match the digests
+recorded at bind time`). Without it, a different valid intent with the same
+run ID and output path (for example re-read from disk after a swap) would
+pass, because the `bind_launch` tuple carries no digests. The binder's return
+type is deliberately unchanged so existing callers and tests keep working;
+`bound_digests=None` keeps the original behavior.
+
+### Source-only iOS launch composition (#893)
+
+`ios_launch_compose.bind_recheck_and_launch(*, reviewed_head,
+products_record_line, intent, run_uuid, xctestrun_path, result_bundle_path,
+expected_test_ids, command, observe, validate=None)` returns `run_launch`'s
+encoded outcome bytes. In order it:
+
+1. refuses non-callable `command`/`observe` and invalid expected test IDs, so
+   these never trigger a re-validation read;
+2. calls `bind_launch`;
+3. calls `bound_digests(products_record_line, intent)`;
+4. calls `recheck_before_launch(binding, intent=intent, validate=validate,
+   bound_digests=...)`;
+5. calls `run_launch` with the bound run UUID, prepared xctestrun and result
+   bundle path.
+
+A refusal or exception at any stage stops every later stage; in particular
+no command (no simulator inventory or create) is sent unless bind and re-check
+both succeed. Each stage keeps its own semantics: the composer adds no
+exception conversion. `validate` exceptions become the re-check's closed
+refusal, runner errors propagate after the lifecycle's single cleanup
+attempt, and `KeyboardInterrupt`/`SystemExit` propagate unchanged. The module
+does no IO or execution itself; reads happen only inside `validate` and
+commands only inside `command`.
+
+Re-check placement: the re-check runs before `run_launch`, not inside the
+owned-simulator operation. Bad inputs are then refused without creating or
+deleting a simulator (and without any orphan risk), and `run_launch` has no
+pre-test hook; moving the re-check inside would need a reviewed runner
+change. The cost is a longer window: it also spans the device inventory,
+create and ownership proof before xcodebuild starts.
+
+Limits: not wired into any workflow. The time-of-check/time-of-use window
+between the re-check and xcodebuild reading the prepared xctestrun and the
+uninventoried Products bundles remains. Real simulator, xcodebuild or launch
+execution and workflow dispatch remain unauthorized; tests use fake
+validators and the strict fake command only. Receipt delivery to the app
+(gap 3) and per-test startup isolation (gap 4) are not addressed. The module
+is not in the v5 observed source set.
