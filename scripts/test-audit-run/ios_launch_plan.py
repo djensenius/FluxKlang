@@ -30,6 +30,11 @@ def _canonical_uuid(value, *, require_v4=False):
     return value
 
 
+def canonical_run_uuid(value):
+    """Return value if it is canonical lowercase UUID4 text; refuse otherwise."""
+    return _canonical_uuid(value, require_v4=True)
+
+
 def _safe_relative_path(value):
     if type(value) is not str or value.startswith("/") or "\0" in value:
         raise Refusal("receipt location must be relative")
