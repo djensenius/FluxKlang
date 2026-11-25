@@ -30,7 +30,13 @@ def _require(condition, message):
 
 
 def intent_sha256(intent):
-    """Return the SHA-256 of the canonical JSON encoding of ``intent``, or refuse."""
+    """Return the SHA-256 of a canonical JSON encoding of ``intent``, or refuse.
+
+    This identifies content only up to JSON equivalence (sorted keys, so key
+    order is irrelevant; ``str``/``int`` subclasses encode like their bases;
+    tuples like lists), not full type identity. Type strictness comes from
+    the type-exact ``prepare.require_equal`` comparison in the re-check.
+    """
     try:
         data = json.dumps(intent, sort_keys=True, separators=(",", ":"),
                           ensure_ascii=True, allow_nan=False).encode("ascii")
@@ -42,11 +48,13 @@ def intent_sha256(intent):
 def bound_digests(products_record_line, intent):
     """Return ``(input_sha256, output_sha256, intent_sha256)`` fixed at bind time.
 
-    Call this immediately after ``bind_launch`` accepted the same arguments.
+    Call this with the same record line and intent passed to ``bind_launch``,
+    before that call (the composer does), so any later change to the intent,
+    including one made between binding and the re-check, no longer matches.
     The input/output digests come from the immutable Products record line's
     ``prepared`` digests, not from the (mutable) intent, and ``intent`` must
-    still carry exactly those digests; its canonical encoding is snapshotted.
-    The tuple is the ``bound_digests=`` argument of ``recheck_before_launch``.
+    still carry exactly those digests; its ``intent_sha256`` is snapshotted.
+    The tuple is the required ``digests=`` argument of ``recheck_before_launch``.
     """
     prepared = launch_binding._observation(products_record_line)["prepared"]
     message = "intent is not a provider-profile intent"
@@ -73,7 +81,7 @@ def _matches_bound(record, digests):
             intent_sha256(record)) == digests
 
 
-def recheck_before_launch(binding, *, intent, validate=None, bound_digests=None):
+def recheck_before_launch(binding, *, intent, digests, validate=None):
     """Return ``binding`` unchanged after a fresh on-disk re-validation, or refuse.
 
     ``binding`` is the exact ``(run_uuid, xctestrun_path, result_bundle_path)``
@@ -84,11 +92,10 @@ def recheck_before_launch(binding, *, intent, validate=None, bound_digests=None)
     output_path, intent_path, bounded_material=True)`` and must return a
     record equal (type-exactly) to ``intent``.
 
-    When ``bound_digests`` is supplied (the ``bound_digests(...)`` snapshot
-    taken at bind time), both ``intent`` before ``validate`` and the
-    re-validated record after it must have exactly those input, output and
-    canonical-intent digests; otherwise a different valid intent with the same
-    run ID and output path would pass. ``None`` keeps the original behavior.
+    ``digests`` is required: the ``bound_digests(...)`` snapshot taken at bind
+    time. Both ``intent`` before ``validate`` and the re-validated record after
+    it must have exactly those input, output and intent digests; otherwise a
+    different valid intent with the same run ID and output path would pass.
     """
     message = "binding is not a bind_launch result"
     _require(type(binding) is tuple and len(binding) == 3
@@ -105,9 +112,8 @@ def recheck_before_launch(binding, *, intent, validate=None, bound_digests=None)
     _require(type(intent["run_id"]) is str and intent["run_id"] == run_uuid,
              "intent run ID does not match the binding")
     _require(output["path"] == xctestrun, "intent output path does not match the binding")
-    if bound_digests is not None:
-        bound_digests = _bound(bound_digests)
-        _require(_matches_bound(intent, bound_digests), BOUND_REFUSAL)
+    digests = _bound(digests)
+    _require(_matches_bound(intent, digests), BOUND_REFUSAL)
 
     if validate is None:
         validate = prepare.validate
@@ -131,6 +137,5 @@ def recheck_before_launch(binding, *, intent, validate=None, bound_digests=None)
         prepare.require_equal(record, intent, "re-validated intent")
     except Exception as error:
         raise Refusal(RECORD_REFUSAL) from error
-    if bound_digests is not None:
-        _require(_matches_bound(record, bound_digests), BOUND_REFUSAL)
+    _require(_matches_bound(record, digests), BOUND_REFUSAL)
     return binding

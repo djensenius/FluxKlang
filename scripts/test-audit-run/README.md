@@ -2338,14 +2338,16 @@ not launch anything, qualify #60 or authorize workflow dispatch.
 
 ### Pre-launch prepared-input re-check (#893; source-only)
 
-`ios_launch_recheck.recheck_before_launch(binding, *, intent, validate=None)`
-returns `binding` unchanged or raises `ios_launch_plan.Refusal`. `binding` must
+`ios_launch_recheck.recheck_before_launch(binding, *, intent, digests,
+validate=None)` returns `binding` unchanged or raises `ios_launch_plan.Refusal`. `binding` must
 be the exact `(run_uuid, xctestrun_path, result_bundle_path)` tuple of `str`
 values that `bind_launch` returned. That tuple carries no input path, pin or
 intent path, so the caller must also pass the **same** `intent` dict it gave
 `bind_launch`. The function checks the intent's provider-profile shape and that
-its `run_id` and output path equal the binding. Digest-to-record binding remains
-`bind_launch`'s job; an intent that was never bound is not detected here.
+its `run_id` and output path equal the binding, and that it matches the
+required bind-time `digests` (below). Digest-to-record comparison remains
+`bind_launch`'s job; the digests only detect an intent that differs from the
+one snapshotted for binding.
 
 It then calls `validate` exactly once as `validate(input_path, input_sha256,
 prepare.IOS_PROVIDER_RUNTIME_PROFILE, output_path, intent_path,
@@ -2375,21 +2377,24 @@ into `run_launch` or any workflow. Real simulator or xcodebuild execution
 and workflow dispatch remain unauthorized. The module is not in the v5
 observed source set.
 
-Bind-time digests (optional, backward compatible): `recheck_before_launch`
-also accepts `bound_digests=`, the `(input_sha256, output_sha256,
-intent_sha256)` tuple from `ios_launch_recheck.bound_digests(
-products_record_line, intent)`. That helper takes the input/output digests
-from the immutable Products record line's `prepared` object (not from the
-mutable intent), refuses an intent that no longer carries them, and
-snapshots `intent_sha256(intent)`, the SHA-256 of the intent's canonical JSON
-(sorted keys, compact separators, ASCII, no NaN). When supplied, the intent
-must match all three digests before `validate` is called and the re-validated
-record must match them afterwards (`intent does not match the digests
-recorded at bind time`). Without it, a different valid intent with the same
-run ID and output path (for example re-read from disk after a swap) would
-pass, because the `bind_launch` tuple carries no digests. The binder's return
-type is deliberately unchanged so existing callers and tests keep working;
-`bound_digests=None` keeps the original behavior.
+Bind-time digests (required): `digests` is the `(input_sha256,
+output_sha256, intent_sha256)` tuple from `ios_launch_recheck.bound_digests(
+products_record_line, intent)`, taken with the same arguments as
+`bind_launch`. That helper takes the input/output digests from the immutable
+Products record line's `prepared` object (not from the mutable intent),
+refuses an intent that does not carry them, and snapshots
+`intent_sha256(intent)`: the SHA-256 of the intent's JSON encoding with sorted
+keys, compact separators, ASCII and no NaN. That digest identifies content
+only up to JSON equivalence (key order is irrelevant, `str`/`int` subclasses
+encode like their bases), not full type identity; type strictness still comes
+from the type-exact `prepare.require_equal` comparison. The intent must match
+all three digests before `validate` is called, and the re-validated record
+must match them afterwards (`intent does not match the digests recorded at
+bind time`). Malformed digests are refused before `validate`. There is no
+default: without the digests, a different valid intent with the same run ID
+and output path (for example re-read from disk after a swap) would pass,
+because the `bind_launch` tuple carries no digests. The binder's return type
+is deliberately unchanged.
 
 ### Source-only iOS launch composition (#893)
 
@@ -2400,10 +2405,12 @@ encoded outcome bytes. In order it:
 
 1. refuses non-callable `command`/`observe` and invalid expected test IDs, so
    these never trigger a re-validation read;
-2. calls `bind_launch`;
-3. calls `bound_digests(products_record_line, intent)`;
-4. calls `recheck_before_launch(binding, intent=intent, validate=validate,
-   bound_digests=...)`;
+2. calls `bound_digests(products_record_line, intent)` before binding, so any
+   later change to the intent (including a `provider_observation`-only change)
+   no longer matches the snapshot;
+3. calls `bind_launch`;
+4. calls `recheck_before_launch(binding, intent=intent, digests=...,
+   validate=validate)`;
 5. calls `run_launch` with the bound run UUID, prepared xctestrun and result
    bundle path.
 

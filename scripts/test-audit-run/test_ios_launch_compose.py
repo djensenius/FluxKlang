@@ -157,6 +157,25 @@ class ComposeTests(unittest.TestCase):
             self.launch(validate, LoggedCommand(self.events, []), intent=supplied)
         self.assertEqual(self.events.log, ["validate"])
 
+    def test_provider_observation_change_after_bind_is_refused(self):
+        """Only the whole-intent digest differs: same run ID, paths and file digests."""
+        supplied = intent()
+        changed = intent()
+        changed["provider_observation"] = {"xcode": {"version": "Xcode 27.2"}}
+        real_bind = compose.launch_binding.bind_launch
+
+        def bind_then_change(**kwargs):
+            result = real_bind(**kwargs)
+            supplied["provider_observation"] = changed["provider_observation"]
+            return result
+
+        validate = LoggedValidate(self.events, result=changed)
+        with mock.patch.object(compose.launch_binding, "bind_launch", bind_then_change):
+            with self.assertRaisesRegex(Refusal, recheck.BOUND_REFUSAL):
+                self.launch(validate, LoggedCommand(self.events, []), intent=supplied)
+        self.assertEqual(self.events.log, [])
+        self.assertEqual(supplied, changed)
+
     def test_runner_errors_propagate_after_cleanup(self):
         command = LoggedCommand(self.events, script(test=OK(65, b"")))
         with self.assertRaisesRegex(Refusal, "non-zero test exit"):
@@ -221,35 +240,47 @@ class BoundDigestRecheckTests(unittest.TestCase):
         with self.assertRaisesRegex(Refusal, "provider-profile intent"):
             recheck.bound_digests(record_line(), dict(intent(), extra=1))
 
-    def test_swapped_intent_refused_before_validate_only_when_bound(self):
+    def test_swapped_intent_refused_before_validate(self):
         validate = LoggedValidate(Events(), result=swapped())
-        self.assertIs(recheck.recheck_before_launch(self.BINDING, intent=swapped(),
-                                                    validate=validate), self.BINDING)
-        validate = LoggedValidate(Events(), result=swapped())
+        digests = recheck.bound_digests(record_line(), intent())
         with self.assertRaisesRegex(Refusal, recheck.BOUND_REFUSAL):
             recheck.recheck_before_launch(self.BINDING, intent=swapped(), validate=validate,
-                                          bound_digests=recheck.bound_digests(record_line(), intent()))
+                                          digests=digests)
         self.assertEqual(validate.calls, [])
+
+    def test_digests_are_required(self):
+        with self.assertRaises(TypeError):
+            recheck.recheck_before_launch(self.BINDING, intent=intent(),
+                                          validate=LoggedValidate(Events()))
 
     def test_other_intent_field_change_refused(self):
         changed = intent()
         changed["provider_observation"] = {"xcode": {"version": "Xcode 27.2"}}
         validate = LoggedValidate(Events(), result=changed)
+        digests = recheck.bound_digests(record_line(), intent())
         with self.assertRaisesRegex(Refusal, recheck.BOUND_REFUSAL):
             recheck.recheck_before_launch(self.BINDING, intent=changed, validate=validate,
-                                          bound_digests=recheck.bound_digests(record_line(), intent()))
+                                          digests=digests)
         self.assertEqual(validate.calls, [])
 
-    def test_malformed_bound_digests_refused_before_validate(self):
+    def test_malformed_digests_refused_before_validate(self):
         good = recheck.bound_digests(record_line(), intent())
-        for value in (list(good), good[:2], good + ("0" * 64,), ("A" * 64,) + good[1:],
+        for value in (None, list(good), good[:2], good + ("0" * 64,), ("A" * 64,) + good[1:],
                       (b"1" * 64,) + good[1:], "x"):
             with self.subTest(value=value):
                 validate = LoggedValidate(Events())
                 with self.assertRaisesRegex(Refusal, "bound digests"):
                     recheck.recheck_before_launch(self.BINDING, intent=intent(),
-                                                  validate=validate, bound_digests=value)
+                                                  validate=validate, digests=value)
                 self.assertEqual(validate.calls, [])
+
+    def test_intent_sha256_is_key_order_independent(self):
+        original = intent()
+        reordered = {key: original[key] for key in reversed(list(original))}
+        reordered["input"] = {key: original["input"][key]
+                              for key in reversed(list(original["input"]))}
+        self.assertNotEqual(list(reordered), list(original))
+        self.assertEqual(recheck.intent_sha256(reordered), recheck.intent_sha256(original))
 
     def test_unencodable_intent_refused(self):
         for value in (dict(intent(), provider_observation={"x": float("nan")}),

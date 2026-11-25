@@ -19,12 +19,13 @@ def bind_recheck_and_launch(*, reviewed_head, products_record_line, intent, run_
                             command, observe, validate=None):
     """Return encoded closed outcome bytes, or raise after the failing stage.
 
-    Order: the callbacks and expected test IDs are checked; ``bind_launch``
-    binds the supplied values; ``bound_digests`` takes the input/output digests
-    from the immutable Products record line and snapshots the canonical intent
-    digest (refusing an intent that no longer carries the record's digests); ``recheck_before_launch`` re-validates
-    on disk (through ``validate``) and requires those bound digests; only then
-    does ``run_launch`` create the owned simulator and send commands. A refusal
+    Order: the callbacks and expected test IDs are checked; ``bound_digests``
+    takes the input/output digests from the immutable Products record line and
+    snapshots the intent digest (refusing an intent that does not carry the
+    record's digests); ``bind_launch`` binds the supplied values, including that
+    same intent; ``recheck_before_launch`` re-validates on disk (through
+    ``validate``) and requires the snapshotted digests; only then does
+    ``run_launch`` create the owned simulator and send commands. A refusal
     or exception at any stage stops every later stage. Stage semantics are
     unchanged: binder and checks raise ``Refusal``, ``validate`` exceptions
     become the re-check's closed refusal, runner exceptions propagate after the
@@ -39,13 +40,13 @@ def bind_recheck_and_launch(*, reviewed_head, products_record_line, intent, run_
     if not callable(command) or not callable(observe):
         raise Refusal("command and observe callbacks must be callable")
     launch_outcome._expected_ids(expected_test_ids)
+    digests = launch_recheck.bound_digests(products_record_line, intent)
     binding = launch_binding.bind_launch(
         reviewed_head=reviewed_head, products_record_line=products_record_line,
         intent=intent, run_uuid=run_uuid, xctestrun_path=xctestrun_path,
         result_bundle_path=result_bundle_path)
-    digests = launch_recheck.bound_digests(products_record_line, intent)
     binding = launch_recheck.recheck_before_launch(binding, intent=intent, validate=validate,
-                                                   bound_digests=digests)
+                                                   digests=digests)
     run_uuid, xctestrun, bundle = binding
     return launch_runner.run_launch(run_uuid, command, expected_test_ids=expected_test_ids,
                                     xctestrun_path=xctestrun, result_bundle_path=bundle,
