@@ -28,6 +28,7 @@ import test_prepare_ios
 
 
 BINDING = (RUN_ID, OUTPUT, BUNDLE)
+DIGESTS = (INPUT_SHA, OUTPUT_SHA, recheck.intent_sha256(intent()))
 CALL = ((SOURCE, INPUT_SHA, prepare.IOS_PROVIDER_RUNTIME_PROFILE, OUTPUT, INTENT_PATH),
         {"bounded_material": True})
 
@@ -55,14 +56,14 @@ class RecheckTests(unittest.TestCase):
     def refuses(self, message, validate, bound=BINDING, supplied=None):
         with self.assertRaisesRegex(Refusal, message) as caught:
             recheck.recheck_before_launch(bound, intent=intent() if supplied is None
-                                          else supplied, validate=validate)
+                                          else supplied, digests=DIGESTS, validate=validate)
         return caught.exception
 
     def test_success_returns_binding_and_calls_validate_once_exactly(self):
         validate = FakeValidate()
         bound = self.bound()
-        self.assertIs(recheck.recheck_before_launch(bound, intent=intent(), validate=validate),
-                      bound)
+        self.assertIs(recheck.recheck_before_launch(bound, intent=intent(), digests=DIGESTS,
+                                                    validate=validate), bound)
         self.assertEqual(validate.calls, [CALL])
         for value in CALL[0]:
             self.assertIs(type(value), str)
@@ -107,7 +108,7 @@ class RecheckTests(unittest.TestCase):
         for error in (KeyboardInterrupt(), SystemExit(1)):
             with self.subTest(error=error):
                 with self.assertRaises(type(error)) as caught:
-                    recheck.recheck_before_launch(BINDING, intent=intent(),
+                    recheck.recheck_before_launch(BINDING, intent=intent(), digests=DIGESTS,
                                                   validate=FakeValidate(error=error))
                 self.assertIs(caught.exception, error)
 
@@ -119,7 +120,8 @@ class RecheckTests(unittest.TestCase):
             with self.subTest(binding=index):
                 validate = FakeValidate()
                 with self.assertRaises(Refusal):
-                    recheck.recheck_before_launch(value, intent=intent(), validate=validate)
+                    recheck.recheck_before_launch(value, intent=intent(), digests=DIGESTS,
+                                                  validate=validate)
                 self.assertEqual(validate.calls, [])
         other = "223e4567-e89b-42d3-a456-426614174000"
         intents = [None, list(intent().items()), dict(intent(), extra=1),
@@ -133,7 +135,8 @@ class RecheckTests(unittest.TestCase):
             with self.subTest(intent=index):
                 validate = FakeValidate()
                 with self.assertRaises(Refusal):
-                    recheck.recheck_before_launch(BINDING, intent=value, validate=validate)
+                    recheck.recheck_before_launch(BINDING, intent=value, digests=DIGESTS,
+                                                  validate=validate)
                 self.assertEqual(validate.calls, [])
         for value in ("prepare.validate", 1):
             with self.subTest(validate=value):
@@ -142,7 +145,7 @@ class RecheckTests(unittest.TestCase):
     def test_default_validator_is_prepare_validate(self):
         validate = FakeValidate()
         with mock.patch.object(prepare, "validate", validate):
-            recheck.recheck_before_launch(BINDING, intent=intent())
+            recheck.recheck_before_launch(BINDING, intent=intent(), digests=DIGESTS)
         self.assertEqual(validate.calls, [CALL])
 
 
@@ -189,18 +192,20 @@ class RealValidationTests(unittest.TestCase):
             line = products._products_record(
                 (envelope(), {"input": self.pin, "output": self.intent["output"]["sha256"]}),
                 self.pin)
+        self.digests = recheck.bound_digests(line, self.intent)
         self.binding = binding.bind_launch(
             reviewed_head=HEAD, products_record_line=line, intent=self.intent,
             run_uuid=self.run_id, xctestrun_path=self.intent["output"]["path"],
             result_bundle_path=self.bundle)
 
     def test_real_validate_accepts_then_refuses_tampered_output(self):
-        self.assertIs(recheck.recheck_before_launch(self.binding, intent=self.intent),
-                      self.binding)
+        self.assertIs(recheck.recheck_before_launch(self.binding, intent=self.intent,
+                                                    digests=self.digests), self.binding)
         output = Path(self.intent["output"]["path"])
         output.write_bytes(output.read_bytes() + b"\n")
         with self.assertRaisesRegex(Refusal, recheck.VALIDATE_REFUSAL) as caught:
-            recheck.recheck_before_launch(self.binding, intent=self.intent)
+            recheck.recheck_before_launch(self.binding, intent=self.intent,
+                                          digests=self.digests)
         self.assertIsInstance(caught.exception.__cause__, prepare.Refusal)
 
 

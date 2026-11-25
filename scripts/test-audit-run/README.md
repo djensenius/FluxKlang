@@ -2338,14 +2338,16 @@ not launch anything, qualify #60 or authorize workflow dispatch.
 
 ### Pre-launch prepared-input re-check (#893; source-only)
 
-`ios_launch_recheck.recheck_before_launch(binding, *, intent, validate=None)`
-returns `binding` unchanged or raises `ios_launch_plan.Refusal`. `binding` must
+`ios_launch_recheck.recheck_before_launch(binding, *, intent, digests,
+validate=None)` returns `binding` unchanged or raises `ios_launch_plan.Refusal`. `binding` must
 be the exact `(run_uuid, xctestrun_path, result_bundle_path)` tuple of `str`
 values that `bind_launch` returned. That tuple carries no input path, pin or
 intent path, so the caller must also pass the **same** `intent` dict it gave
 `bind_launch`. The function checks the intent's provider-profile shape and that
-its `run_id` and output path equal the binding. Digest-to-record binding remains
-`bind_launch`'s job; an intent that was never bound is not detected here.
+its `run_id` and output path equal the binding, and that it matches the
+required bind-time `digests` (below). Digest-to-record comparison remains
+`bind_launch`'s job; the digests only detect an intent that differs from the
+one snapshotted for binding.
 
 It then calls `validate` exactly once as `validate(input_path, input_sha256,
 prepare.IOS_PROVIDER_RUNTIME_PROFILE, output_path, intent_path,
@@ -2374,3 +2376,64 @@ profile's trust assumptions, not provenance or custody. It is not wired
 into `run_launch` or any workflow. Real simulator or xcodebuild execution
 and workflow dispatch remain unauthorized. The module is not in the v5
 observed source set.
+
+Bind-time digests (required): `digests` is the `(input_sha256,
+output_sha256, intent_sha256)` tuple from `ios_launch_recheck.bound_digests(
+products_record_line, intent)`, taken with the same arguments as
+`bind_launch`. That helper takes the input/output digests from the immutable
+Products record line's `prepared` object (not from the mutable intent),
+refuses an intent that does not carry them, and snapshots
+`intent_sha256(intent)`: the SHA-256 of the intent's JSON encoding with sorted
+keys, compact separators, ASCII and no NaN. That digest identifies content
+only up to JSON equivalence (key order is irrelevant, `str`/`int` subclasses
+encode like their bases), not full type identity; type strictness still comes
+from the type-exact `prepare.require_equal` comparison. The intent must match
+all three digests before `validate` is called, and the re-validated record
+must match them afterwards (`intent does not match the digests recorded at
+bind time`). Malformed digests are refused before `validate`. There is no
+default: without the digests, a different valid intent with the same run ID
+and output path (for example re-read from disk after a swap) would pass,
+because the `bind_launch` tuple carries no digests. The binder's return type
+is deliberately unchanged.
+
+### Source-only iOS launch composition (#893)
+
+`ios_launch_compose.bind_recheck_and_launch(*, reviewed_head,
+products_record_line, intent, run_uuid, xctestrun_path, result_bundle_path,
+expected_test_ids, command, observe, validate=None)` returns `run_launch`'s
+encoded outcome bytes. In order it:
+
+1. refuses non-callable `command`/`observe` and invalid expected test IDs, so
+   these never trigger a re-validation read;
+2. calls `bound_digests(products_record_line, intent)` before binding, so any
+   later change to the intent (including a `provider_observation`-only change)
+   no longer matches the snapshot;
+3. calls `bind_launch`;
+4. calls `recheck_before_launch(binding, intent=intent, digests=...,
+   validate=validate)`;
+5. calls `run_launch` with the bound run UUID, prepared xctestrun and result
+   bundle path.
+
+A refusal or exception at any stage stops every later stage; in particular
+no command (no simulator inventory or create) is sent unless bind and re-check
+both succeed. Each stage keeps its own semantics: the composer adds no
+exception conversion. `validate` exceptions become the re-check's closed
+refusal, runner errors propagate after the lifecycle's single cleanup
+attempt, and `KeyboardInterrupt`/`SystemExit` propagate unchanged. The module
+does no IO or execution itself; reads happen only inside `validate` and
+commands only inside `command`.
+
+Re-check placement: the re-check runs before `run_launch`, not inside the
+owned-simulator operation. Bad inputs are then refused without creating or
+deleting a simulator (and without any orphan risk), and `run_launch` has no
+pre-test hook; moving the re-check inside would need a reviewed runner
+change. The cost is a longer window: it also spans the device inventory,
+create and ownership proof before xcodebuild starts.
+
+Limits: not wired into any workflow. The time-of-check/time-of-use window
+between the re-check and xcodebuild reading the prepared xctestrun and the
+uninventoried Products bundles remains. Real simulator, xcodebuild or launch
+execution and workflow dispatch remain unauthorized; tests use fake
+validators and the strict fake command only. Receipt delivery to the app
+(gap 3) and per-test startup isolation (gap 4) are not addressed. The module
+is not in the v5 observed source set.
