@@ -2231,3 +2231,56 @@ record states only that the supplied observations were complete and passing;
 it does not prove a launch happened, that results belong to that run, or that
 the receipt overlay was delivered. The closed provider profile is unchanged,
 and no executor produces these inputs.
+
+### Callback-only iOS launch runner composition (#893; source-only)
+
+`ios_launch_runner.run_launch(run_uuid, command, *, expected_test_ids,
+xctestrun_path, result_bundle_path, observe)` composes the pieces above. It
+validates the run UUID, expected test IDs, and canonical absolute
+`.xctestrun`/`.xcresult` paths (at most 1024 bytes), plus both callbacks,
+before any command; these refusals never create or delete anything. The
+caller must supply a nonexistent, run-keyed result bundle path; the runner
+cannot check its absence or freshness. It then
+calls `with_owned_simulator` with the same required `command` callback (there is
+no default executor). Inside the operation it calls
+`plan_launch(run_uuid, owned_uuid)` and sends two fixed direct argv tuples
+through that callback:
+
+1. `<ios_runtime.DEVELOPER>/usr/bin/xcodebuild test-without-building
+   -xctestrun <xctestrun_path> -destination id=<owned uuid>
+   -parallel-testing-enabled NO -test-iterations 1 -resultBundlePath
+   <result_bundle_path>` with a 1800-second limit and a 2 MiB output limit
+   (the fixed Xcode path, never `xcrun`).
+2. `<CoreSimulator simctl> get_app_container <owned uuid>
+   org.davidjensenius.FluxKlang data` with 30-second and 2 MiB limits. A zero
+   exit must print one canonical absolute path line of at most 1024 bytes. Any
+   other output (including empty, a bare newline or non-UTF-8) is refused
+   before the observer runs, and a non-zero exit means no receipt directory was located.
+
+The runner parses no test output or xcresult. The required `observe(plan=,
+test_result=, receipt_directory=)` callback must return
+`(observed_results, receipt_observation)` in the `ios_launch_outcome` shapes.
+`receipt_directory` is the `receipt_environment_overlay` value for the located
+container root, or `None`; with `None`, the observation must also be `None`.
+A non-zero (including negative) xcodebuild return code can never yield
+`passed`. When the observations alone would evaluate to `passed`, the runner
+raises `Refusal` instead of returning or downgrading the record, because the
+closed record cannot express a contradicting process exit. `failed`,
+`incomplete` and `unavailable` records are returned unchanged, with
+`exit_code` 1. The return value is the `encode`d closed outcome record. Refusals,
+observer or command exceptions, and `KeyboardInterrupt`/`SystemExit` propagate
+after the lifecycle's single cleanup attempt. The module has no direct
+execution or IO imports and no CLI. It does import `ios_runtime`, which itself
+imports `subprocess` and `os`. It reuses private validators from
+`ios_launch_plan`, `ios_launch_outcome` and `ios_simulator_lifecycle`, so
+changes to those helpers also change this runner's behavior.
+
+UNVERIFIED: the xcodebuild and `get_app_container` argv syntax, the destination
+form, the xctestrun path and shape, whether xcodebuild honors its own
+developer directory without `DEVELOPER_DIR` (the argv contract carries no
+environment), whether the 2 MiB stdout cap is adequate for real xcodebuild
+output, the container output format, and any result or receipt parsing a
+real observer would perform. The receipt overlay is computed but never
+delivered to the app, because the transport is unresolved. Tests use only a
+strict fake command. This slice does not launch anything, deliver receipts,
+prove startup isolation, qualify #60 or authorize workflow dispatch.
