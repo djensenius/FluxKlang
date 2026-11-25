@@ -2,9 +2,10 @@
 
 The module performs no IO or execution of its own: reads happen only inside
 the injected ``validate`` callable and commands only inside the injected
-``command`` callback. It adds ordering and a bind-time digest snapshot; it
-does not close the time-of-check/time-of-use window before xcodebuild reads
-the prepared xctestrun.
+``command`` callback. It adds ordering, a bind-time digest snapshot and a
+second re-check immediately before xcodebuild; that narrows, but does not
+close, the time-of-check/time-of-use window before xcodebuild reads the
+prepared xctestrun.
 """
 
 import ios_launch_binding as launch_binding
@@ -23,19 +24,25 @@ def bind_recheck_and_launch(*, reviewed_head, products_record_line, intent, run_
     takes the input/output digests from the immutable Products record line and
     snapshots the intent digest (refusing an intent that does not carry the
     record's digests); ``bind_launch`` binds the supplied values, including that
-    same intent; ``recheck_before_launch`` re-validates on disk (through
-    ``validate``) and requires the snapshotted digests; only then does
-    ``run_launch`` create the owned simulator and send commands. A refusal
-    or exception at any stage stops every later stage. Stage semantics are
-    unchanged: binder and checks raise ``Refusal``, ``validate`` exceptions
-    become the re-check's closed refusal, runner exceptions propagate after the
-    lifecycle's single cleanup attempt, and ``KeyboardInterrupt``/``SystemExit``
-    are never converted.
+    same intent; an early ``recheck_before_launch`` re-validates on disk
+    (through ``validate``) and requires the snapshotted digests; only then does
+    ``run_launch`` create and prove ownership of the simulator, after which its
+    ``before_test`` hook runs the same re-check (same binding, intent, digests
+    and ``validate``) again immediately before the xcodebuild command. On
+    success ``validate`` is therefore called exactly twice; a refusal at the
+    early re-check sends no command, and a refusal at the hook re-check sends
+    no xcodebuild command but still deletes the owned device once.
 
-    The re-check runs before, not inside, the owned-simulator operation: a bad
-    input is then refused without creating or deleting any device, and
-    ``run_launch`` exposes no pre-test hook. The window therefore also spans
-    simulator creation and the ownership proof.
+    A refusal or exception at any stage stops every later stage. Stage
+    semantics are unchanged: binder and checks raise ``Refusal``, ``validate``
+    exceptions become the re-check's closed refusal, runner (including hook)
+    exceptions propagate after the lifecycle's single cleanup attempt, and
+    ``KeyboardInterrupt``/``SystemExit`` are never converted.
+
+    The early re-check fails fast without device churn; the hook re-check
+    narrows the window to the time between it and xcodebuild opening the
+    files, which remains: xcodebuild re-opens the xctestrun and the
+    uninventoried Products bundles after the hook returns.
     """
     if not callable(command) or not callable(observe):
         raise Refusal("command and observe callbacks must be callable")
@@ -47,7 +54,12 @@ def bind_recheck_and_launch(*, reviewed_head, products_record_line, intent, run_
         result_bundle_path=result_bundle_path)
     binding = launch_recheck.recheck_before_launch(binding, intent=intent, validate=validate,
                                                    digests=digests)
+
+    def recheck_before_test():
+        launch_recheck.recheck_before_launch(binding, intent=intent, validate=validate,
+                                             digests=digests)
+
     run_uuid, xctestrun, bundle = binding
     return launch_runner.run_launch(run_uuid, command, expected_test_ids=expected_test_ids,
                                     xctestrun_path=xctestrun, result_bundle_path=bundle,
-                                    observe=observe)
+                                    observe=observe, before_test=recheck_before_test)
