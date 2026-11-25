@@ -114,7 +114,7 @@ def _json_output(data: bytes, label: str) -> object:
         raise Refusal(f"{label} output must be strict UTF-8 JSON") from error
 
 
-def _device_uuids(data: bytes) -> frozenset[str]:
+def _device_inventory(data: bytes) -> dict[str, tuple[str, str]]:
     inventory = _json_output(data, "device inventory")
     if type(inventory) is not dict or set(inventory) != {"devices"}:
         raise Refusal("device inventory has an incomplete shape")
@@ -122,7 +122,7 @@ def _device_uuids(data: bytes) -> frozenset[str]:
     if (type(groups) is not dict or not 1 <= len(groups) <= MAX_RUNTIME_GROUPS):
         raise Refusal("device inventory runtime groups are invalid")
 
-    found = set()
+    found = {}
     count = 0
     for runtime, devices in groups.items():
         _bounded_text(runtime, "runtime identifier", ascii_only=True)
@@ -135,21 +135,21 @@ def _device_uuids(data: bytes) -> frozenset[str]:
             if type(device) is not dict or not {"udid", "name", "state"} <= set(device):
                 raise Refusal("device inventory entry is incomplete")
             device_uuid = _canonical_uuid(device["udid"])
-            _bounded_text(device["name"], "device name")
+            device_name = _bounded_text(device["name"], "device name")
             _bounded_text(device["state"], "device state", ascii_only=True)
             if device_uuid in found:
                 raise Refusal("device inventory contains duplicate UUIDs")
-            found.add(device_uuid)
-    return frozenset(found)
+            found[device_uuid] = (runtime, device_name)
+    return found
 
 
-def _inventory(command: CommandCallback) -> frozenset[str]:
+def _inventory(command: CommandCallback) -> dict[str, tuple[str, str]]:
     result = _invoke(command, (
         launch_plan.CORE_SIMULATOR_SIMCTL, "list", "devices", "--json",
     ))
     if result.returncode != 0:
         raise Refusal("device inventory command failed")
-    return _device_uuids(result.stdout)
+    return _device_inventory(result.stdout)
 
 
 def _device_type_identifier(data: bytes) -> str:
@@ -230,14 +230,14 @@ def with_owned_simulator(run_uuid: str, command: CommandCallback,
             timeout=TIMEOUT_SECONDS,
             max_output_bytes=MAX_OUTPUT_BYTES,
         )
-    except BaseException as error:
+    except Exception as error:
         raise Refusal(
             "create command outcome is unknown; ownership unproven; possible orphan"
         ) from error
 
     try:
         after = _inventory(command)
-    except BaseException as error:
+    except Exception as error:
         raise Refusal(
             "post-create inventory failed; ownership unproven; possible orphan"
         ) from error
@@ -247,12 +247,19 @@ def with_owned_simulator(run_uuid: str, command: CommandCallback,
         if create_result.returncode != 0:
             raise Refusal("create command failed; ownership unproven; possible orphan")
         created_uuid = _created_uuid(create_result.stdout)
-        additions = after - before
-        if (created_uuid in before or not before <= after
+        before_ids = frozenset(before)
+        after_ids = frozenset(after)
+        additions = after_ids - before_ids
+        if (created_uuid in before_ids or not before_ids <= after_ids
                 or additions != frozenset((created_uuid,))):
             raise Refusal(
                 "post-create inventory delta is ambiguous; ownership unproven; "
                 "possible orphan"
+            )
+        if after[created_uuid] != (ios_runtime.RUNTIME, device_name):
+            raise Refusal(
+                "created device name or runtime does not match the request; "
+                "ownership unproven; possible orphan"
             )
     except Refusal as error:
         if "possible orphan" in str(error):

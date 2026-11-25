@@ -19,15 +19,19 @@ TYPE_ID = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
 SIMCTL = launch_plan.CORE_SIMULATOR_SIMCTL
 
 
-def inventory_bytes(*device_uuids):
-    return json.dumps({
-        "devices": {
-            ios_runtime.RUNTIME: [
-                {"udid": item, "name": f"Device-{index}", "state": "Shutdown"}
-                for index, item in enumerate(device_uuids)
-            ],
-        },
-    }).encode("utf-8")
+OWNED_NAME = f"{lifecycle.DEVICE_NAME_PREFIX}{RUN_ID}"
+
+
+def inventory_bytes(*device_uuids, owned_name=OWNED_NAME,
+                    owned_runtime=ios_runtime.RUNTIME):
+    groups = {ios_runtime.RUNTIME: []}
+    for index, item in enumerate(device_uuids):
+        runtime = owned_runtime if item == OWNED else ios_runtime.RUNTIME
+        name = owned_name if item == OWNED else f"Device-{index}"
+        groups.setdefault(runtime, []).append(
+            {"udid": item, "name": name, "state": "Shutdown"},
+        )
+    return json.dumps({"devices": groups}).encode("utf-8")
 
 
 def device_types_bytes(items=None):
@@ -236,6 +240,46 @@ class SimulatorLifecycleTests(unittest.TestCase):
         self.assertEqual(operated, [])
         self.assertEqual(len(fake.calls), 3)
         self.assertFalse(any(call[0][1] == "delete" for call in fake.calls))
+
+    def test_added_device_name_or_runtime_mismatch_never_operates_or_deletes(self):
+        for kwargs in (
+            {"owned_name": "Someone-Else"},
+            {"owned_runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-0"},
+        ):
+            with self.subTest(**kwargs):
+                fake = FakeCommand([
+                    expected_inventory(inventory_bytes(OTHER)),
+                    expected_types(),
+                    expected_create(),
+                    expected_inventory(inventory_bytes(OTHER, OWNED, **kwargs)),
+                ])
+                operated = []
+                with self.assertRaisesRegex(Refusal, "possible orphan"):
+                    lifecycle.with_owned_simulator(RUN_ID, fake, operated.append)
+                self.assertEqual(operated, [])
+                self.assertEqual(len(fake.calls), 4)
+
+    def test_termination_during_create_or_post_inventory_propagates(self):
+        create_argv, _ = expected_create()
+        for signal in (KeyboardInterrupt, SystemExit):
+            for responses in (
+                [
+                    expected_inventory(inventory_bytes(OTHER)),
+                    expected_types(),
+                    (create_argv, signal()),
+                ],
+                [
+                    expected_inventory(inventory_bytes(OTHER)),
+                    expected_types(),
+                    expected_create(),
+                    ((SIMCTL, "list", "devices", "--json"), signal()),
+                ],
+            ):
+                with self.subTest(signal=signal, calls=len(responses)):
+                    fake = FakeCommand(responses)
+                    with self.assertRaises(signal):
+                        lifecycle.with_owned_simulator(RUN_ID, fake, lambda _uuid: None)
+                    self.assertFalse(any(call[0][1] == "delete" for call in fake.calls))
 
     def test_callback_exception_is_preserved_when_cleanup_succeeds(self):
         fake = FakeCommand(completed_responses())

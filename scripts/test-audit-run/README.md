@@ -2161,7 +2161,8 @@ The design requests the fixed CoreSimulator `simctl` inventory, resolves one
 exact `iPhone 17` type, creates a run-UUID-keyed device on the fixed
 `ios_runtime.RUNTIME`, and permits cleanup only after the create UUID and full
 before/after inventories prove exactly one addition with no prior device
-disappearing. It then passes only that UUID to the operation and attempts one
+disappearing, listed with the requested name under the fixed runtime. Callback
+`KeyboardInterrupt`/`SystemExit` before ownership propagates unchanged. It then passes only that UUID to the operation and attempts one
 delete; ambiguous ownership is refused without deleting anything, and cleanup
 failure is final without retry. The `simctl list devicetypes --json` command
 availability and response shape have not been validated; the test's
