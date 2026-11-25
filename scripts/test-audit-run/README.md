@@ -2315,8 +2315,8 @@ values:
   after NFD normalization and `casefold()`, conservatively matching
   case-insensitive, normalization-insensitive macOS volumes.
 
-`provider_observation` is only checked to be a `dict`; its values are not
-compared with the record (the record does not carry them). The record's
+`provider_observation` is only checked to be a `dict`; its contents are not
+compared with the record's pinned Xcode/runtime/checker values. The record's
 `workflow.sha` is not compared with `reviewed_head`, only `checkout.commit`
 is: `workflow.sha` comes from `GITHUB_WORKFLOW_SHA`, which
 `_products_record` does not require to equal the checkout commit.
