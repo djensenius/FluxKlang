@@ -2284,3 +2284,54 @@ real observer would perform. The receipt overlay is computed but never
 delivered to the app, because the transport is unresolved. Tests use only a
 strict fake command. This slice does not launch anything, deliver receipts,
 prove startup isolation, qualify #60 or authorize workflow dispatch.
+
+### Pure iOS products-to-launch binder (#893; source-only)
+
+`ios_launch_binding.bind_launch(*, reviewed_head, products_record_line, intent,
+run_uuid, xctestrun_path, result_bundle_path)` returns `(run_uuid,
+xctestrun_path, result_bundle_path)` for `run_launch`, or raises
+`ios_launch_plan.Refusal` with a closed message. It only compares supplied
+values:
+
+- `reviewed_head` must be 40 lowercase hex and equal the record's
+  `checkout.commit`.
+- `products_record_line` must be `bytes` of at most 8 KiB holding exactly the
+  canonical `fluxklang-provider-products-observation-v1` line that
+  `observation_runner._products_record` writes (re-encoding must reproduce
+  the input; duplicate keys, NaN/Infinity, extra or missing keys, wrong fixed
+  Xcode/runtime/checker/runner/workflow values and non-hex IDs are refused).
+- `intent` must be an exact `dict` with the schema-version-3 provider-profile
+  key set, `profile == prepare.IOS_PROVIDER_RUNTIME_PROFILE`, the fixed
+  qualification and targets, and input/output SHA-256 equal to the record's
+  `prepared` digests. Its `run_id` must pass `prepare.check_run_id` and equal
+  the canonical `run_uuid`; its output and intent paths must equal
+  `prepare.output_paths` for its canonical absolute input path.
+- `xctestrun_path` must be that prepared output; the original candidate is
+  refused explicitly.
+- `result_bundle_path` must pass the runner's `.xcresult` path rules and must
+  not equal, lie under, or be an ancestor of the directory containing the
+  original candidate (a candidate at `/` therefore refuses every bundle). This
+  is a lexical check only: symlinks are not resolved. Both paths are compared
+  after NFD normalization and `casefold()`, conservatively matching
+  case-insensitive, normalization-insensitive macOS volumes.
+
+`provider_observation` is only checked to be a `dict`; its contents are not
+compared with the record's pinned Xcode/runtime/checker values. The record's
+`workflow.sha` is not compared with `reviewed_head`, only `checkout.commit`
+is: `workflow.sha` comes from `GITHUB_WORKFLOW_SHA`, which
+`_products_record` does not require to equal the checkout commit.
+
+Types are exact: `bool`, `int`/`str` subclasses, `bytearray` and tuples are
+refused. The module has no direct IO or execution imports and no CLI, but it
+imports `observation_runner`, `prepare`, `source_snapshot_integration`,
+`ios_runtime` and `ios_launch_runner` (reusing their constants and validators),
+which themselves import `os`, `subprocess`, `pathlib` and similar modules;
+`prepare.output_paths` is applied to a concrete `pathlib.Path` (via
+`prepare.Path`) whose `with_name`/`stem`/`with_suffix` perform no IO. It is not in the v5
+observed source set.
+
+This is same-job consistency at the xctestrun level only: it does not inventory
+the whole Products directory, does not establish provenance or custody, and
+does not re-check the prepared file's bytes at launch time (that would be a
+future, separately reviewed step). It is not wired into any workflow and does
+not launch anything, qualify #60 or authorize workflow dispatch.
