@@ -79,6 +79,102 @@ class IOSLaunchPlanTests(unittest.TestCase):
                 simctl_path="/usr/bin/xcrun",
             )
 
+    CONTAINER_ROOT = "/private/var/containers/Data/Application/APP"
+
+    def test_receipt_overlay_is_exact_single_unprefixed_key(self):
+        plan = launch_plan.plan_launch(self.RUN_UUID, self.CANDIDATE_UUID)
+        before = dict(vars(plan))
+
+        overlay = launch_plan.receipt_environment_overlay(plan, self.CONTAINER_ROOT)
+
+        self.assertEqual(overlay, {
+            "FLUXKLANG_AUDIT_RECEIPT_DIR":
+                self.CONTAINER_ROOT + "/" + self.RECEIPT_RELATIVE,
+        })
+        self.assertIsNot(
+            overlay,
+            launch_plan.receipt_environment_overlay(plan, self.CONTAINER_ROOT),
+        )
+        overlay["EXTRA"] = "x"
+        self.assertEqual(vars(plan), before)
+        self.assertNotIn(launch_plan.RECEIPT_ENVIRONMENT_KEY, vars(plan))
+        self.assertEqual(
+            launch_plan.receipt_environment_overlay(plan, self.CONTAINER_ROOT),
+            {"FLUXKLANG_AUDIT_RECEIPT_DIR":
+                self.CONTAINER_ROOT + "/" + self.RECEIPT_RELATIVE},
+        )
+
+    def test_receipt_overlay_refuses_noncanonical_roots(self):
+        class TextSubclass(str):
+            pass
+
+        plan = launch_plan.plan_launch(self.RUN_UUID, self.CANDIDATE_UUID)
+        for root in (
+            "",
+            "/",
+            "//",
+            "relative/root",
+            "./root",
+            "/root/",
+            "/root//child",
+            "//root",
+            "/root/.",
+            "/root/./child",
+            "/root/..",
+            "/root/../child",
+            "/root\0child",
+            "/root\nchild",
+            "/root\tchild",
+            "/root\x7fchild",
+            "/root\u0085child",
+            "/root\u009fchild",
+            "/root\u2028child",
+            "/root\u2029child",
+            "/root/\udcff",
+            b"/root",
+            TextSubclass("/root"),
+            None,
+            Path("/root"),
+        ):
+            with self.subTest(root=root), self.assertRaises(launch_plan.Refusal):
+                launch_plan.receipt_environment_overlay(plan, root)
+
+    def test_receipt_overlay_refuses_non_plan_inputs(self):
+        plan = launch_plan.plan_launch(self.RUN_UUID, self.CANDIDATE_UUID)
+
+        class PlanSubclass(launch_plan.LaunchPlan):
+            pass
+
+        for bad_plan in (
+            None,
+            vars(plan),
+            {"receipt_directory_relative": self.RECEIPT_RELATIVE},
+            (self.RUN_UUID, self.CANDIDATE_UUID, self.RECEIPT_RELATIVE),
+            PlanSubclass(self.RUN_UUID, self.CANDIDATE_UUID, self.RECEIPT_RELATIVE),
+        ):
+            with self.subTest(plan=bad_plan), self.assertRaises(launch_plan.Refusal):
+                launch_plan.receipt_environment_overlay(bad_plan, self.CONTAINER_ROOT)
+
+        tampered = launch_plan.plan_launch(self.RUN_UUID, self.CANDIDATE_UUID)
+        object.__setattr__(tampered, "receipt_directory_relative", "../escape")
+        with self.assertRaises(launch_plan.Refusal):
+            launch_plan.receipt_environment_overlay(tampered, self.CONTAINER_ROOT)
+
+        tampered = launch_plan.plan_launch(self.RUN_UUID, self.CANDIDATE_UUID)
+        object.__setattr__(
+            tampered,
+            "receipt_directory_relative",
+            "Library/Caches/FluxKlangAuditReceipts/"
+            "11111111-1111-4111-8111-111111111111",
+        )
+        with self.assertRaises(launch_plan.Refusal):
+            launch_plan.receipt_environment_overlay(tampered, self.CONTAINER_ROOT)
+
+        tampered = launch_plan.plan_launch(self.RUN_UUID, self.CANDIDATE_UUID)
+        object.__setattr__(tampered, "run_uuid", "22222222-2222-1222-8222-222222222222")
+        with self.assertRaises(launch_plan.Refusal):
+            launch_plan.receipt_environment_overlay(tampered, self.CONTAINER_ROOT)
+
     def test_module_has_no_command_executor_or_cli_entrypoint(self):
         source = Path(launch_plan.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -94,6 +190,8 @@ class IOSLaunchPlanTests(unittest.TestCase):
             if isinstance(node, ast.ImportFrom) and node.module
         )
         self.assertFalse({"subprocess", "os", "sys", "xcrun"} & imported)
+        self.assertNotIn("TEST_RUNNER_", source)
+        self.assertNotIn("SIMCTL_CHILD_", source)
         self.assertFalse(any(
             isinstance(node, ast.If) and
             isinstance(node.test, ast.Compare) and
