@@ -177,12 +177,7 @@ final class AppModel {
         await loadLaunchControlXL()
         await equipment.load()
         await environments.load()
-        environments.migrateEffectEquipmentLinks(using: equipment.items)
-        await studioConnections.load(
-            equipment: equipment.items,
-            environments: environments.environments,
-            activeID: environments.activeID
-        )
+        await loadEnvironmentDependents()
         await presets.load()
         await routingSnapshots.load()
         await spatial.load()
@@ -211,17 +206,47 @@ final class AppModel {
         await faderLayout.reload()
         await equipment.reload()
         await environments.reload()
+        if environments.hold == nil {
+            environments.migrateEffectEquipmentLinks(using: equipment.items)
+            await studioConnections.reload(
+                equipment: equipment.items,
+                environments: environments.environments,
+                activeID: environments.activeID
+            )
+        } else {
+            studioConnections.holdForUnavailableEnvironments()
+        }
+        await presets.reload()
+        await routingSnapshots.reload()
+        await spatial.reload()
+        scheduleSiriEntityIndexing()
+        await awaitDomainScheduledSaveSnapshots()
+    }
+
+    /// Home initialization and migrations depend on environments; while they are held (#943) neither runs.
+    func loadEnvironmentDependents() async {
+        guard environments.hold == nil else {
+            studioConnections.holdForUnavailableEnvironments()
+            return
+        }
+        environments.migrateEffectEquipmentLinks(using: equipment.items)
+        await studioConnections.load(
+            equipment: equipment.items,
+            environments: environments.environments,
+            activeID: environments.activeID
+        )
+    }
+
+    /// The explicit user retry for held environments; the only path that clears a hold.
+    func reloadHeldEnvironments() async {
+        guard await environments.reloadClearingHold() else { return }
         environments.migrateEffectEquipmentLinks(using: equipment.items)
         await studioConnections.reload(
             equipment: equipment.items,
             environments: environments.environments,
             activeID: environments.activeID
         )
-        await presets.reload()
-        await routingSnapshots.reload()
-        await spatial.reload()
         scheduleSiriEntityIndexing()
-        await awaitDomainScheduledSaveSnapshots()
     }
 
     /// Awaits the Siri indexing task captured when this method starts.

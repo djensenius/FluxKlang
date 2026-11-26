@@ -25,8 +25,11 @@ final class EnvironmentStore {
     private let legacyFileName = "effects.json"
     private let legacyChainFileName = "chain.json"
     private let injectedStore: JSONFileStore?
-    private var loaded = false
-    @ObservationIgnored private var saveTail: Task<Bool, Never>?
+    private let loads = HeldLoadGate()
+    private let saves = OrderedLocalSaves()
+    /// Bad persisted data was observed (#943); latched until `reloadClearingHold()` succeeds.
+    var hold: EnvironmentLoadHold? { loads.hold }
+    var lastSaveFailed: Bool { saves.lastSaveFailed }
     /// Whether the one-time fold of the old global `chain.json` into the active
     /// environment's graph has happened. Persisted so it runs at most once.
     private var migratedChain = false
@@ -61,51 +64,65 @@ final class EnvironmentStore {
 
     // MARK: - Loading
 
-    func load() async {
-        guard !loaded else { return }
-        loaded = true
-        if let saved = await (injectedStore ?? JSONFileStore.shared).load(Persisted.self, from: fileName) {
+    /// Single-flight (#943): concurrent callers join one in-flight read; none returns before it finishes.
+    func load() async { await loads.load(performLoad) }
+
+    /// Re-reads the persisted environments, picking up changes synced from iCloud. A no-op while held.
+    func reload() async { await loads.reload(performLoad) }
+
+    /// The explicit user retry for a held store. Saves queued before it never run after it.
+    @discardableResult
+    func reloadClearingHold() async -> Bool {
+        await loads.reloadClearingHold(performLoad) { saves.invalidateQueued() }
+    }
+
+    /// Reads every required source first; a hold publishes, migrates, seeds and writes nothing.
+    private func performLoad() async throws(EnvironmentLoadHold) {
+        let store = injectedStore ?? JSONFileStore.shared
+        let observed = await store.loadObserving(Persisted.self, from: fileName)
+        let saved = try observed.usableValue(fileName)
+        var legacyEffects: [Effect]?
+        if saved == nil {
+            legacyEffects = try await store.loadObserving([Effect].self, from: legacyFileName)
+                .usableValue(legacyFileName)
+        }
+        var legacyChain: ChainGraph?
+        if !(saved.map { $0.migratedChain ?? false } ?? migratedChain) {
+            legacyChain = try await store.loadObserving(ChainGraph.self, from: legacyChainFileName)
+                .usableValue(legacyChainFileName)
+        }
+        if let seed = observed.cloudSeed { await store.seedCloud(seed, for: fileName) }
+        loads.markReady() // Publish synchronously: no suspension before the single migration save.
+        var needsPersist = saved == nil && legacyEffects != nil
+        if let saved {
             environments = saved.environments
             activeID = saved.activeID
             migratedChain = saved.migratedChain ?? false
             migratedEffectEquipmentLinks = saved.migratedEffectEquipmentLinks ?? false
-        } else if let legacy = await (injectedStore ?? JSONFileStore.shared).load([Effect].self, from: legacyFileName) {
-            let migrated = RoutingEnvironment(name: "Default", effects: legacy)
+            saves.settleAfterLoad() // In-memory state was replaced by the saved state.
+        } else if let legacyEffects {
+            let migrated = RoutingEnvironment(name: "Default", effects: legacyEffects)
             environments = [migrated]
             activeID = migrated.id
-            persist()
         }
         normalizeActive()
-        normalizeStudioEndpoints()
-        await migrateLegacyChainIfNeeded()
-    }
-
-    /// One-time fold of the old single global `chain.json` into the active
-    /// environment's graph, so the per-environment canvas inherits whatever the
-    /// user had wired before environments owned their own graphs. Runs only when
-    /// the active environment has no graph yet, so it never clobbers newer work.
-    private func migrateLegacyChainIfNeeded() async {
-        guard !migratedChain else { return }
-        if let legacy = await (injectedStore ?? JSONFileStore.shared).load(ChainGraph.self, from: legacyChainFileName),
-           !legacy.nodes.isEmpty,
-           let index = activeIndex(),
-           environments[index].graph.nodes.isEmpty {
-            environments[index].graph = legacy
+        if normalizeStudioEndpoints() { needsPersist = true }
+        if !migratedChain {
+            // One-time fold of the old global `chain.json` into an active environment with no graph yet.
+            if let legacyChain, !legacyChain.nodes.isEmpty, let index = activeIndex(),
+               environments[index].graph.nodes.isEmpty {
+                environments[index].graph = legacyChain
+            }
+            migratedChain = true
+            needsPersist = true
         }
-        migratedChain = true
-        persist()
-    }
-
-    /// Re-reads the persisted environments, picking up changes synced from iCloud.
-    func reload() async {
-        loaded = false
-        await load()
+        if needsPersist { persist() }
     }
 
     /// Adds stable Equipment links to legacy effects where an exact ID or unique
     /// name match exists. Unresolved and ambiguous effects are left untouched.
     func migrateEffectEquipmentLinks(using equipment: [Equipment]) {
-        guard !migratedEffectEquipmentLinks else { return }
+        guard loads.admitsSaves, !migratedEffectEquipmentLinks else { return }
         for environmentIndex in environments.indices {
             for effectIndex in environments[environmentIndex].effects.indices {
                 let current = environments[environmentIndex].effects[effectIndex]
@@ -383,7 +400,7 @@ final class EnvironmentStore {
 
     // MARK: - Internals
 
-    private func normalizeStudioEndpoints() {
+    private func normalizeStudioEndpoints() -> Bool {
         var changed = false
         for index in environments.indices {
             let normalized = StudioEndpointNormalizer.normalize(
@@ -397,7 +414,7 @@ final class EnvironmentStore {
                 changed = true
             }
         }
-        if changed { persist() }
+        return changed
     }
 
     /// Guarantees there is an active environment, creating a "Default" one when
@@ -458,28 +475,21 @@ final class EnvironmentStore {
     /// loads, or guarantee durable persistence success: JSON saves are best-effort.
     /// Cancelling the waiter does not cancel the save chain.
     func awaitScheduledSavesSnapshot() async {
-        let tail = saveTail
-        _ = await tail?.value
+        await saves.awaitTailSnapshot()
     }
 
+    /// Refused unless loaded and not held, rechecked when a queued save starts (#943); queued saves are also
+    /// refused after a failure or explicit reload.
     @discardableResult
     private func persist() -> Task<Bool, Never> {
-        let snapshot = Persisted(
-            environments: environments,
-            activeID: activeID,
-            migratedChain: migratedChain,
-            migratedEffectEquipmentLinks: migratedEffectEquipmentLinks
-        )
-        let fileName = fileName
-        let injectedStore = injectedStore
-        let previousTail = saveTail
-        let save = Task {
-            _ = await previousTail?.value
+        guard loads.admitsSaves else { return saves.refuse() }
+        let snapshot = Persisted(environments: environments, activeID: activeID, migratedChain: migratedChain,
+                                 migratedEffectEquipmentLinks: migratedEffectEquipmentLinks)
+        let admits: @MainActor @Sendable () -> Bool = { [weak self] in self?.loads.admitsSaves ?? false }
+        return saves.enqueue(admitting: admits, write: { [fileName, injectedStore] in
             let store = injectedStore ?? JSONFileStore.shared
-            return await store.saveReportingLocalWrite(snapshot, to: fileName)
-        }
-        saveTail = save
-        return save
+            return await store.saveReportingLocalWrite(snapshot, to: fileName, mirrorsAfterLocalFailure: false)
+        })
     }
 
     private static func clamp(_ point: CGPoint) -> CGPoint {

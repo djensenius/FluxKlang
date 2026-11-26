@@ -70,6 +70,7 @@ struct SiriAppIntentsTests {
             let store = MemorySiriDraftStore()
             let coordinator = AssistantCoordinator(draftStore: store)
             let model = try fixture.makeModel(coordinator: coordinator)
+            await model.environments.load()
             let source = model.equipment.items[0]
             _ = model.environments.addEnvironment(named: "Siri Test")
             let first = Effect(name: "Delay")
@@ -114,6 +115,7 @@ struct SiriAppIntentsTests {
         try await withSiriAppModelFixture { fixture in
             let coordinator = AssistantCoordinator(draftStore: MemorySiriDraftStore())
             let model = try fixture.makeModel(coordinator: coordinator)
+            await model.environments.load()
             let source = model.equipment.items[0]
             _ = model.environments.addEnvironment(named: "Siri Natural Language")
             let effect = Effect(name: "Tape Delay")
@@ -141,6 +143,7 @@ struct SiriAppIntentsTests {
         try await withSiriAppModelFixture { fixture in
             let coordinator = AssistantCoordinator(draftStore: MemorySiriDraftStore())
             let model = try fixture.makeModel(coordinator: coordinator)
+            await model.environments.load()
             let source = model.equipment.items[0]
             _ = model.environments.addEnvironment(named: "Siri Mapping")
             let effect = Effect(name: "Delay")
@@ -171,6 +174,33 @@ struct SiriAppIntentsTests {
             #expect(model.environments.activeStudioGraph == beforeGraph)
             #expect(model.wing.values == beforeValues)
             #expect(model.wing.transportWriteCount == writesBefore)
+        }
+    }
+
+    /// #943: held environments stage nothing, skip effect/environment indexing and leave the file untouched.
+    @Test func heldEnvironmentsRefuseSiriDraftsQueriesAndIndexing() async throws {
+        try await withSiriAppModelFixture { fixture in
+            let coordinator = AssistantCoordinator(draftStore: MemorySiriDraftStore())
+            let model = try fixture.makeModel(coordinator: coordinator)
+            let source = model.equipment.items[0]
+            let damaged = Data("{ damaged environments".utf8)
+            try FileManager.default.createDirectory(
+                at: fixture.environmentsFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try damaged.write(to: fixture.environmentsFile)
+
+            let spoken = await SiriDraftStudioAction.execute(
+                sourceGear: [EquipmentEntity(id: source.id, name: source.name)],
+                effects: [], destination: .space, model: model)
+
+            #expect(spoken == SiriDraftStudioAction.environmentsUnavailableReply)
+            #expect(model.environments.hold?.failure == .malformedLocal)
+            #expect(coordinator.pendingStudioDraft == nil)
+            #expect(SiriEntityIntegration.indexableEnvironmentEntities(model: model) == nil)
+            await #expect(throws: SiriEnvironmentsUnavailableError.self) {
+                try await model.environments.loadAvailableForSiri()
+            }
+            await model.awaitDomainScheduledSaveSnapshots()
+            #expect(try Data(contentsOf: fixture.environmentsFile) == damaged)
         }
     }
 
@@ -212,6 +242,7 @@ private func withSiriAppModelFixture(
 private final class SiriAppModelFixture {
     private let resources: AssistantFixtureResources
     private var model: AppModel?
+    var environmentsFile: URL { resources.root.appendingPathComponent("domain/environments.json") }
 
     init(resources: AssistantFixtureResources) {
         self.resources = resources

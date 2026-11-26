@@ -198,6 +198,10 @@ extension EnvironmentSpatialTests {
     ) async throws {
         let directory = URL.temporaryDirectory.appendingPathComponent("receipt-\(UUID().uuidString)")
         let owner = EnvironmentStore(store: JSONFileStore(directory: directory, cloud: nil))
+        // Saves need a completed load (#943); start each body from a loaded store with no file on disk.
+        await owner.load()
+        await owner.awaitScheduledSavesSnapshot()
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("environments.json"))
         do {
             try await body(owner, directory)
         } catch {
@@ -383,6 +387,7 @@ extension EnvironmentSpatialTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = JSONFileStore(directory: directory, cloud: nil)
         let owner = EnvironmentStore(store: store)
+        await owner.load()
         let equipment = Equipment(name: "Reverb")
         let effect = Effect(name: "  REVERB ")
         #expect(effect.id != equipment.id)
