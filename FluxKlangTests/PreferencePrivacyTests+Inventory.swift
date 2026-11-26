@@ -37,7 +37,8 @@ extension PreferencePrivacyTests {
     /// (spotlight protection class), the stores `EnvironmentStore` (`environments.json`, legacy `effects.json` and
     /// `chain.json`), `StudioConnectionsStore`, `EquipmentStore`, `PresetStore`, `SpatialStore`, `FaderLayoutStore`,
     /// `RoutingSnapshotStore`, `LaunchControlXLController`, `PendingStudioPatchStore`, `AssistantHistoryStore`
-    /// (`AssistantHistory` directory, zone `FluxKlangAssistantHistory`) and `LocalNetworkGrantEvidence`.
+    /// (`AssistantHistory` directory, zone `FluxKlangAssistantHistory`), `LocalNetworkGrantEvidence` and
+    /// `JSONFileStore` (`Preserved` directory of held environment items moved aside by start-fresh).
     static let realSurfaces: [RealSurface] = [
         RealSurface(.userDefaultsKey, "fluxklang.appIcon", .preference),
         RealSurface(.userDefaultsKey, "fluxklang.reconnectAtLaunch", .preference),
@@ -60,6 +61,7 @@ extension PreferencePrivacyTests {
         RealSurface(.localFile, "LocalNetwork/local-network-grant", .hostLocalRoute),
         RealSurface(.localDirectory, "AssistantHistory", .history),
         RealSurface(.localDirectory, "LocalNetwork", .hostLocalRoute),
+        RealSurface(.localDirectory, "Preserved", .environment),
         RealSurface(.cloudKitZone, "FluxKlangAssistantHistory", .history),
         RealSurface(.keychainAccount, "github-copilot-token", .credential)
     ]
@@ -77,13 +79,13 @@ extension PreferencePrivacyTests {
         }
     }
 
-    @Test func theInventoryHasTwentyThreeSurfacesInSixKinds() {
-        #expect(StorageInventory.shipped.count == 23)
-        #expect(Self.realSurfaces.count == 23)
+    @Test func theInventoryHasTwentyFourSurfacesInSixKinds() {
+        #expect(StorageInventory.shipped.count == 24)
+        #expect(Self.realSurfaces.count == 24)
         let counts = StorageSurface.Kind.allCases.map { kind in
             StorageInventory.shipped.filter { $0.surface.kind == kind }.count
         }
-        #expect(counts == [7, 10, 1, 2, 2, 1])
+        #expect(counts == [7, 10, 1, 2, 3, 1])
     }
 
     @Test func everyRealSurfaceHasTheClassOfTheRulings() {
@@ -112,7 +114,7 @@ extension PreferencePrivacyTests {
     }
 
     @Test func surfaceNamesAreUniqueAcrossEveryKind() throws {
-        #expect(Set(StorageInventory.shipped.map(\.surface.name)).count == 23)
+        #expect(Set(StorageInventory.shipped.map(\.surface.name)).count == 24)
         #expect(Self.refusal { try StorageInventory.validate(StorageInventory.shipped) } == nil)
         #expect(Self.refusal { try StorageInventory.validate([]) } == nil)
     }
