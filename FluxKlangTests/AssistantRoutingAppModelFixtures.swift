@@ -33,6 +33,7 @@ final class RoutingAppModelFixture {
     let store: RoutingAppModelDraftStore
     let coordinator: AssistantCoordinator
     private let resources: AssistantFixtureResources
+    var environmentsFile: URL { resources.root.appendingPathComponent("domain/environments.json") }
     private let generator = AssistantFixtureReplyGenerator(reply: "read-only reply")
     private var model: AppModel?
     private var chat: AssistantChatController?

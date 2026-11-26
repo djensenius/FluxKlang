@@ -25,8 +25,9 @@ final class StudioConnectionsStore {
     private let outputDefaults: StudioOutputDefaults?
     private var loaded = false
     private var confirmedOutputDefaultsVersion = 0
-    /// Home was never loaded because saved environments are held (#943). While set, Home is neither
-    /// initialized, migrated nor written; mutations are refused. Cleared by the next `load`.
+    /// Saved environments are held (#943). While set, Home is neither initialized, migrated nor written;
+    /// mutations, including temporary moves, are refused and current connections are retained. Cleared by
+    /// the next `load`/`reload` after recovery.
     private(set) var isHeldForEnvironments = false
 
     init(
@@ -83,10 +84,8 @@ final class StudioConnectionsStore {
         await load(equipment: equipment, environments: environments, activeID: activeID)
     }
 
-    /// Called instead of `load` while environments are held. A Home that already loaded stays usable;
-    /// an unloaded Home must not be initialized from (or written over) unavailable environment data.
+    /// Called instead of `load`/`reload` while environments are held, at startup or after a later reload.
     func holdForUnavailableEnvironments() {
-        guard !loaded else { return }
         isHeldForEnvironments = true
     }
 

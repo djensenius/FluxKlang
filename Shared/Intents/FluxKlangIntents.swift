@@ -196,6 +196,8 @@ enum SiriDraftStudioAction {
             guard case .prepared(let draft) = preparation else {
                 return AssistantRoutingOwnership.clarification
             }
+            // Environments can become held while interpretation awaits (#943): commit nothing.
+            guard model.environments.hold == nil else { return environmentsUnavailableReply }
             let committed = await model.assistant.commitPreparedRoutingResult(
                 draft, expectedPending: expectedPending, preparedContext: context,
                 currentContext: model.assistantToolContext())

@@ -478,13 +478,14 @@ final class EnvironmentStore {
         await saves.awaitTailSnapshot()
     }
 
-    /// Refused unless loaded and not held; queued saves are refused after a failure, hold or explicit reload.
+    /// Refused unless loaded and not held, rechecked when a queued save starts (#943); queued saves are also
+    /// refused after a failure or explicit reload.
     @discardableResult
     private func persist() -> Task<Bool, Never> {
         guard loads.admitsSaves else { return saves.refuse() }
         let snapshot = Persisted(environments: environments, activeID: activeID, migratedChain: migratedChain,
                                  migratedEffectEquipmentLinks: migratedEffectEquipmentLinks)
-        let admits: @MainActor @Sendable () -> Bool = { [weak self] in self.map { $0.hold == nil } ?? false }
+        let admits: @MainActor @Sendable () -> Bool = { [weak self] in self?.loads.admitsSaves ?? false }
         return saves.enqueue(admitting: admits, write: { [fileName, injectedStore] in
             let store = injectedStore ?? JSONFileStore.shared
             return await store.saveReportingLocalWrite(snapshot, to: fileName, mirrorsAfterLocalFailure: false)

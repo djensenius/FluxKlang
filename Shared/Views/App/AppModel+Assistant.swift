@@ -125,7 +125,8 @@ extension AppModel {
             let retainedID = assistant.pendingPublicationID == publicationID ? publicationID : nil
             return .acceptedLocalWriteUnconfirmed(merge: result, retainedPublicationID: retainedID)
         }
-        guard let removalOutcome = await assistant.retireAcceptedDraft(
+        // Environments held while the receipt was awaited (#943) keep the draft for review.
+        guard environments.hold == nil, let removalOutcome = await assistant.retireAcceptedDraft(
             publicationID: publicationID, snapshot: refreshed
         ) else {
             return .acceptedWithoutRetirement(merge: result)

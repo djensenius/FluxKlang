@@ -124,7 +124,7 @@ struct EnvironmentLoadHold: Error, Equatable, Sendable {
     }
 }
 
-/// Single-flight load with a latched hold (#943). Concurrent callers join one in-flight read. A hold thrown by
+/// Single-flight load with a latched hold (#943). Loads join one in-flight read; reloads coalesce. A hold thrown by
 /// a read survives ordinary reloads and clears only when `reloadClearingHold` succeeds. No automatic retry.
 @MainActor
 @Observable
@@ -135,6 +135,8 @@ final class HeldLoadGate {
     private(set) var hold: EnvironmentLoadHold?
     private(set) var phase = Phase.notLoaded
     @ObservationIgnored private var inFlight: Task<Void, Never>?
+    /// A reload asked for during a read: exactly one follow-up read runs after it, unless it held.
+    @ObservationIgnored private var reloadRequested = false
 
     /// Writes only after a completed, usable read: never before loading, while held, or around a read.
     var admitsSaves: Bool { hold == nil && phase == .ready }
@@ -144,20 +146,29 @@ final class HeldLoadGate {
         _ = await inFlight?.value
     }
 
+    /// Coalesces: a reload during a read requests one follow-up read (so newer data, such as an iCloud change
+    /// arriving mid-read, is seen), shared by every caller that asked during that read.
     func reload(_ read: @escaping Read) async {
-        _ = await inFlight?.value
-        if inFlight == nil, hold == nil { start(read) }
-        _ = await inFlight?.value
+        if let current = inFlight {
+            reloadRequested = true
+            await current.value
+            if let followUp = inFlight { await followUp.value }
+            return
+        }
+        guard hold == nil else { return }
+        await start(read).value
     }
 
-    /// Returns whether the read succeeded and nothing is held.
+    /// Returns whether the read succeeded and nothing is held. Joins a read already in flight; `beforeStart`
+    /// runs only when this call starts a new read.
     func reloadClearingHold(_ read: @escaping Read, beforeStart: () -> Void) async -> Bool {
-        _ = await inFlight?.value
-        if inFlight == nil {
+        if let current = inFlight {
+            await current.value
+            if let followUp = inFlight { await followUp.value } // A coalesced reload may follow it.
+        } else {
             beforeStart()
-            start(read)
+            await start(read).value
         }
-        _ = await inFlight?.value
         return hold == nil && phase == .ready
     }
 
@@ -167,9 +178,10 @@ final class HeldLoadGate {
         phase = .ready
     }
 
-    private func start(_ read: @escaping Read) {
+    @discardableResult
+    private func start(_ read: @escaping Read) -> Task<Void, Never> {
         phase = .loading
-        inFlight = Task {
+        let task = Task {
             do throws(EnvironmentLoadHold) {
                 try await read()
                 if phase == .loading { markReady() }
@@ -178,7 +190,13 @@ final class HeldLoadGate {
                 phase = .held
             }
             inFlight = nil
+            if reloadRequested {
+                reloadRequested = false
+                if hold == nil { start(read) }
+            }
         }
+        inFlight = task
+        return task
     }
 }
 
@@ -193,7 +211,11 @@ final class OrderedLocalSaves {
     @ObservationIgnored private var generation = 0
     /// Counts writes that actually returned false; refusals never cascade to later saves.
     @ObservationIgnored private var failures = 0
-    @ObservationIgnored private var refusedSinceSettle = false
+    /// Request order: a write clears the warning only if it was requested after the latest refused request,
+    /// so its snapshot includes that edit. `settledRefusal` is the latest refusal already reported to a load.
+    @ObservationIgnored private var sequence = 0
+    @ObservationIgnored private var latestRefusal = 0
+    @ObservationIgnored private var settledRefusal = 0
 
     func enqueue(
         admitting admits: @escaping @MainActor @Sendable () -> Bool,
@@ -202,16 +224,23 @@ final class OrderedLocalSaves {
         let previous = tail
         let scheduledGeneration = generation
         let scheduledFailures = failures
+        sequence += 1
+        let request = sequence
         let save = Task { [weak self] in
             _ = await previous?.value
             guard let self else { return false } // The owner is gone: refuse rather than write unowned state.
             guard admits(), scheduledGeneration == generation, scheduledFailures == failures else {
-                markRefused()
+                markRefused(request)
                 return false
             }
             let completed = await write()
-            if completed { refusedSinceSettle = false } else { failures += 1 }
-            lastSaveFailed = !completed
+            if !completed {
+                failures += 1
+                lastSaveFailed = true
+            } else if request > latestRefusal {
+                lastSaveFailed = false
+                settledRefusal = latestRefusal
+            }
             return completed
         }
         tail = save
@@ -219,7 +248,8 @@ final class OrderedLocalSaves {
     }
 
     func refuse() -> Task<Bool, Never> {
-        markRefused()
+        sequence += 1
+        markRefused(sequence)
         return Task { false }
     }
 
@@ -228,8 +258,8 @@ final class OrderedLocalSaves {
     /// After a load replaces in-memory state: clears a write failure, but keeps the warning when an edit was
     /// refused since the previous settle (before or during this load), because that edit was never saved.
     func settleAfterLoad() {
-        if !refusedSinceSettle { lastSaveFailed = false }
-        refusedSinceSettle = false
+        if latestRefusal == settledRefusal { lastSaveFailed = false }
+        settledRefusal = latestRefusal
     }
 
     /// Awaits the tail captured now, including its predecessors; not later saves or durability.
@@ -238,9 +268,9 @@ final class OrderedLocalSaves {
         _ = await tail?.value
     }
 
-    private func markRefused() {
+    private func markRefused(_ request: Int) {
         lastSaveFailed = true
-        refusedSinceSettle = true
+        latestRefusal = max(latestRefusal, request)
     }
 }
 

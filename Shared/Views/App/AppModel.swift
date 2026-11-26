@@ -213,6 +213,8 @@ final class AppModel {
                 environments: environments.environments,
                 activeID: environments.activeID
             )
+        } else {
+            studioConnections.holdForUnavailableEnvironments()
         }
         await presets.reload()
         await routingSnapshots.reload()
