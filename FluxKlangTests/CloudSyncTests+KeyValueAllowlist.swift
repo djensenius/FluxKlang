@@ -8,7 +8,11 @@
 
 import Foundation
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 extension CloudSyncTests {
     /// Store files that go through `JSONFileStore` but are not on the allowlist.

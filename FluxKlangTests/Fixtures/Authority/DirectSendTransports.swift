@@ -8,7 +8,11 @@
 
 import Foundation
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 /// Mints direct-send grants on an `AuthorityBench` authority: a running-set `.set`
 /// of `liveParameter`, or of a `ParameterCatalog.wing` parameter, admitted for

@@ -2,7 +2,11 @@ import Foundation
 import Synchronization
 import Testing
 
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 @MainActor
 enum AssistantBackendFixture {

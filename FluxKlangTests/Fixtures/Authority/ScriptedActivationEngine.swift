@@ -6,7 +6,11 @@
 //
 
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 enum ScriptedEngineError: Error, Equatable, Sendable {
     case faults(FaultScriptError)

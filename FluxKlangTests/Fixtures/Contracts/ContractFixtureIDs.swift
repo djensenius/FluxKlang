@@ -6,7 +6,11 @@
 //  contract doubles. Nothing here reads the wall clock or generates random IDs.
 //
 
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 /// Fixed identities shared by every contract fixture.
 enum ContractFixtureIDs {
