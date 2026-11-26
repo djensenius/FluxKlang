@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.0.8](https://github.com/djensenius/FluxKlang/compare/v0.0.7...v0.0.8) (2026-11-26)
+
+
+### Features
+
+* add opt-in MIDI 1.0 UMP input for Launch Control XL ([97f1a89](https://github.com/djensenius/FluxKlang/commit/97f1a89c28512629c3320d800b4995f191859fdb))
+* add opt-in MIDI 1.0 UMP input for Launch Control XL ([67e90b9](https://github.com/djensenius/FluxKlang/commit/67e90b9a0e8bb502a401716fc643b613ce79197a))
+* **midi:** carry endpoint protocol evidence through CoreMIDI records and bindings ([22ad7d2](https://github.com/djensenius/FluxKlang/commit/22ad7d2351cfedda2ee57631041af49c216c92bb))
+* **midi:** derive per-binding receive fidelity from endpoint protocol (M81-EP2) ([2ed262e](https://github.com/djensenius/FluxKlang/commit/2ed262e18ed16a119201b6eeb06cef3495fff217))
+
+
+### Bug Fixes
+
+* **assistant:** drop superseded pending-draft load publication (P14b4) ([577f654](https://github.com/djensenius/FluxKlang/commit/577f654ee75d16a73756c156362d08782b53c1e3))
+* **assistant:** hide overtaken draft operation results (P14b6) ([4f4a70d](https://github.com/djensenius/FluxKlang/commit/4f4a70d06da03fdc6ee5a3738d4285261eaa03a4))
+* **assistant:** hide overtaken draft operation results (P14b6) ([b9bd189](https://github.com/djensenius/FluxKlang/commit/b9bd189aad09c53596585ca204f59547942718ce))
+* **assistant:** skip publishing loads that start during a draft mutation (P14b5) ([0e348d0](https://github.com/djensenius/FluxKlang/commit/0e348d02bbdf0fce2c568fbd9789d7b88d31cba7))
+* **assistant:** skip publishing loads that start during a draft mutation (P14b5) ([9018292](https://github.com/djensenius/FluxKlang/commit/901829221acf318799cccae45ae94f66f3de33b9))
+* **host:** fence a paused beginApply against window close (AU7c2) ([975e739](https://github.com/djensenius/FluxKlang/commit/975e739749d30d60b5a8280a8d75760c8b20331c))
+* **host:** fence paused applies when a window detach is submitted (AU7c3) ([8f85df7](https://github.com/djensenius/FluxKlang/commit/8f85df72c0ab37f3fed0dd28e4a6e3dd35192154))
+* **host:** refuse audio-plan admission on the WING-only authority ([dc265c4](https://github.com/djensenius/FluxKlang/commit/dc265c4be723d2f5e6d34ebc26fb27b9c4da7495))
+* **kernel:** bind claim provenance to exact ownership ([5aaba1a](https://github.com/djensenius/FluxKlang/commit/5aaba1a7c1ce91749b6253a5ecf9caa23761415d))
+* **store:** remove pending draft names without recursive deletion ([90f08eb](https://github.com/djensenius/FluxKlang/commit/90f08eb6696c4ae21d22010479e564902a5475b5))
+
 ## [0.0.7](https://github.com/djensenius/FluxKlang/compare/v0.0.6...v0.0.7) (2026-10-29)
 
 
