@@ -1018,6 +1018,18 @@ targets:
       - path: FluxKlangTests/PeerTransportTests+Negotiation.swift
       - path: FluxKlangTests/ControlBindingTests.swift
       - path: FluxKlangTests/ControlBindingTests+Coverage.swift
+      - path: FluxKlangTests/HostAuthorityTests.swift
+      - path: FluxKlangTests/HostAuthorityTests+Owner.swift
+      - path: FluxKlangTests/Fixtures/Authority/HostAuthorityBench.swift
+      - path: FluxKlangTests/Fixtures/Authority/DirectSendTransports.swift
+      - path: FluxKlangTests/Fixtures/Authority/ScriptedActivationEngine.swift
+      - path: FluxKlangTests/Fixtures/Contracts/ContractFixtureIDs.swift
+      - path: FluxKlangTests/Fixtures/Contracts/FixtureFaults.swift
+      - path: FluxKlangTests/AssistantBackendTestSupport.swift
+      - path: FluxKlangTests/CloudSyncTests.swift
+      - path: FluxKlangTests/CloudSyncTests+KeyValueAllowlist.swift
+      - path: FluxKlangTests/EnvironmentSpatialTests.swift
+      - path: FluxKlangTests/SiriAppIntentsTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.mactests

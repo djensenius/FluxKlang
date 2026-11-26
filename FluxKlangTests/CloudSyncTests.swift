@@ -10,7 +10,11 @@
 import CoreGraphics
 import Foundation
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 @Suite(.productionAccessAudit)
 struct CloudSyncTests {
