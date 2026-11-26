@@ -440,3 +440,31 @@ struct AssistantRoutingReviewRegressionTests {
         }
     }
 }
+
+extension AssistantRoutingAppModelTests {
+    /// #943: environments held while Siri interpretation awaits commit no draft.
+    @Test(.timeLimit(.minutes(1))) func siriHoldDuringInterpretationCommitsNothing() async throws {
+        let fixture = AssistantRoutingFixture()
+        try await withRoutingAppModel(fixture: fixture) { model, owner in
+            await model.awaitDomainScheduledSaveSnapshots()
+            let prior = model.assistant.pendingStudioDraft
+            let interpreter = RoutingTestInterpreter(suspend: true)
+            defer { Task { await interpreter.finish() } }
+            let siri = Task {
+                await SiriDraftStudioAction.execute(
+                    request: AssistantRoutingFixture.text, model: model, interpreter: interpreter)
+            }
+            try await boundedWait { await interpreter.isWaiting }
+            let damaged = Data("{ damaged environments".utf8)
+            try? damaged.write(to: owner.environmentsFile)
+            await model.environments.reload()
+            await interpreter.resume()
+            #expect(model.environments.hold?.failure == .malformedLocal)
+            #expect(await siri.value == SiriDraftStudioAction.environmentsUnavailableReply)
+            #expect(model.assistant.pendingStudioDraft == prior)
+            #expect(model.assistant.navigationTarget != .reviewPendingDraft)
+            let bytes = try Data(contentsOf: owner.environmentsFile)
+            #expect(bytes == damaged)
+        }
+    }
+}

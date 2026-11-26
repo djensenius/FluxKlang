@@ -6,6 +6,19 @@ private let fluxKlangAppEntityIndexName = "FluxKlang.AppEntities"
 private let fluxKlangSpotlightProtectionClassKey =
     "org.davidjensenius.FluxKlang.spotlightProtectionClass"
 
+/// Siri reports held environments (#943) as unavailable instead of offering empty or stale entities.
+struct SiriEnvironmentsUnavailableError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
+extension EnvironmentStore {
+    func loadAvailableForSiri() async throws {
+        await load()
+        if let hold { throw SiriEnvironmentsUnavailableError(message: hold.message) }
+    }
+}
+
 struct EquipmentEntity: AppEntity, IndexedEntity, Hashable {
     let id: UUID
     let name: String
@@ -112,19 +125,19 @@ struct EquipmentEntityQuery: EntityStringQuery {
 struct EffectEntityQuery: EntityStringQuery {
     @MainActor
     func entities(for identifiers: [UUID]) async throws -> [EffectEntity] {
-        await AppModel.shared.environments.load()
+        try await AppModel.shared.environments.loadAvailableForSiri()
         return Self.entities(for: identifiers, in: AppModel.shared.environments.activeEffects)
     }
 
     @MainActor
     func suggestedEntities() async throws -> [EffectEntity] {
-        await AppModel.shared.environments.load()
+        try await AppModel.shared.environments.loadAvailableForSiri()
         return AppModel.shared.environments.activeEffects.map(EffectEntity.init)
     }
 
     @MainActor
     func entities(matching string: String) async throws -> [EffectEntity] {
-        await AppModel.shared.environments.load()
+        try await AppModel.shared.environments.loadAvailableForSiri()
         return Self.entities(matching: string, in: AppModel.shared.environments.activeEffects)
     }
 
@@ -141,19 +154,19 @@ struct EffectEntityQuery: EntityStringQuery {
 struct EnvironmentEntityQuery: EntityStringQuery {
     @MainActor
     func entities(for identifiers: [UUID]) async throws -> [EnvironmentEntity] {
-        await AppModel.shared.environments.load()
+        try await AppModel.shared.environments.loadAvailableForSiri()
         return Self.entities(for: identifiers, in: AppModel.shared.environments.environments)
     }
 
     @MainActor
     func suggestedEntities() async throws -> [EnvironmentEntity] {
-        await AppModel.shared.environments.load()
+        try await AppModel.shared.environments.loadAvailableForSiri()
         return AppModel.shared.environments.environments.map(EnvironmentEntity.init)
     }
 
     @MainActor
     func entities(matching string: String) async throws -> [EnvironmentEntity] {
-        await AppModel.shared.environments.load()
+        try await AppModel.shared.environments.loadAvailableForSiri()
         return Self.entities(matching: string, in: AppModel.shared.environments.environments)
     }
 

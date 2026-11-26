@@ -70,7 +70,9 @@ extension AppModel {
     func acceptPendingAssistantDraftResult(
         beforeAwaitingLocalSave: (@MainActor () async -> Void)? = nil
     ) async -> StudioDraftAcceptanceResult {
-        guard let original = assistant.pendingStudioDraft, let publicationID = assistant.pendingPublicationID,
+        // Held environments (#943) refuse acceptance: no merge, no save and no draft retirement.
+        guard environments.hold == nil,
+              let original = assistant.pendingStudioDraft, let publicationID = assistant.pendingPublicationID,
               assistant.canAcceptPendingDraft(hasActiveEnvironment: environments.active != nil) else {
             return .notAccepted
         }
@@ -87,7 +89,7 @@ extension AppModel {
             context: validationContext
         )
         let currentContext = assistantToolContext()
-        guard case .pendingDraft(let refreshed?) = validation,
+        guard case .pendingDraft(let refreshed?) = validation, environments.hold == nil,
               !refreshed.hasErrors, !Task.isCancelled, wing === controller,
               assistant.pendingStudioDraft == refreshed,
               validationContext.activeEnvironmentID == currentContext.activeEnvironmentID,
@@ -123,7 +125,8 @@ extension AppModel {
             let retainedID = assistant.pendingPublicationID == publicationID ? publicationID : nil
             return .acceptedLocalWriteUnconfirmed(merge: result, retainedPublicationID: retainedID)
         }
-        guard let removalOutcome = await assistant.retireAcceptedDraft(
+        // Environments held while the receipt was awaited (#943) keep the draft for review.
+        guard environments.hold == nil, let removalOutcome = await assistant.retireAcceptedDraft(
             publicationID: publicationID, snapshot: refreshed
         ) else {
             return .acceptedWithoutRetirement(merge: result)
