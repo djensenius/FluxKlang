@@ -101,7 +101,8 @@ actor HostAuthorityOwner {
         let ledger = try GenerationLedger(primaryClock: Self.primaryClock, musicalClock: nil,
                                           nominalRate: Self.nominalRate)
         let live = HostLiveState(hostEpoch: hostEpoch, permission: nil, capabilities: capabilities)
-        let authority = try HostAuthority(host: ledger, live: live, sendScope: WingDirectSendScope())
+        let authority = try HostAuthority(host: ledger, live: live, planAdmission: .unsupported,
+                                          sendScope: WingDirectSendScope())
         self.authority = authority
         let studioGraph = RunningGraph(revision: .initial, prepared: nil)
         opened = Task { await authority.open(project: studio, running: studioGraph) }

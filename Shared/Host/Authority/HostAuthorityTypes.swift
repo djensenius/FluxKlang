@@ -25,6 +25,8 @@ struct ActivationGesture: Hashable, Sendable {
 /// Ordinary refusals leave canonical state unchanged. The explicitly identified
 /// post-acceptance admission fault is not a rollback or unchanged-refusal claim.
 enum HostAuthorityRefusal: Error, Equatable, Sendable {
+    /// This authority has no audio-plan admission path.
+    case audioPlanAdmissionUnsupported
     /// Closed preparation custody does not execute this legacy operation.
     case preparationOnly
     /// The one prepare-only lifetime is reserved, even if no resource exists yet.
