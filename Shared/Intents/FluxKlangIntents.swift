@@ -186,7 +186,7 @@ enum SiriDraftStudioAction {
         model: AppModel,
         interpreter: any AssistantActionInterpreting = FoundationModelActionInterpreter()
     ) async -> String {
-        let context = await prepareContext(model: model)
+        guard let context = await prepareContext(model: model) else { return environmentsUnavailableReply }
         let normalizedRequest = removeSiriInvocationPrefix(from: request)
         let expectedPending = model.assistant.pendingStudioDraft
         do {
@@ -219,7 +219,7 @@ enum SiriDraftStudioAction {
         destination: DestinationEntity,
         model: AppModel
     ) async -> String {
-        let context = await prepareContext(model: model)
+        guard let context = await prepareContext(model: model) else { return environmentsUnavailableReply }
         let validSourceIDs = orderedIDs(
             sourceGear.map(\.id),
             available: Set(context.equipment.map(\.id))
@@ -244,15 +244,15 @@ enum SiriDraftStudioAction {
         return AssistantDraftReply.acknowledgingSave(spokenSummary(for: draft), outcome: outcome)
     }
 
-    private static func prepareContext(model: AppModel) async -> AssistantToolContext {
+    static let environmentsUnavailableReply =
+        "FluxKlang's saved environments are unavailable, so no Studio draft was made. Open FluxKlang to review."
+
+    /// `nil` while environments are held (#943): Siri never stages from empty or stale context.
+    private static func prepareContext(model: AppModel) async -> AssistantToolContext? {
         await model.equipment.load()
         await model.environments.load()
-        model.environments.migrateEffectEquipmentLinks(using: model.equipment.items)
-        await model.studioConnections.load(
-            equipment: model.equipment.items,
-            environments: model.environments.environments,
-            activeID: model.environments.activeID
-        )
+        await model.loadEnvironmentDependents()
+        guard model.environments.hold == nil else { return nil }
         return model.assistantToolContext()
     }
 
@@ -374,23 +374,37 @@ enum SiriEntityIntegration {
         category: "AppIntents"
     )
 
+    /// `nil` while environments are held (#943): effect and environment entries are neither replaced nor
+    /// re-indexed from unsaved or empty in-memory state.
+    @MainActor
+    static func indexableEnvironmentEntities(
+        model: AppModel
+    ) -> (effects: [EffectEntity], environments: [EnvironmentEntity])? {
+        guard model.environments.hold == nil else { return nil }
+        return (model.environments.activeEffects.map(EffectEntity.init),
+                model.environments.environments.map(EnvironmentEntity.init))
+    }
+
     @MainActor
     static func indexCurrentEntities(model: AppModel) async {
         guard !AppPersistence.isTesting else { return }
         guard #available(iOS 27.0, macOS 27.0, *) else { return }
         guard CSSearchableIndex.isIndexingAvailable() else { return }
         let equipment = model.equipment.items.map(EquipmentEntity.init)
-        let effects = model.environments.activeEffects.map(EffectEntity.init)
-        let environments = model.environments.environments.map(EnvironmentEntity.init)
+        let environmentEntities = indexableEnvironmentEntities(model: model)
         do {
             let index = fluxKlangSpotlightIndexForManualRefresh()
             try await index.deleteAppEntities(ofType: EquipmentEntity.self)
-            try await index.deleteAppEntities(ofType: EffectEntity.self)
-            try await index.deleteAppEntities(ofType: EnvironmentEntity.self)
+            if environmentEntities != nil {
+                try await index.deleteAppEntities(ofType: EffectEntity.self)
+                try await index.deleteAppEntities(ofType: EnvironmentEntity.self)
+            }
             try await index.deleteAppEntities(ofType: DestinationEntity.self)
             try await index.indexAppEntities(equipment)
-            try await index.indexAppEntities(effects)
-            try await index.indexAppEntities(environments)
+            if let environmentEntities {
+                try await index.indexAppEntities(environmentEntities.effects)
+                try await index.indexAppEntities(environmentEntities.environments)
+            }
             try await index.indexAppEntities(DestinationEntity.all)
         } catch is CancellationError {
             return

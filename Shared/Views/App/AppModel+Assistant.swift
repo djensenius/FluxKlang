@@ -70,7 +70,9 @@ extension AppModel {
     func acceptPendingAssistantDraftResult(
         beforeAwaitingLocalSave: (@MainActor () async -> Void)? = nil
     ) async -> StudioDraftAcceptanceResult {
-        guard let original = assistant.pendingStudioDraft, let publicationID = assistant.pendingPublicationID,
+        // Held environments (#943) refuse acceptance: no merge, no save and no draft retirement.
+        guard environments.hold == nil,
+              let original = assistant.pendingStudioDraft, let publicationID = assistant.pendingPublicationID,
               assistant.canAcceptPendingDraft(hasActiveEnvironment: environments.active != nil) else {
             return .notAccepted
         }
@@ -87,7 +89,7 @@ extension AppModel {
             context: validationContext
         )
         let currentContext = assistantToolContext()
-        guard case .pendingDraft(let refreshed?) = validation,
+        guard case .pendingDraft(let refreshed?) = validation, environments.hold == nil,
               !refreshed.hasErrors, !Task.isCancelled, wing === controller,
               assistant.pendingStudioDraft == refreshed,
               validationContext.activeEnvironmentID == currentContext.activeEnvironmentID,

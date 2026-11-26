@@ -25,6 +25,9 @@ final class StudioConnectionsStore {
     private let outputDefaults: StudioOutputDefaults?
     private var loaded = false
     private var confirmedOutputDefaultsVersion = 0
+    /// Home was never loaded because saved environments are held (#943). While set, Home is neither
+    /// initialized, migrated nor written; mutations are refused. Cleared by the next `load`.
+    private(set) var isHeldForEnvironments = false
 
     init(
         fileStore: JSONFileStore = .shared,
@@ -43,6 +46,7 @@ final class StudioConnectionsStore {
     ) async {
         guard !loaded else { return }
         loaded = true
+        isHeldForEnvironments = false
         if let saved = await fileStore.load(Persisted.self, from: fileName) {
             connections = saved.connections
             confirmedOutputDefaultsVersion = saved.confirmedOutputDefaultsVersion ?? 0
@@ -79,7 +83,15 @@ final class StudioConnectionsStore {
         await load(equipment: equipment, environments: environments, activeID: activeID)
     }
 
+    /// Called instead of `load` while environments are held. A Home that already loaded stays usable;
+    /// an unloaded Home must not be initialized from (or written over) unavailable environment data.
+    func holdForUnavailableEnvironments() {
+        guard !loaded else { return }
+        isHeldForEnvironments = true
+    }
+
     func replaceHome(_ home: StudioHomeConnections, equipment: [Equipment]) async throws {
+        try refuseWhileHeld()
         var candidate = connections
         candidate.home = home
         try validateTemporaryMoves(in: candidate, equipment: equipment)
@@ -92,6 +104,7 @@ final class StudioConnectionsStore {
         connector: Int,
         equipment: [Equipment]
     ) async throws {
+        try refuseWhileHeld()
         var home = connections.home
         try home.setInput(connection, connector: connector, equipment: equipment)
         var candidate = connections
@@ -107,6 +120,7 @@ final class StudioConnectionsStore {
         bank: WingOutputConnectorBank = .local,
         equipment: [Equipment]
     ) async throws {
+        try refuseWhileHeld()
         var home = connections.home
         try home.setOutput(connection, connector: connector, bank: bank, equipment: equipment)
         var candidate = connections
@@ -120,6 +134,7 @@ final class StudioConnectionsStore {
         _ move: TemporaryDeviceMove,
         equipment: [Equipment]
     ) async throws {
+        try refuseWhileHeld()
         try TemporaryMoveAllocator.validate(
             move,
             home: connections.home,
@@ -135,6 +150,7 @@ final class StudioConnectionsStore {
         _ move: TemporaryDeviceMove,
         equipment: [Equipment]
     ) async throws {
+        try refuseWhileHeld()
         try TemporaryMoveAllocator.validate(
             move,
             home: connections.home,
@@ -147,14 +163,20 @@ final class StudioConnectionsStore {
     }
 
     func updateTemporaryMove(_ move: TemporaryDeviceMove) async {
-        guard let index = connections.temporaryMoves.firstIndex(where: { $0.id == move.id }) else { return }
+        guard !isHeldForEnvironments,
+              let index = connections.temporaryMoves.firstIndex(where: { $0.id == move.id }) else { return }
         connections.temporaryMoves[index] = move
         await persist()
     }
 
     func removeTemporaryMove(_ id: TemporaryDeviceMove.ID) async {
+        guard !isHeldForEnvironments else { return }
         connections.temporaryMoves.removeAll { $0.id == id }
         await persist()
+    }
+
+    private func refuseWhileHeld() throws {
+        if isHeldForEnvironments { throw StudioConnectionAssignmentError.environmentsUnavailable }
     }
 
     private func validateTemporaryMoves(
@@ -198,6 +220,7 @@ final class StudioConnectionsStore {
     }
 
     private func persist() async {
+        guard !isHeldForEnvironments else { return }
         await fileStore.save(
             Persisted(
                 connections: connections,

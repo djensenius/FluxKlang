@@ -76,6 +76,174 @@ enum AppPersistence {
     }
 }
 
+/// Why an observed load refused to produce a value. Positively bad data only; cloud `nil` is never a failure.
+enum JSONLoadFailure: Equatable, Sendable {
+    case unreadableLocal
+    case nonRegularLocal
+    case malformedLocal
+    case malformedCloud
+}
+
+enum JSONLoadObservation<Value: Sendable>: Sendable {
+    case absent
+    /// `cloudSeed` holds local bytes to submit with `seedCloud` once the caller publishes.
+    case loaded(Value, cloudSeed: Data?)
+    case failed(JSONLoadFailure)
+}
+
+extension JSONLoadObservation {
+    /// The value, or `nil` when known-absent. Positively bad data throws a hold naming `fileName`.
+    func usableValue(_ fileName: String) throws(EnvironmentLoadHold) -> Value? {
+        switch self {
+        case .absent: return nil
+        case .loaded(let value, _): return value
+        case .failed(let failure): throw EnvironmentLoadHold(fileName: fileName, failure: failure)
+        }
+    }
+
+    var cloudSeed: Data? {
+        guard case .loaded(_, let seed) = self else { return nil }
+        return seed
+    }
+}
+
+/// Why environment loading stopped (#943). In-place protection only: nothing is copied, quarantined or restored.
+struct EnvironmentLoadHold: Error, Equatable, Sendable {
+    let fileName: String
+    let failure: JSONLoadFailure
+
+    var message: String {
+        let problem = switch failure {
+        case .unreadableLocal: "couldn't be read"
+        case .nonRegularLocal: "isn't a regular file"
+        case .malformedLocal: "is damaged or from an unsupported version"
+        case .malformedCloud: "has a damaged or unsupported iCloud copy"
+        }
+        return "Saved environments stopped: \(fileName) \(problem). "
+            + "Environment and Home changes aren't saved until they reload."
+    }
+}
+
+/// Single-flight load with a latched hold (#943). Concurrent callers join one in-flight read. A hold thrown by
+/// a read survives ordinary reloads and clears only when `reloadClearingHold` succeeds. No automatic retry.
+@MainActor
+@Observable
+final class HeldLoadGate {
+    enum Phase { case notLoaded, loading, ready, held }
+    typealias Read = @MainActor () async throws(EnvironmentLoadHold) -> Void
+
+    private(set) var hold: EnvironmentLoadHold?
+    private(set) var phase = Phase.notLoaded
+    @ObservationIgnored private var inFlight: Task<Void, Never>?
+
+    /// Writes only after a completed, usable read: never before loading, while held, or around a read.
+    var admitsSaves: Bool { hold == nil && phase == .ready }
+
+    func load(_ read: @escaping Read) async {
+        if inFlight == nil, phase == .notLoaded { start(read) }
+        _ = await inFlight?.value
+    }
+
+    func reload(_ read: @escaping Read) async {
+        _ = await inFlight?.value
+        if inFlight == nil, hold == nil { start(read) }
+        _ = await inFlight?.value
+    }
+
+    /// Returns whether the read succeeded and nothing is held.
+    func reloadClearingHold(_ read: @escaping Read, beforeStart: () -> Void) async -> Bool {
+        _ = await inFlight?.value
+        if inFlight == nil {
+            beforeStart()
+            start(read)
+        }
+        _ = await inFlight?.value
+        return hold == nil && phase == .ready
+    }
+
+    /// Called by a read once every source is usable, immediately before it publishes.
+    func markReady() {
+        hold = nil
+        phase = .ready
+    }
+
+    private func start(_ read: @escaping Read) {
+        phase = .loading
+        inFlight = Task {
+            do throws(EnvironmentLoadHold) {
+                try await read()
+                if phase == .loading { markReady() }
+            } catch {
+                hold = error
+                phase = .held
+            }
+            inFlight = nil
+        }
+    }
+}
+
+/// Serial local saves (#943): each runs after its predecessor. A save queued behind a failure, refused by
+/// `admits`, or scheduled before `invalidateQueued()` is refused, never retried. Local writes only.
+@MainActor
+@Observable
+final class OrderedLocalSaves {
+    /// The most recent save was refused or failed; cleared by the next completed local write.
+    private(set) var lastSaveFailed = false
+    @ObservationIgnored private var tail: Task<Bool, Never>?
+    @ObservationIgnored private var generation = 0
+    /// Counts writes that actually returned false; refusals never cascade to later saves.
+    @ObservationIgnored private var failures = 0
+    @ObservationIgnored private var refusedSinceSettle = false
+
+    func enqueue(
+        admitting admits: @escaping @MainActor @Sendable () -> Bool,
+        write: @escaping @Sendable () async -> Bool
+    ) -> Task<Bool, Never> {
+        let previous = tail
+        let scheduledGeneration = generation
+        let scheduledFailures = failures
+        let save = Task { [weak self] in
+            _ = await previous?.value
+            guard let self else { return false } // The owner is gone: refuse rather than write unowned state.
+            guard admits(), scheduledGeneration == generation, scheduledFailures == failures else {
+                markRefused()
+                return false
+            }
+            let completed = await write()
+            if completed { refusedSinceSettle = false } else { failures += 1 }
+            lastSaveFailed = !completed
+            return completed
+        }
+        tail = save
+        return save
+    }
+
+    func refuse() -> Task<Bool, Never> {
+        markRefused()
+        return Task { false }
+    }
+
+    func invalidateQueued() { generation += 1 }
+
+    /// After a load replaces in-memory state: clears a write failure, but keeps the warning when an edit was
+    /// refused since the previous settle (before or during this load), because that edit was never saved.
+    func settleAfterLoad() {
+        if !refusedSinceSettle { lastSaveFailed = false }
+        refusedSinceSettle = false
+    }
+
+    /// Awaits the tail captured now, including its predecessors; not later saves or durability.
+    func awaitTailSnapshot() async {
+        let tail = tail
+        _ = await tail?.value
+    }
+
+    private func markRefused() {
+        lastSaveFailed = true
+        refusedSinceSettle = true
+    }
+}
+
 actor JSONFileStore {
     static let shared = JSONFileStore()
 
@@ -110,12 +278,46 @@ actor JSONFileStore {
         return nil
     }
 
+    /// Distinguishes a known-absent value from positively bad local or cloud data (#943). A configured cloud
+    /// store returning `nil` is not evidence of absence, so it falls back to local exactly like `load`.
+    /// Unlike `load`, this never seeds the cloud: a `cloudSeed` is returned for the caller to submit only once
+    /// it has decided to publish, via `seedCloud(_:for:)`.
+    func loadObserving<T: Decodable & Sendable>(_ type: T.Type, from name: String) -> JSONLoadObservation<T> {
+        let decoder = JSONDecoder()
+        var local: (value: T, data: Data)?
+        switch localObservation(for: name) {
+        case .absent:
+            break
+        case .failed(let failure):
+            return .failed(failure)
+        case .present(let data):
+            guard let decoded = try? decoder.decode(T.self, from: data) else { return .failed(.malformedLocal) }
+            local = (decoded, data)
+        }
+        let cloud = syncedCloud(for: name)
+        if let cloudData = cloud?.data(forKey: cloudKey(for: name)) {
+            guard let decoded = try? decoder.decode(T.self, from: cloudData) else { return .failed(.malformedCloud) }
+            return .loaded(decoded, cloudSeed: nil)
+        }
+        guard let local else { return .absent }
+        return .loaded(local.value, cloudSeed: cloud == nil ? nil : local.data)
+    }
+
+    /// Seeds the synced copy from already-decoded local bytes, only while the cloud value is still missing.
+    func seedCloud(_ data: Data, for name: String) {
+        guard let cloud = syncedCloud(for: name), cloud.data(forKey: cloudKey(for: name)) == nil else { return }
+        cloud.setData(data, forKey: cloudKey(for: name))
+    }
+
     func save(_ value: some Encodable, to name: String) {
         _ = saveReportingLocalWrite(value, to: name)
     }
 
     /// Reports only completion of the local atomic write, not cloud persistence or fsync.
-    func saveReportingLocalWrite(_ value: some Encodable, to name: String) -> Bool {
+    /// `mirrorsAfterLocalFailure: false` skips the cloud submission when the local write failed.
+    func saveReportingLocalWrite(
+        _ value: some Encodable, to name: String, mirrorsAfterLocalFailure: Bool = true
+    ) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(value) else { return false }
@@ -131,8 +333,32 @@ actor JSONFileStore {
         // deliberately avoid calling `synchronize()` per write: stores persist on
         // high-frequency interactions (e.g. dragging a spatial source), and the
         // app already synchronises on launch / iCloud change notifications.
-        syncedCloud(for: name)?.setData(data, forKey: cloudKey(for: name))
+        if localWriteCompleted || mirrorsAfterLocalFailure {
+            syncedCloud(for: name)?.setData(data, forKey: cloudKey(for: name))
+        }
         return localWriteCompleted
+    }
+
+    private enum LocalObservation {
+        case absent
+        case present(Data)
+        case failed(JSONLoadFailure)
+    }
+
+    /// Only a missing entry is absence; any other entry or read error is a failure, never "absent".
+    private func localObservation(for name: String) -> LocalObservation {
+        let url = directory.appendingPathComponent(name)
+        let attributes: [FileAttributeKey: Any]
+        do {
+            attributes = try fileManager.attributesOfItem(atPath: url.path)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            return .absent
+        } catch {
+            return .failed(.unreadableLocal)
+        }
+        guard attributes[.type] as? FileAttributeType == .typeRegular else { return .failed(.nonRegularLocal) }
+        guard let data = try? Data(contentsOf: url) else { return .failed(.unreadableLocal) }
+        return .present(data)
     }
 
     /// The cloud store, only for a file whose key is on the shipped key-value allowlist (#124). Any other file,

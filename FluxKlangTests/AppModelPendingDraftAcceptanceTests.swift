@@ -84,4 +84,38 @@ struct AppModelPendingDraftAcceptanceTests {
             // run() joins owned work before resources are removed, also on every throwing path.
         }
     }
+
+    /// #943: damaged environments.json holds the store; Home, acceptance and later edits write nothing.
+    @Test func heldEnvironmentsRefuseHomeAcceptanceAndWrites() async throws {
+        try await AppModelPendingDraftAcceptanceFixture.run { fixture in
+            let (model, built) = try await fixture.prepare()
+            let domain = fixture.environmentFile.deletingLastPathComponent()
+            let homeFile = domain.appendingPathComponent("studio-connections.json")
+            let damaged = Data("{ damaged environments".utf8)
+            try damaged.write(to: fixture.environmentFile)
+            let homeBytes = try Data(contentsOf: homeFile)
+            let draftBytes = try Data(contentsOf: fixture.file)
+            let before = model.environments.environments
+            let home = model.studioConnections.connections.home
+
+            await model.environments.reload() // prepare() already loaded; this re-reads the damaged file.
+            await model.loadEnvironmentDependents()
+            #expect(model.environments.hold?.failure == .malformedLocal)
+            #expect(model.environments.environments == before)
+            #expect(model.studioConnections.isHeldForEnvironments)
+            #expect(await model.acceptPendingAssistantDraftResult() == .notAccepted)
+            await #expect(throws: StudioConnectionAssignmentError.environmentsUnavailable) {
+                try await model.studioConnections.replaceHome(home, equipment: model.equipment.items)
+            }
+            model.environments.renameActive(to: "Edited while held")
+            await model.environments.reload()
+            await model.awaitDomainScheduledSaveSnapshots()
+
+            #expect(model.environments.hold?.failure == .malformedLocal)
+            #expect(model.assistant.pendingStudioDraft == built)
+            #expect(try Data(contentsOf: fixture.environmentFile) == damaged)
+            #expect(try Data(contentsOf: homeFile) == homeBytes)
+            #expect(try Data(contentsOf: fixture.file) == draftBytes)
+        }
+    }
 }

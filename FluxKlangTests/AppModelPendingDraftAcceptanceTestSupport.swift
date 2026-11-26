@@ -85,6 +85,8 @@ final class AppModelPendingDraftAcceptanceFixture {
         try Self.requireNoProductionEntries()
         // AppIcon's existing macOS Dock mutation is permitted, outside the 14-operation audit.
         // No loadStores, preview, availability, chat load, discovery, connection or LCXL load.
+        // Environments load first: an unloaded environment store refuses saves (#943).
+        await model.environments.load()
         model.equipment.add(instrument)
         let environmentID = model.environments.addEnvironment(named: "Acceptance fixture environment")
         if seedGraph {

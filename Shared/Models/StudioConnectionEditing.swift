@@ -86,6 +86,7 @@ enum StudioConnectionAssignmentError: LocalizedError, Equatable {
     case equipmentOutputInUse(String, String, Int)
     case equipmentInputInUse(String, String, WingOutputConnector)
     case temporaryMoveConflict(String)
+    case environmentsUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -108,6 +109,8 @@ enum StudioConnectionAssignmentError: LocalizedError, Equatable {
             return "\(equipment) · \(port) is already assigned to \(connector.label)."
         case .temporaryMoveConflict(let message):
             return "Return affected equipment Home before changing this assignment. \(message)"
+        case .environmentsUnavailable:
+            return "Home can't be changed while saved environments are stopped. Reload them first."
         }
     }
 }
