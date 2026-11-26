@@ -93,9 +93,14 @@ extension CloudSyncTests {
         try #require(cloud.writeCount == 0)
 
         let result = try await owner.preserveHeldSourceAndStartFresh(confirmed: try #require(owner.hold))
+        // The cleared reload always queues a migration save, which recreates only environments.json.
+        await owner.awaitScheduledSavesSnapshot()
 
         #expect(result.fileName == badFile && result.cleared && result.hold == nil && owner.hold == nil)
-        #expect(!Self.exists(original))
+        #expect(Self.exists(original) == (badFile == "environments.json"))
+        if Self.exists(original) {
+            #expect(try EntryIdentity(original) != identity, "The original entry must not remain in place")
+        }
         #expect(result.preservedURL.deletingLastPathComponent().standardizedFileURL
             == directory.appendingPathComponent(JSONFileStore.preservedDirectoryName).standardizedFileURL)
         #expect(result.preservedURL.lastPathComponent.hasPrefix("\(badFile)-"))
@@ -147,6 +152,7 @@ extension CloudSyncTests {
         #expect(try Data(contentsOf: second.preservedURL) == badEffects)
         #expect(try Data(contentsOf: first.preservedURL) == Self.fixtureBytes, "The first item stays preserved")
         #expect(Self.preservedEntries(in: directory).count == 2)
+        await owner.awaitScheduledSavesSnapshot()
     }
 
     @MainActor
@@ -243,6 +249,7 @@ extension CloudSyncTests {
         #expect(await gate.entries == ["in flight"], "A queued save never runs after start-fresh")
         #expect(result.hold == nil && owner.hold == nil)
         #expect(try Data(contentsOf: result.preservedURL) == Self.fixtureBytes)
+        await owner.awaitScheduledSavesSnapshot()
     }
 
     /// Only the hold the user confirmed is acted on: a different file or failure moves nothing.
