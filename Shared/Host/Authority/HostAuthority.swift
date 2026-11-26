@@ -11,6 +11,12 @@
 //
 
 actor HostAuthority {
+    /// Whether this authority has an audio-plan admission path.
+    enum PlanAdmission {
+        case available
+        case unsupported
+    }
+
     static let projectLimit = 16
     /// A control-contract bound, not a runtime sizing conclusion. Lost answers
     /// retain capacity indefinitely; no abandoned FIFO evicts ownership.
@@ -38,6 +44,7 @@ actor HostAuthority {
         didSet { book.revokeUnredeemableSendGrants() }
     }
     private let preparationLimits: AudioRoutingLimits?
+    private let planAdmission: PlanAdmission
     /// Which targets a direct-send grant may bind under its ticket's scope (#62 AU5).
     private let sendScope: any DirectSendScopePolicy
     private var preparation: PendingPreparation?
@@ -47,9 +54,11 @@ actor HostAuthority {
     /// `sendScope` defaults to admitting no direct-send target.
     init(host ledger: GenerationLedger, live: HostLiveState,
          planCapacity: Int = HostAuthority.planCapacity,
+         planAdmission: PlanAdmission = .available,
          sendScope: any DirectSendScopePolicy = DenyAllDirectSendScope()) throws(HostAuthorityRefusal) {
         book = try HostAuthorityBook(host: ledger, live: live, planCapacity: planCapacity)
         preparationLimits = nil
+        self.planAdmission = planAdmission
         self.sendScope = sendScope
     }
 
@@ -60,6 +69,7 @@ actor HostAuthority {
          sendScope: any DirectSendScopePolicy = DenyAllDirectSendScope()) throws(HostAuthorityRefusal) {
         book = try HostAuthorityBook(host: ledger, live: live, planCapacity: planCapacity)
         preparationLimits = prepareOnly
+        planAdmission = .available
         self.sendScope = sendScope
     }
 
@@ -140,6 +150,7 @@ actor HostAuthority {
     /// `HostAuthorityBook.begin(_:candidate:projectDocument:project:)`.
     func begin(_ request: ActivationRequest, candidate: GraphDocument,
                projectDocument: ProjectDocument, project: ProjectID) -> Result<Void, HostAuthorityRefusal> {
+        guard planAdmission == .available else { return .failure(.audioPlanAdmissionUnsupported) }
         guard preparationLimits != nil else {
             return book.begin(request, candidate: candidate, projectDocument: projectDocument, project: project)
         }

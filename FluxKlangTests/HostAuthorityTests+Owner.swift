@@ -8,6 +8,49 @@ extension HostAuthorityTests {
     /// AU8a (host-authority-sources.md §9): the owner's session, lease and recovery
     /// hooks against its real authority. No WING, network or UI.
     struct OwnerLifecycle {
+        @Test func audioPlanAdmissionIsFencedOnlyForTheOwner() async throws {
+            let owner = try await Owner.applying()
+            let before = await owner.authority.snapshot()
+            let permission = try #require(before.live.permission)
+            let graph = GraphDocument(
+                id: GraphID(validated: "graph.owner"), revision: .initial,
+                nodes: [GraphNode(id: NodeID(validated: "node.owner"), kind: .plugin, label: "Owner")]
+            )
+            let document = AuthorityBench.projectDocument(project: owner.studio, candidate: graph)
+            let request = ActivationRequest(
+                draft: DraftID(validated: "draft.owner"), graph: graph.id, baseRevision: .initial,
+                hostEpoch: owner.hostEpoch, permission: permission,
+                digest: ActivationDigest(rawValue: "sha256:activation"), origin: .human
+            )
+            let ticket = try await Owner.ticket(owner, Owner.windowOne)
+            let ticketCount = await owner.authority.outstandingDirectWriteCount()
+            let snapshot = await owner.authority.snapshot()
+            let result = await owner.authority.begin(request, candidate: graph,
+                                                     projectDocument: document, project: owner.studio)
+            #expect(AuthorityBench.refusal(result) == .audioPlanAdmissionUnsupported)
+            #expect(await owner.authority.snapshot() == snapshot)
+            #expect(await owner.authority.outstandingDirectWriteCount() == ticketCount)
+            #expect(Owner.refusal(await owner.authority.redeemDirect(ticket)) == nil)
+
+            // The identical request and live state are admissible without the WING policy.
+            let ledger = try GenerationLedger(primaryClock: HostAuthorityOwner.primaryClock, musicalClock: nil,
+                                              nominalRate: HostAuthorityOwner.nominalRate)
+            let generic = try HostAuthority(host: ledger, live: before.live)
+            try await generic.open(project: owner.studio, running: RunningGraph(revision: .initial, prepared: nil))
+                .get()
+            _ = try await generic.acquire(project: owner.studio, window: Owner.windowOne).get()
+            try await generic.begin(request, candidate: graph, projectDocument: document, project: owner.studio)
+                .get()
+            let admitted = await generic.snapshot()
+            #expect(admitted.outstanding[owner.studio] != nil)
+            #expect(admitted.queue.count == 1)
+            if case .prepare = admitted.queue.pending.first {
+                // Generic admission really queued a prepare, not another command.
+            } else {
+                Issue.record("Expected a generic prepare command")
+            }
+        }
+
         @Test func permissionIsNilAtLaunch() async throws {
             let owner = try await Owner.applying(granted: false)
             #expect(await owner.permission == nil)
