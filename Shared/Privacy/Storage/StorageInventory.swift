@@ -37,6 +37,7 @@ enum StorageInventory {
         row(.localFile, "assistant-pending-studio-draft.json", .draft),  // PendingStudioPatchStore
         row(.localDirectory, "AssistantHistory", .history),  // LocalAssistantHistoryBackend
         row(.localDirectory, "LocalNetwork", .hostLocalRoute),  // LocalNetworkGrantEvidence
+        row(.localDirectory, "Preserved", .environment),  // JSONFileStore.preserveLocalItem (#947)
         row(.cloudKitZone, "FluxKlangAssistantHistory", .history)  // CloudKitAssistantHistoryBackend
     ]
 

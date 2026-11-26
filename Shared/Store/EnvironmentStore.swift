@@ -24,9 +24,9 @@ final class EnvironmentStore {
     private let fileName = "environments.json"
     private let legacyFileName = "effects.json"
     private let legacyChainFileName = "chain.json"
-    private let injectedStore: JSONFileStore?
-    private let loads = HeldLoadGate()
-    private let saves = OrderedLocalSaves()
+    let injectedStore: JSONFileStore?
+    let loads = HeldLoadGate()
+    let saves = OrderedLocalSaves()
     /// Bad persisted data was observed (#943); latched until `reloadClearingHold()` succeeds.
     var hold: EnvironmentLoadHold? { loads.hold }
     var lastSaveFailed: Bool { saves.lastSaveFailed }

@@ -54,9 +54,7 @@ struct AppRootView: View {
             packageInspection = nil
         }
         .safeAreaInset(edge: .bottom) {
-            EnvironmentPersistenceWarning(environments: appModel.environments) {
-                Task { await appModel.reloadHeldEnvironments() }
-            }
+            EnvironmentPersistenceWarning(model: appModel)
         }
         .safeAreaInset(edge: .bottom) {
             if let message = appModel.wingLifecycle.lastReplacementOutcome?.failureMessage {
@@ -427,37 +425,6 @@ struct ConnectionStatusButton: View {
 
     private var tint: Color {
         appModel.wing.connection.statusTint(isDemo: appModel.isDemo)
-    }
-}
-
-/// Root-level stopped/unsaved environment state (#943). Reload is the only way to clear a hold.
-private struct EnvironmentPersistenceWarning: View {
-    let environments: EnvironmentStore
-    let reload: () -> Void
-
-    var body: some View {
-        if let hold = environments.hold {
-            HStack {
-                Label(hold.message, systemImage: "exclamationmark.octagon.fill")
-                Spacer()
-                Button("Reload", action: reload)
-                    .accessibilityHint("Reads saved environments again")
-            }
-            .warningBanner()
-        } else if environments.lastSaveFailed {
-            Label("Recent environment changes weren't saved.", systemImage: "exclamationmark.triangle.fill")
-                .warningBanner()
-        }
-    }
-}
-
-private extension View {
-    func warningBanner() -> some View {
-        font(.callout)
-            .foregroundStyle(.orange)
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial)
     }
 }
 

@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "d1004ac939b5bff66b66aa46dbb7d564526543ffe895bbe409fc1aa0b5b50873",
+    "sha256": "5c649af810a0ac62615e3713ddee883e641875ce8fc4cb71ed4101f703815e6b",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -926,6 +926,7 @@
         "FluxKlangTests/AssistantBackendTestSupport.swift",
         "FluxKlangTests/CloudSyncTests.swift",
         "FluxKlangTests/CloudSyncTests+KeyValueAllowlist.swift",
+        "FluxKlangTests/CloudSyncTests+Preservation.swift",
         "FluxKlangTests/EnvironmentSpatialTests.swift",
         "FluxKlangTests/SiriAppIntentsTests.swift"
       ]

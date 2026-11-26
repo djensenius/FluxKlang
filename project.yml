@@ -1028,6 +1028,7 @@ targets:
       - path: FluxKlangTests/AssistantBackendTestSupport.swift
       - path: FluxKlangTests/CloudSyncTests.swift
       - path: FluxKlangTests/CloudSyncTests+KeyValueAllowlist.swift
+      - path: FluxKlangTests/CloudSyncTests+Preservation.swift
       - path: FluxKlangTests/EnvironmentSpatialTests.swift
       - path: FluxKlangTests/SiriAppIntentsTests.swift
     settings:

@@ -84,6 +84,8 @@ final class AppModel {
     /// this model is deallocated.
     private var cloudObserver: CloudChangeObserver?
     private var siriIndexingTask: Task<Void, Never>?
+    /// The latest user-confirmed environment start-fresh (#947), shown by the root banner until dismissed.
+    private(set) var environmentPreservation: EnvironmentPreservationStatus?
 
     /// The currently selected sidebar section (also driven by Mac menu commands).
     var section: AppSection = .studio
@@ -237,9 +239,33 @@ final class AppModel {
         )
     }
 
-    /// The explicit user retry for held environments; the only path that clears a hold.
+    /// The explicit user retry for held environments; it and start-fresh are the only paths that clear a hold.
     func reloadHeldEnvironments() async {
         guard await environments.reloadClearingHold() else { return }
+        await reloadEnvironmentDependents()
+    }
+
+    /// User-confirmed start-fresh (#947) for exactly the `confirmed` hold: moves that local item into `Preserved`,
+    /// reads again and, only when the hold cleared, reloads Home and Siri like `reloadHeldEnvironments`. A reload
+    /// that keeps a read in flight reloads dependents itself through `reloadStores`. The outcome stays for the banner.
+    func preserveHeldEnvironmentsAndStartFresh(confirmed: EnvironmentLoadHold) async {
+        guard environmentPreservation?.isInProgress != true else { return }
+        environmentPreservation = .inProgress(fileName: confirmed.fileName)
+        do throws(EnvironmentPreservationError) {
+            let result = try await environments.preserveHeldSourceAndStartFresh(confirmed: confirmed)
+            environmentPreservation = .completed(result)
+            if result.cleared { await reloadEnvironmentDependents() }
+        } catch {
+            environmentPreservation = .failed(error)
+        }
+    }
+
+    func dismissEnvironmentPreservation() {
+        guard environmentPreservation?.isInProgress != true else { return }
+        environmentPreservation = nil
+    }
+
+    private func reloadEnvironmentDependents() async {
         environments.migrateEffectEquipmentLinks(using: equipment.items)
         await studioConnections.reload(
             equipment: equipment.items,

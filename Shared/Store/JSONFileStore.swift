@@ -107,10 +107,14 @@ extension JSONLoadObservation {
     }
 }
 
-/// Why environment loading stopped (#943). In-place protection only: nothing is copied, quarantined or restored.
+/// Why environment loading stopped (#943). Nothing is copied or restored automatically; only an explicit,
+/// user-confirmed start-fresh (#947) moves a held local item, unchanged, into `Preserved`.
 struct EnvironmentLoadHold: Error, Equatable, Sendable {
     let fileName: String
     let failure: JSONLoadFailure
+
+    /// Whether the bad data is a local item that start-fresh may preserve; an iCloud copy never is.
+    var isLocal: Bool { failure != .malformedCloud }
 
     var message: String {
         let problem = switch failure {
@@ -367,6 +371,22 @@ actor JSONFileStore {
             syncedCloud(for: name)?.setData(data, forKey: cloudKey(for: name))
         }
         return localWriteCompleted
+    }
+
+    /// The local folder that start-fresh (#947) moves held items into; never read, synced or cleaned up.
+    static let preservedDirectoryName = "Preserved"
+
+    /// Moves the local item `name` (file, directory or symlink, readable or not) unchanged into
+    /// `Preserved/<name>-<timestamp>-<uuid>` (#947). Never overwrites, deletes, copies or touches the cloud; on any
+    /// error the item stays where it was. Runs on this actor, so it is ordered after writes already submitted.
+    func preserveLocalItem(named name: String, at date: Date = .now) throws -> URL {
+        let preserved = directory.appendingPathComponent(Self.preservedDirectoryName, isDirectory: true)
+        try fileManager.createDirectory(at: preserved, withIntermediateDirectories: true)
+        let stamp = date.formatted(Date.ISO8601FormatStyle(
+            dateSeparator: .omitted, dateTimeSeparator: .standard, timeSeparator: .omitted, timeZone: .gmt))
+        let destination = preserved.appendingPathComponent("\(name)-\(stamp)-\(UUID().uuidString)")
+        try fileManager.moveItem(at: directory.appendingPathComponent(name), to: destination)
+        return destination
     }
 
     private enum LocalObservation {

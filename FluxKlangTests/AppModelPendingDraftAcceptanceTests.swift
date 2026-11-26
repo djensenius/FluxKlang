@@ -226,6 +226,35 @@ extension AppModelPendingDraftAcceptanceTests {
         }
     }
 
+    @Test(.timeLimit(.minutes(1))) func startFreshPreservesHeldEnvironmentsAndUnblocksHome() async throws {
+        try await AppModelPendingDraftAcceptanceFixture.run { fixture in
+            let (model, _) = try await fixture.prepare()
+            await model.studioConnections.load(equipment: model.equipment.items,
+                environments: model.environments.environments, activeID: model.environments.activeID)
+            await model.awaitDomainScheduledSaveSnapshots()
+            let connections = model.studioConnections.connections
+            let damaged = Data("{ damaged environments".utf8)
+            try damaged.write(to: fixture.environmentFile)
+            await model.reloadStores()
+            try #require(model.environments.hold?.failure == .malformedLocal)
+            try #require(model.studioConnections.isHeldForEnvironments)
+
+            let held = try #require(model.environments.hold)
+            await model.preserveHeldEnvironmentsAndStartFresh(confirmed: held)
+            guard case .completed(let result) = model.environmentPreservation else {
+                Issue.record("Expected completion, got \(String(describing: model.environmentPreservation))")
+                return
+            }
+            #expect(result.cleared && result.hold == nil && model.environments.hold == nil)
+            #expect(try Data(contentsOf: result.preservedURL) == damaged)
+            #expect(!model.studioConnections.isHeldForEnvironments)
+            try await model.studioConnections.replaceHome(connections.home, equipment: model.equipment.items)
+            await model.awaitDomainScheduledSaveSnapshots()
+            model.dismissEnvironmentPreservation()
+            #expect(model.environmentPreservation == nil)
+        }
+    }
+
     @Test(.timeLimit(.minutes(1))) func holdWhileAwaitingAcceptanceReceiptKeepsDraft() async throws {
         try await AppModelPendingDraftAcceptanceFixture.run { fixture in
             let (model, _) = try await fixture.prepare()
